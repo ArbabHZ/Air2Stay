@@ -150,7 +150,7 @@
  .sensitivity-row { display: grid; grid-template-columns: 115px 1fr 62px; gap: 10px; align-items: center; margin: 16px 0; font-size: 11px; }
  .sensitivity-track { height: 9px; background: #edf1f2; border-radius: 9px; overflow: hidden; }
  .sensitivity-track div { height: 100%; background: #3b7894; border-radius: 9px; }
- .sensitivity-row b { text-align: right; color: var(--navy); }
+ .sensitivity-row b { text-align: right; color: #e7f1f5; }
  .recommendation { margin-top: 18px; padding: 20px 22px; border-radius: var(--radius-lg); display: grid; grid-template-columns: 140px 1fr; gap: 18px; background: linear-gradient(120deg, var(--navy), #0c5261); color: #fff; box-shadow: 0 14px 30px rgba(8, 42, 58, .14); }
  .recommendation div { color: #77dbc8; text-transform: uppercase; font-size: 11px; font-weight: 800; letter-spacing: .09em; }
  .recommendation p { margin: 0; line-height: 1.5; }
@@ -175,7 +175,7 @@
  .validation-block { padding-bottom: 10px; }
  .legend { color: var(--muted); font-size: 12px; }
  .legend span { display: inline-block; width: 18px; height: 3px; vertical-align: middle; margin: 0 5px 0 12px; }
- .legend .actual { background: var(--navy); }
+ .legend .actual { background: #f0fbfd; }
  .legend .transparent { background: var(--teal); }
  .legend .predicted { background: var(--copper); }
 
@@ -488,7 +488,12 @@
  .test-steps strong { color: #edf8fa; }
  .test-steps p { color: #91abb5; }
  .validation-chart .grid-line { stroke: #1b3b4b; }
- .validation-chart text, .axis-note, .legend { color: #7898a5; fill: #7898a5; }
+ .validation-chart text, .axis-note, .legend { color: #c5d8df; fill: #c5d8df; }
  .actual-line { stroke: #f0fbfd; }
  .transparent-line { stroke: #24d7bd; }
  .predicted-line { stroke: #ff9967; }
+
+/* Accessibility: keep actual supplied-data legend visible on dark theme */
+.legend .actual {
+  background: #f0fbfd;
+}
