@@ -1,0 +1,29 @@
+# Air2Stay - Python Dependencies
+# Python 3.8+
+
+# Data Processing & Analysis
+numpy>=1.26.0,<3.0.0              # Numerical computing
+pandas>=2.1.0,<3.0.0              # Data manipulation and analysis
+openpyxl>=3.1.0,<4.0.0            # Excel file reading/writing
+streamlit>=1.40.0,<2.0.0            # Live web deployment
+altair>=5.4.0,<6.0.0                # Streamlit charts
+
+# Optional: Testing & Development
+# Uncomment these for development environment:
+# pytest>=6.2.0,<7.0.0             # Unit testing framework
+# pytest-cov>=2.12.0,<3.0.0        # Code coverage reporting
+# pylint>=2.10.0,<3.0.0            # Code style checker
+# black>=21.9b0,<22.0.0            # Code formatter
+
+# Notes:
+# - openpyxl is required for .xlsx file parsing (flight and hotel data)
+# - numpy and pandas are required for data aggregation and calculations
+# - Testing dependencies are optional; install only if running pytest
+#
+# Installation:
+#   python -m pip install -r requirements.txt
+#
+# Update all packages:
+#   python -m pip install --upgrade -r requirements.txt
+#
+# See README.md for full setup instructions

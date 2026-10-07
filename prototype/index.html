@@ -1,0 +1,150 @@
+ <!doctype html>
+ <html lang="en">
+ <head>
+   <meta charset="utf-8">
+   <meta name="viewport" content="width=device-width, initial-scale=1">
+   <title>Air2Stay Scenario Copilot</title>
+   <link rel="stylesheet" href="./styles.css?v=20260922-dark-dashboard">
+ </head>
+ <body>
+   <div class="ambient ambient-one"></div>
+   <div class="ambient ambient-two"></div>
+   <header class="topbar">
+     <div class="brand">
+       <div class="brand-mark">A2</div>
+       <div><strong>Air2Stay</strong><span>DCT Abu Dhabi scenario copilot</span></div>
+     </div>
+     <nav>
+       <button class="nav-tab active" data-view="scenarioView">Scenario Studio</button>
+       <button class="nav-tab" data-view="bridgeView">Country Bridge</button>
+       <button class="nav-tab" data-view="validationView">Model Trust</button>
+       <button class="nav-tab" data-view="glossaryView">Plain Language</button>
+     </nav>
+     <div class="model-tag"><span></span>Model ready</div>
+   </header>
+  
+   <main>
+     <section id="scenarioView" class="view active">
+       <aside class="control-panel">
+         <div class="panel-kicker">CONTROL ROOM</div>
+         <div class="panel-heading"><div><p>Scenario controls</p><small>Shape the demand outlook</small></div><button id="resetScenario" type="button">Reset</button></div>
+         <form id="scenarioForm">
+           <label>Departure country<select id="origin"></select></label>
+           <label>Month<select id="month"></select></label>
+           <label>Extra flights each week <output id="extraFlightsValue">+3</output><input id="extraFlights" type="range" min="-20" max="20" step="1"></label>
+           <label>Seats per flight<input id="seatsPerFlight" type="number" min="30" max="600" step="1"></label>
+           <label>Load factor <output id="loadFactorValue">82%</output><input id="loadFactor" type="range" min="30" max="110" step="0.1"></label>
+           <label>P2P share <output id="p2pShareValue">51%</output><input id="p2pShare" type="range" min="5" max="100" step="0.1"></label>
+           <label>Hotel conversion <output id="conversionRateValue">42%</output><input id="conversionRate" type="range" min="5" max="90" step="0.1"></label>
+           <label>Average stay in nights<input id="averageStay" type="number" min="1" max="10" step="0.1"></label>
+         </form>
+         <div class="sidebar-status"><span class="status-dot"></span><div><strong>Live model</strong><small>Updates as you adjust inputs</small></div></div>
+         <div class="control-note"><strong>All controls follow the selected route</strong><p>Choose any of the 33 departure countries in the supplied flight file. The month, seats, load factor and P2P starting values refresh for that country.</p></div>
+         <div class="control-note"><strong>Hotel conversion</strong><p>This combines visitor purpose and hotel capture because the supplied files do not separately identify tourists, returning residents and people staying with family or friends.</p></div>
+       </aside>
+  
+       <div class="workspace">
+         <section class="smart-box">
+           <div><span>Scenario assistant</span><strong>Describe a change in normal words</strong></div>
+           <input id="smartPrompt" value="Add 3 weekly flights from India in December with 220 seats and an 84% load factor">
+           <button id="applyPrompt">Apply</button>
+           <p id="assistantReply">The assistant turns your sentence into controlled scenario inputs.</p>
+         </section>
+  
+         <section class="page-heading">
+           <div><p>Active scenario <span class="heading-pill">LIVE</span></p><h1 id="scenarioName">India, December</h1><span id="dataNote"></span></div>
+           <div class="confidence medium" id="confidenceBadge"><small>Data support</small><strong id="confidenceLabel">Medium</strong></div>
+         </section>
+  
+         <section id="kpis" class="kpi-grid"></section>
+
+         <section class="content-block route-map-block">
+           <div class="section-heading"><div><p>Route intelligence</p><h2>Global demand corridor</h2></div><small>Selected departure market → Abu Dhabi</small></div>
+           <div id="routeMap" class="route-map"></div>
+         </section>
+
+         <div class="two-column overview-grid">
+           <section class="content-block">
+             <div class="section-heading"><div><p>Baseline compared with scenario</p><h2>What changes at every step</h2></div><small>Teal is the scenario</small></div>
+             <div id="comparisonChart" class="comparison-chart"></div>
+           </section>
+           <section class="content-block">
+             <div class="section-heading"><div><p>Selected route history</p><h2>Seats by month</h2></div><small>Historical seasonal baseline</small></div>
+             <div id="seasonProfile" class="season-profile"></div>
+           </section>
+         </div>
+  
+         <section class="content-block">
+           <div class="section-heading"><div><p>Source and formula trace</p><h2>Why these starting numbers appear</h2></div><small>All values change with country and month</small></div>
+           <div id="routeAudit" class="route-audit"></div>
+         </section>
+  
+         <section class="content-block">
+           <div class="section-heading"><div><p>Transparent calculation</p><h2>How seats become hotel demand</h2></div><small>Every assumption remains visible and adjustable</small></div>
+           <div id="chain" class="chain"></div>
+         </section>
+  
+         <div class="two-column">
+           <section class="content-block">
+             <div class="section-heading"><div><p>Nationality impact</p><h2>Guest-night change by nationality</h2></div></div>
+             <div id="marketBars" class="bars"></div>
+           </section>
+           <section class="content-block">
+             <div class="section-heading"><div><p>Sensitivity</p><h2>Which assumptions move the result most</h2></div><small>Effect of one practical low-to-high test</small></div>
+             <div id="sensitivityBars"></div>
+           </section>
+         </div>
+  
+         <section class="recommendation"><div>Planner action</div><p id="recommendationText"></p></section>
+       </div>
+     </section>
+  
+     <section id="bridgeView" class="view standard-view">
+       <div class="intro-row"><div><p>Country mismatch</p><h1 id="bridgeTitle">Departure countries to hotel nationalities</h1><span id="bridgeExplanation"></span></div><div class="confidence medium" id="confidenceBadgeCopy"><small>Data support</small><strong id="confidenceLabelCopy">Shown per scenario</strong></div></div>
+       <div class="bridge-example"><strong>Example</strong><p>An Australian passport holder may arrive on a flight from London. The flight file says United Kingdom. The hotel file says Australia. The bridge estimates that relationship instead of forcing the two labels to match.</p></div>
+       <div class="bridge-rule"><strong>One product, two connected calculations</strong><p>Scenario Studio first calculates the total hotel check-ins and guest nights. Country Bridge then divides that same total among likely nationalities. The bridge does not create or remove any demand.</p></div>
+       <div class="bridge-definitions">
+         <article><strong>Share of hotel check-ins</strong><p>The estimated part of the selected route's hotel check-ins assigned to each nationality. All 45 shares add to 100%.</p></article>
+         <article><strong>Top nationality weights</strong><p>The ten largest estimated shares. The other 35 nationalities remain in the calculation even when they are not visible in the table.</p></article>
+         <article><strong>Planner override</strong><p>A user can replace the estimated shares with better evidence. Air2Stay then normalizes all shares to 100% and recalculates the nationality view.</p></article>
+       </div>
+       <section class="content-block">
+         <div class="section-heading"><div><p>Editable bridge</p><h2>Top nationality weights</h2></div><button id="applyBridge">Use planner override</button></div>
+         <table class="bridge-table"><thead><tr><th>Hotel nationality</th><th>Relationship</th><th>Estimated share of check-ins (%)</th><th>Average stay</th></tr></thead><tbody id="bridgeTableBody"></tbody></table>
+         <p id="bridgeStatus" class="status-line">The model keeps all 45 nationalities in the calculation. Edit a visible percentage only when you have better market evidence, then press Use planner override.</p>
+       </section>
+       <div class="confidence-explanation"><strong id="confidenceReason"></strong><p>Data support is a coverage rule, not a 95% confidence interval. High means at least three historical observations for this route and month. Medium means one or two. Low means no matching route history and fallback assumptions are used.</p></div>
+     </section>
+  
+     <section id="validationView" class="view standard-view">
+       <div class="intro-row"><div><p>Historical validation</p><h1>A closed-book exam using real supplied history</h1><span>The model studied 36 months from January 2022 to December 2024, then took an exam on 7 later months from January to July 2025. This is an 83.7% study and 16.3% exam split.</span></div></div>
+       <div class="test-steps">
+         <article><strong>1 Study</strong><p>Learn conversion patterns from the 36 older months only.</p></article>
+         <article><strong>2 Lock</strong><p>Keep the 7 later hotel answers hidden while fitting the model.</p></article>
+         <article><strong>3 Exam</strong><p>Predict January to July 2025, then compare each prediction with the supplied hotel New Arrivals.</p></article>
+       </div>
+       <div id="validationKpis" class="kpi-grid three"></div>
+       <section class="content-block validation-block">
+         <div class="section-heading"><div><p>Flight to hotel check-ins</p><h2>Actual and predicted monthly check-ins</h2></div><div class="legend"><span class="actual"></span>Actual supplied hotel data <span class="transparent"></span>Transparent chain <span class="predicted"></span>Hybrid benchmark</div></div>
+         <div id="validationChart" class="validation-chart"></div>
+         <div class="axis-note"><span>Vertical axis: monthly international hotel New Arrivals</span><span>Horizontal axis: exam month in 2025</span></div>
+         <div id="validationTable" class="validation-table-wrap"></div>
+       </section>
+       <div class="two-column explanation-grid">
+         <section><h2>Where the black line comes from</h2><p>It is not invented. It is the <strong>New Arrivals</strong> column in the supplied <strong>data international_train.xlsx</strong>, added across nationalities and days to make one total for each month.</p></section>
+         <section><h2>Where the transparent line comes from</h2><p>For each exam month, supplied P2P passengers are multiplied by a hotel-conversion rate learned from the older training months. That is the same visible logic used by Scenario Studio.</p></section>
+         <section><h2>What WMAPE means</h2><p>WMAPE stands for <strong>Weighted Mean Absolute Percentage Error</strong>. Add the sizes of all mistakes, then divide by the total actual check-ins. Lower is better. About 7% means about seven check-ins of total mistake per one hundred actual check-ins.</p></section>
+         <section><h2>What the daily stay error tests</h2><p>This is a separate test. It predicts the supplied daily <strong>Guests</strong> values by nationality for May–July 2025 after learning from earlier days. It checks the hotel-stay part; it does not create the black monthly line.</p></section>
+       </div>
+     </section>
+  
+     <section id="glossaryView" class="view standard-view">
+       <div class="intro-row"><div><p>Plain-language guide</p><h1>The words used in the simulator</h1><span>Short explanations for non-technical users</span></div></div>
+       <div id="glossaryGrid" class="glossary-grid"></div>
+       <section class="content-block limits"><h2>Known data limits</h2><ul><li>Flight country means the place where the airplane departed.</li><li>Hotel nationality means the guest's passport nationality.</li><li>The supplied files do not include purpose of travel, aircraft type, room inventory or events.</li><li>The model uses monthly flight totals because 2022 has a different date grain.</li></ul></section>
+       <section class="content-block limits"><h2>Security and privacy</h2><ul><li>The prototype runs locally and does not send the supplied data to an external service.</li><li>The standalone HTML contains derived route baselines, validation totals and bridge weights, not the original row-level workbooks.</li><li>The Country Bridge estimates patterns across groups. It does not identify or track an individual traveler.</li><li>Do not publish the original competition data or planner overrides without DCT approval and a named data owner.</li></ul></section>
+     </section>
+   </main>
+   <script type="module" src="./app.mjs?v=20260922-admin0-map"></script>
+ </body>
+ </html>
