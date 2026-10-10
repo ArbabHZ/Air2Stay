@@ -173,13 +173,20 @@
      found.push(`${seatsMatch[1]} seats per flight`);
    }
   
-   const loadMatch = lower.match(/(?:load factor|filled|occupancy)[^\d]{0,12}(\d{1,3}(?:\.\d+)?)\s*%/)
-     || lower.match(/(\d{1,3}(?:\.\d+)?)\s*%[^,.]{0,12}(?:load factor|filled|occupancy)/);
-   if (loadMatch) {
-     changes.loadFactor = Number(loadMatch[1]) / 100;
-     found.push(`${loadMatch[1]}% load factor`);
-   }
-  
+   
+  const loadMatch =
+    lower.match(/(?:load factor|filled|occupancy)[^\d]{0,20}(\d{1,3}(?:\.\d+)?)\s*%?/) ||
+    lower.match(/(\d{1,3}(?:\.\d+)?)\s*%?\s*(?:load factor|filled|occupancy)/);
+
+  if (loadMatch) {
+    const value = Number(loadMatch[1]);
+
+    if (value >= 0 && value <= 110) {
+      changes.loadFactor = value / 100;
+      found.push(`${value}% load factor`);
+    }
+  }
+
    const p2pMatch = lower.match(/p2p[^\d]{0,12}(\d{1,3}(?:\.\d+)?)\s*%/);
    if (p2pMatch) {
      changes.p2pShare = Number(p2pMatch[1]) / 100;
