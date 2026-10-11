@@ -67,12 +67,15 @@
   
  .workspace { padding: 30px 30px 56px; max-width: 1440px; width: 100%; margin: 0 auto; }
  .smart-box { display: grid; grid-template-columns: 210px 1fr auto; gap: 12px 14px; align-items: center; background: linear-gradient(120deg, var(--navy-2), #0d5363); color: white; border: 1px solid rgba(255,255,255,.1); border-radius: var(--radius-lg); padding: 18px 20px; box-shadow: 0 16px 34px rgba(8, 42, 58, .16); }
+ .assistant-heading { grid-column: 1 / -1; display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
  .smart-box span, .smart-box strong { display: block; }
  .smart-box span { color: #8edccc; font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
  .smart-box strong { margin-top: 3px; font-size: 14px; }
  .smart-box input { background: #fff; }
  .smart-box button, .section-heading button { border: 0; border-radius: 9px; padding: 11px 18px; background: var(--teal); color: #fff; font-weight: 700; box-shadow: 0 5px 12px rgba(13, 136, 118, .2); }
  .smart-box button:hover, .section-heading button:hover { background: #10a18c; box-shadow: 0 8px 18px rgba(13, 136, 118, .28); }
+ .smart-box .clear-chat { flex: 0 0 auto; padding: 7px 11px; border: 1px solid rgba(142,220,204,.45); border-radius: 7px; background: transparent; color: #bcece4; font-size: 11px; box-shadow: none; }
+ .smart-box .clear-chat:hover { background: rgba(32,213,189,.14); color: #fff; box-shadow: none; }
  .assistant-chat { grid-column: 2 / -1; display: grid; gap: 7px; max-height: 118px; overflow-y: auto; padding-right: 4px; }
  .assistant-message { width: fit-content; max-width: 88%; padding: 8px 11px; border-radius: 10px; font-size: 12px; line-height: 1.4; }
  .assistant-message.user { justify-self: end; background: rgba(255,255,255,.14); color: #f3fbfc; }
@@ -375,6 +378,7 @@
  .smart-box > div:first-child {
    grid-column: 1 / -1;
  }
+ .assistant-heading { align-items: center; }
  .assistant-chat {
    grid-column: 1 / -1;
    height: 230px;

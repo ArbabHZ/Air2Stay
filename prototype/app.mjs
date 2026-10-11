@@ -91,6 +91,16 @@
    $("#assistantChat").scrollTop = $("#assistantChat").scrollHeight;
  }
 
+ function clearAssistantChat() {
+   assistantMessages = [
+     { role: "bot", text: "I’m ready. Ask what changed, ask why, or describe a scenario change." },
+   ];
+   renderAssistantChat();
+   setAssistantExpanded(false);
+   $("#smartPrompt").value = "";
+   assistantPromptDirty = false;
+ }
+
  function setAssistantExpanded(expanded) {
    $(".smart-box").classList.toggle("assistant-collapsed", !expanded);
  }
@@ -678,6 +688,8 @@ $("#smartPrompt").addEventListener("input", () => {
 $("#assistantChat").addEventListener("click", () => {
   setAssistantExpanded(true);
 });
+
+$("#clearChat").addEventListener("click", clearAssistantChat);
 
 $("#smartPrompt").addEventListener("keydown", (event) => {
   if (event.key === "Enter" && !event.shiftKey) {
