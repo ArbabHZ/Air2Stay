@@ -9,6 +9,8 @@
  let data;
  let state;
  let bridgeOverride = null;
+ let lastRenderedRouteKey = null;
+ let renderQueued = false;
   
  async function loadData() {
    const response = await fetch("./data/scenario_data.json");
@@ -89,6 +91,16 @@
  }
 
  function renderRouteMap(result) {
+   // Moving a dial (load factor, P2P share, etc.) changes the numbers but not
+   // the route itself. Re-running the label-layout search and the 700ms
+   // view-box animation on every slider tick is what made dragging feel
+   // laggy. When the route hasn't changed, just refresh the P2P stat text.
+   const routeKey = `${result.route.originKey}-${state.month}`;
+   if (routeKey === lastRenderedRouteKey && $("#routeMap .map-route-stat strong")) {
+     $("#routeMap .map-route-stat strong").textContent = formatNumber(result.scenario.p2p);
+     return;
+   }
+   lastRenderedRouteKey = routeKey;
    const coordinates = {
      ARMENIA: [44.9, 40.2], AUSTRIA: [14.6, 47.5], AZERBAIJAN: [47.7, 40.1],
      BAHRAIN: [50.6, 26.1], BELGIUM: [4.5, 50.8], CANADA: [-106.3, 56.1],
@@ -562,6 +574,15 @@
    $("#recommendationText").textContent = `${action} The largest modeled nationality effect is ${top?.nationality || "not available"} at ${formatSigned(top?.deltaGuestNights || 0)} guest nights.`;
  }
   
+ function scheduleRender() {
+   if (renderQueued) return;
+   renderQueued = true;
+   requestAnimationFrame(() => {
+     renderQueued = false;
+     renderAll();
+   });
+ }
+
  function renderAll() {
    readForm();
    const result = runScenario(data, state);
@@ -593,8 +614,15 @@
        state = { ...refreshed, extraFlights: state.extraFlights };
        bridgeOverride = null;
        setFormFromState();
+       renderAll();
+       return;
      }
-     renderAll();
+     // Range sliders fire "input" on every tiny tick while dragging. Update
+     // the on-screen number immediately so it never feels laggy, but
+     // coalesce the full, more expensive re-render to once per animation
+     // frame so a fast drag doesn't queue up dozens of renders.
+     updateRangeLabels();
+     scheduleRender();
    }));
   
    $("#resetScenario").addEventListener("click", () => {
