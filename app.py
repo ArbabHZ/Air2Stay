@@ -69,10 +69,17 @@ HTML_FILE = PROTOTYPE_DIR / "index.html"
 def load_prototype_html() -> str:
     """Load the standalone prototype and make it self-contained."""
 
-    if not HTML_FILE.exists():
-        raise FileNotFoundError(
-            f"Prototype not found: {HTML_FILE}"
-        )
+    required_files = {
+        "prototype HTML": HTML_FILE,
+        "prototype CSS": PROTOTYPE_DIR / "styles.css",
+        "scenario data": PROTOTYPE_DIR / "data" / "scenario_data.json",
+        "map SVG": PROTOTYPE_DIR / "data" / "admin0-countries.svg",
+        "scenario engine": PROTOTYPE_DIR / "engine.mjs",
+        "prototype controller": PROTOTYPE_DIR / "app.mjs",
+    }
+    missing = [f"{label}: {path}" for label, path in required_files.items() if not path.is_file()]
+    if missing:
+        raise FileNotFoundError("Missing required Air2Stay assets:\n" + "\n".join(missing))
 
     html = HTML_FILE.read_text(encoding="utf-8")
 

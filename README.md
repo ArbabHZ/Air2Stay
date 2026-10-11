@@ -32,7 +32,7 @@ Air2Stay predicts how changes in flight capacity and routing impact hotel demand
 # - international_train.xlsx
 # - international_test.xlsx
 
-# Then double-click: START_AIR2STAY.bat
+# Then run: .\run_prototype.ps1
 ```
 
 **Option 2: Manual Setup**
@@ -42,22 +42,22 @@ python -m pip install -r requirements.txt
 
 # 2. Place Excel files in project root (not in /data folder)
 
-# 3. Rebuild the model
-python rebuild_model.ps1          # Windows PowerShell
-python -m src.build_model          # macOS/Linux
+# 3. Rebuild the model (after placing the Excel inputs)
+python -m src.build_model          # Windows, macOS, or Linux
 
-# 4. Start the web server
-# (The build process does this automatically)
-# Open browser to: http://localhost:3000
+# 4. Start the web app
+.\run_prototype.ps1                # Windows PowerShell
+# or: .venv/bin/streamlit run app.py --server.port 8765
+# Open browser to: http://localhost:8765
 ```
 
 ### First Run Checks
 ```bash
-# Windows:
-RUN_CHECKS.bat
-
-# macOS/Linux:
-pytest tests/
+# No automated test directory is included in this folder.
+# At minimum, check syntax with:
+python -m py_compile app.py src/build_model.py
+node --check prototype/engine.mjs
+node --check prototype/app.mjs
 ```
 
 ## 📊 Project Structure

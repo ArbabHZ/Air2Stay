@@ -146,11 +146,13 @@
    const changes = {};
    const found = [];
   
-   const origins = [...new Set(data.routes.map((route) => route.origin))].sort((a, b) => b.length - a.length);
-   const origin = origins.find((name) => lower.includes(name.toLowerCase()));
+   const origins = [...new Map(
+     data.routes.map((route) => [route.originKey, route.origin]),
+   ).entries()].sort(([, first], [, second]) => second.length - first.length);
+   const origin = origins.find(([, name]) => lower.includes(name.toLowerCase()));
    if (origin) {
-     changes.originKey = origin.toUpperCase();
-     found.push(`origin ${origin}`);
+     changes.originKey = origin[0];
+     found.push(`origin ${origin[1]}`);
    }
   
    const monthIndex = data.months.findIndex((name) => lower.includes(name.toLowerCase()));
@@ -158,6 +160,21 @@
      changes.month = monthIndex + 1;
      found.push(`month ${data.months[monthIndex]}`);
    }
+
+   const targetOriginKey = changes.originKey || current.originKey;
+   const targetMonth = changes.month || current.month;
+   const routeChanged = targetOriginKey !== current.originKey || targetMonth !== current.month;
+   const targetRoute = findRoute(data, targetOriginKey, targetMonth);
+   const targetBridge = getBridge(data, targetRoute.originKey, targetMonth);
+   const targetAverageStay = weightedStay(targetBridge, data.defaults.averageStay);
+   const routeDefaults = routeChanged
+     ? {
+       seatsPerFlight: Math.round(targetRoute.seatsPerFlight || 220),
+       loadFactor: targetRoute.loadFactor,
+       p2pShare: targetRoute.p2pShare,
+       averageStay: targetAverageStay,
+     }
+     : {};
   
    const flightMatch = lower.match(/(-?\d+(?:\.\d+)?)\s*(?:extra|additional|more|fewer|less)?\s*(?:weekly\s*)?flights?/);
    if (flightMatch) {
@@ -172,32 +189,46 @@
      changes.seatsPerFlight = Number(seatsMatch[1]);
      found.push(`${seatsMatch[1]} seats per flight`);
    }
-  
-   
+
+
+
+  // Load factor: only match numbers associated with load factor,
+  // occupancy, or filled.
   const loadMatch =
-    lower.match(/(?:load factor|filled|occupancy)[^\d]{0,20}(\d{1,3}(?:\.\d+)?)\s*%?/) ||
-    lower.match(/(\d{1,3}(?:\.\d+)?)\s*%?\s*(?:load factor|filled|occupancy)/);
+    lower.match(/(\d{1,3}(?:\.\d+)?)\s*(?:%|percent)\s*(?:load factor|occupancy|filled)/) ||
+    lower.match(/(?:load factor|occupancy|filled)\D{0,12}(\d{1,3}(?:\.\d+)?)\s*(?:%|percent)?/);
 
   if (loadMatch) {
     const value = Number(loadMatch[1]);
-
-    if (value >= 0 && value <= 110) {
+    if (value >= 0 && value <= 100) {
       changes.loadFactor = value / 100;
       found.push(`${value}% load factor`);
     }
   }
+
+  // Hotel conversion: only match numbers associated with conversion
+  // or hotel capture, never load factor or occupancy.
+  const conversionMatch =
+    lower.match(/(?:hotel\s+conversion(?:\s+rate)?|conversion(?:\s+rate)?|hotel\s+capture)[^\d]{0,25}(\d{1,3}(?:\.\d+)?)\s*(?:%|percent)?/) ||
+    lower.match(/(\d{1,3}(?:\.\d+)?)\s*(?:%|percent)\s*(?:hotel\s+conversion(?:\s+rate)?|conversion(?:\s+rate)?|hotel\s+capture)/);
+
+  if (conversionMatch) {
+    const value = Number(conversionMatch[1]);
+    if (value >= 0 && value <= 100) {
+      changes.conversionRate = value / 100;
+      found.push(`${value}% hotel conversion`);
+    }
+  }
+
+
 
    const p2pMatch = lower.match(/p2p[^\d]{0,12}(\d{1,3}(?:\.\d+)?)\s*%/);
    if (p2pMatch) {
      changes.p2pShare = Number(p2pMatch[1]) / 100;
      found.push(`${p2pMatch[1]}% P2P share`);
    }
-  
-   const conversionMatch = lower.match(/(?:conversion|hotel capture)[^\d]{0,12}(\d{1,3}(?:\.\d+)?)\s*%/);
-   if (conversionMatch) {
-     changes.conversionRate = Number(conversionMatch[1]) / 100;
-     found.push(`${conversionMatch[1]}% hotel conversion`);
-   }
+
+
   
    const stayMatch = lower.match(/(?:stay|length of stay)[^\d]{0,12}(\d+(?:\.\d+)?)\s*(?:days?|nights?)/);
    if (stayMatch) {
@@ -205,7 +236,7 @@
      found.push(`${stayMatch[1]}-day average stay`);
    }
   
-   const next = { ...current, ...changes };
+   const next = { ...current, ...routeDefaults, ...changes };
    return {
      inputs: next,
      understood: found.length > 0,

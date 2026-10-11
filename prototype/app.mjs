@@ -11,6 +11,7 @@
  let bridgeOverride = null;
  let lastRenderedRouteKey = null;
  let renderQueued = false;
+ let assistantPromptDirty = false;
   
  async function loadData() {
    const response = await fetch("./data/scenario_data.json");
@@ -58,6 +59,26 @@
    $("#loadFactorValue").textContent = `${Number($("#loadFactor").value).toFixed(1)}%`;
    $("#p2pShareValue").textContent = `${Number($("#p2pShare").value).toFixed(1)}%`;
    $("#conversionRateValue").textContent = `${Number($("#conversionRate").value).toFixed(1)}%`;
+ }
+
+ function scenarioPromptForState() {
+   const route = findRoute(data, state.originKey, state.month);
+   return `Add ${state.extraFlights >= 0 ? state.extraFlights : Math.abs(state.extraFlights)} ${
+     state.extraFlights < 0 ? "fewer" : "extra"
+   } weekly flights from ${route.origin} in ${data.months[state.month - 1]} with ${
+     state.seatsPerFlight
+   } seats, a ${(state.loadFactor * 100).toFixed(1)}% load factor, a ${
+     (state.p2pShare * 100).toFixed(1)
+   }% P2P share, an average stay of ${
+     state.averageStay
+   } nights, and hotel conversion of ${(state.conversionRate * 100).toFixed(1)}%`;
+ }
+
+ function syncAssistantPrompt(force = false) {
+   if (force || !assistantPromptDirty) {
+     $("#smartPrompt").value = scenarioPromptForState();
+     assistantPromptDirty = false;
+   }
  }
   
  function readForm() {
@@ -614,6 +635,9 @@
        state = { ...refreshed, extraFlights: state.extraFlights };
        bridgeOverride = null;
        setFormFromState();
+       // A route/month change invalidates the old natural-language sentence.
+       // Force it to follow the newly selected control-room state.
+       syncAssistantPrompt(true);
        renderAll();
        return;
      }
@@ -631,16 +655,27 @@
      setFormFromState();
      renderAll();
    });
-  
-   $("#applyPrompt").addEventListener("click", () => {
-     const parsed = parseScenarioPrompt(data, $("#smartPrompt").value, state);
-     state = parsed.inputs;
-     bridgeOverride = null;
-     setFormFromState();
-     $("#assistantReply").textContent = parsed.summary;
-     $("#assistantReply").classList.toggle("warning", !parsed.understood);
-     renderAll();
-   });
+
+
+$("#smartPrompt").addEventListener("input", () => {
+  assistantPromptDirty = true;
+});
+
+$("#applyPrompt").addEventListener("click", () => {
+  // Read the latest slider and input values before applying the prompt.
+  readForm();
+
+  const parsed = parseScenarioPrompt(data, $("#smartPrompt").value, state);
+  state = parsed.inputs;
+  bridgeOverride = null;
+  setFormFromState();
+  $("#assistantReply").textContent = parsed.summary;
+  $("#assistantReply").classList.toggle("warning", !parsed.understood);
+  assistantPromptDirty = false;
+  syncAssistantPrompt();
+  renderAll();
+});
+
   
    $("#applyBridge").addEventListener("click", () => {
      const baseResult = runScenario(data, { ...state, bridgeOverride: null });
