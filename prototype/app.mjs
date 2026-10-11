@@ -1,4 +1,4 @@
- import { findRoute, parseScenarioPrompt, runScenario, sensitivity } from "./engine.mjs";
+ import { assistantReply, findRoute, parseScenarioPrompt, runScenario, sensitivity } from "./engine.mjs";
   
  const $ = (selector) => document.querySelector(selector);
  const $$ = (selector) => [...document.querySelectorAll(selector)];
@@ -12,6 +12,9 @@
  let lastRenderedRouteKey = null;
  let renderQueued = false;
  let assistantPromptDirty = false;
+ let assistantMessages = [
+   { role: "bot", text: "I’m ready. Ask what changed, ask why, or describe a scenario change." },
+ ];
   
  async function loadData() {
    const response = await fetch("./data/scenario_data.json");
@@ -79,6 +82,17 @@
      $("#smartPrompt").value = scenarioPromptForState();
      assistantPromptDirty = false;
    }
+ }
+
+ function renderAssistantChat() {
+   $("#assistantChat").innerHTML = assistantMessages.map((message) =>
+     `<div class="assistant-message ${message.role}">${message.text}</div>`,
+   ).join("");
+   $("#assistantChat").scrollTop = $("#assistantChat").scrollHeight;
+ }
+
+ function setAssistantExpanded(expanded) {
+   $(".smart-box").classList.toggle("assistant-collapsed", !expanded);
  }
   
  function readForm() {
@@ -661,19 +675,41 @@ $("#smartPrompt").addEventListener("input", () => {
   assistantPromptDirty = true;
 });
 
-$("#applyPrompt").addEventListener("click", () => {
-  // Read the latest slider and input values before applying the prompt.
-  readForm();
+$("#assistantChat").addEventListener("click", () => {
+  setAssistantExpanded(true);
+});
 
-  const parsed = parseScenarioPrompt(data, $("#smartPrompt").value, state);
-  state = parsed.inputs;
-  bridgeOverride = null;
-  setFormFromState();
-  $("#assistantReply").textContent = parsed.summary;
-  $("#assistantReply").classList.toggle("warning", !parsed.understood);
+$("#smartPrompt").addEventListener("keydown", (event) => {
+  if (event.key === "Enter" && !event.shiftKey) {
+    event.preventDefault();
+    $("#applyPrompt").click();
+  }
+});
+
+$("#applyPrompt").addEventListener("click", () => {
+  const prompt = $("#smartPrompt").value.trim();
+  if (!prompt) return;
+  readForm();
+  const reply = assistantReply(data, prompt, state, runScenario(data, state));
+  assistantMessages.push({ role: "user", text: prompt });
+  if (reply.type === "reset") {
+    state = defaultState("INDIA", 12);
+    bridgeOverride = null;
+    setFormFromState();
+    syncAssistantPrompt(true);
+  } else if (reply.type === "apply") {
+    state = reply.parsed.inputs;
+    bridgeOverride = null;
+    setFormFromState();
+    syncAssistantPrompt();
+  }
+  assistantMessages.push({ role: "bot", text: reply.text });
+  setAssistantExpanded(true);
+  renderAssistantChat();
   assistantPromptDirty = false;
-  syncAssistantPrompt();
   renderAll();
+  $("#smartPrompt").value = "";
+  $("#smartPrompt").focus();
 });
 
   
@@ -716,6 +752,7 @@ $("#applyPrompt").addEventListener("click", () => {
      setupControls();
      renderValidation();
      renderGlossary();
+     renderAssistantChat();
      renderAll();
    } catch (error) {
      document.body.innerHTML = `<main class="fatal"><h1>Air2Stay could not start</h1><p>${error.message}</p><p>Run the supplied run_prototype.ps1 file, then open http://localhost:8765.</p></main>`;

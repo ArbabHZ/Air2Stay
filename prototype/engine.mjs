@@ -3,6 +3,52 @@
  export function weeksInMonth(monthNumber) {
    return MONTH_DAYS[Math.max(1, Math.min(12, monthNumber)) - 1] / 7;
  }
+
+ export function assistantReply(data, prompt, current, result) {
+   const lower = String(prompt || "").toLowerCase();
+   const whole = Math.max(0, Number(result.scenario.seats));
+   const passengers = Math.max(0, Number(result.scenario.passengers));
+   const loadFactor = whole ? passengers / whole : 0;
+   const p2pShare = whole ? passengers ? result.scenario.p2p / passengers : 0 : 0;
+   const conversion = result.scenario.p2p ? result.scenario.hotelCheckins / result.scenario.p2p : 0;
+   const signedNights = `${result.delta.guestNights >= 0 ? "+" : "−"}${Math.round(Math.abs(result.delta.guestNights)).toLocaleString()}`;
+   const plainResult = `This scenario creates ${Math.round(result.scenario.hotelCheckins).toLocaleString()} hotel check-ins and ${Math.round(result.scenario.guestNights).toLocaleString()} guest nights (${signedNights} guest nights versus the baseline).`;
+   if (/\b(reset|clear|start over)\b/.test(lower)) {
+     return { type: "reset", text: "I reset the scenario to the default India, December starting point." };
+   }
+   if (/\b(what changed|what did you change|summary|status)\b/.test(lower)) {
+     return {
+       type: "answer",
+       text: `The live scenario is ${result.route.origin} in ${data.months[result.route.month - 1]}. ${plainResult}`,
+     };
+   }
+   if (/\b(why|explain|how did|where does)\b/.test(lower)) {
+     let detail = `We start with ${Math.round(whole).toLocaleString()} seats. At ${(loadFactor * 100).toFixed(1)}% full, that gives ${Math.round(passengers).toLocaleString()} passengers. ${(p2pShare * 100).toFixed(1)}% are counted as P2P arrivals, and ${(conversion * 100).toFixed(1)}% of those become hotel check-ins. The average stay then turns check-ins into guest nights.`;
+     if (/\b(flight|flights|seat|seats|capacity)\b/.test(lower)) {
+       detail = `Flights add capacity. This scenario has ${Math.round(whole).toLocaleString()} seats, so more seats can create more passengers and hotel demand. ${plainResult}`;
+     } else if (/\b(load|full|occupancy)\b/.test(lower)) {
+       detail = `Load factor means how full the aircraft are. At ${(loadFactor * 100).toFixed(1)}%, about ${Math.round(passengers).toLocaleString()} of ${Math.round(whole).toLocaleString()} seats are filled. ${plainResult}`;
+     } else if (/\b(p2p|point.to.point|arrival)\b/.test(lower)) {
+       detail = `P2P share is the percentage of passengers whose airport journey ends in Abu Dhabi. Here it is ${(p2pShare * 100).toFixed(1)}%, or about ${Math.round(result.scenario.p2p).toLocaleString()} people. ${plainResult}`;
+     } else if (/\b(conversion|hotel|check.in)\b/.test(lower)) {
+       detail = `Hotel conversion is the share of P2P passengers estimated to check into a hotel. Here it is ${(conversion * 100).toFixed(1)}%, producing about ${Math.round(result.scenario.hotelCheckins).toLocaleString()} check-ins.`;
+     } else if (/\b(stay|night|nights)\b/.test(lower)) {
+       detail = `Average stay is the number of nights per hotel check-in. Longer stays increase guest nights without changing the number of check-ins. ${plainResult}`;
+     }
+     return {
+       type: "answer",
+       text: detail,
+     };
+   }
+   const parsed = parseScenarioPrompt(data, prompt, current);
+   return {
+     type: "apply",
+     parsed,
+     text: parsed.understood
+       ? parsed.summary
+       : "Ask me a scenario, ask what changed, or ask why the demand moved. For example: “Add 3 weekly flights from India in December.”",
+   };
+ }
   
  export function normalizeBridge(rows) {
    const positive = rows.map((row) => ({ ...row, weight: Math.max(0, Number(row.weight) || 0) }));
@@ -146,13 +192,34 @@
    const changes = {};
    const found = [];
   
+   const aliases = {
+     USA: "UNITED STATES OF AMERICA",
+     US: "UNITED STATES OF AMERICA",
+     "UNITED STATES": "UNITED STATES OF AMERICA",
+     AMERICA: "UNITED STATES OF AMERICA",
+     UK: "UNITED KINGDOM",
+     BRITAIN: "UNITED KINGDOM",
+     RUSSIA: "RUSSIAN FEDERATION",
+     KOREA: "SOUTH KOREA",
+   };
    const origins = [...new Map(
      data.routes.map((route) => [route.originKey, route.origin]),
-   ).entries()].sort(([, first], [, second]) => second.length - first.length);
-   const origin = origins.find(([, name]) => lower.includes(name.toLowerCase()));
+   ).entries()];
+   const originCandidates = origins.flatMap(([key, name]) => [
+     [key, name],
+     ...Object.entries(aliases)
+       .filter(([, canonical]) => canonical === key)
+       .map(([alias]) => [key, alias]),
+   ]).sort(([, first], [, second]) => second.length - first.length);
+   const destinationText = lower.match(/\bto\s+(.+)$/)?.[1] || lower;
+   const origin = originCandidates.find(([, name]) =>
+     new RegExp(`\\b${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(destinationText),
+   ) || originCandidates.find(([, name]) =>
+     new RegExp(`\\b${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(lower),
+   );
    if (origin) {
      changes.originKey = origin[0];
-     found.push(`origin ${origin[1]}`);
+     found.push(`origin ${origins.find(([key]) => key === origin[0])?.[1] || origin[1]}`);
    }
   
    const monthIndex = data.months.findIndex((name) => lower.includes(name.toLowerCase()));
@@ -242,6 +309,6 @@
      understood: found.length > 0,
      summary: found.length
        ? `I understood: ${found.join(", ")}. I applied these values to the same audited scenario engine.`
-       : "I could not find a route, month or number to change. Try: Add 3 weekly flights from France in December with 220 seats and an 84% load factor.",
+       : "Ask me a scenario, ask what changed, or ask why the demand moved. For example: “Add 3 weekly flights from France in December.”",
    };
  }

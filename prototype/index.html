@@ -38,17 +38,16 @@
            <label>Hotel conversion <output id="conversionRateValue">42%</output><input id="conversionRate" type="range" min="5" max="90" step="0.1"></label>
            <label>Average stay in nights<input id="averageStay" type="number" min="1" max="10" step="0.1"></label>
          </form>
-         <div class="sidebar-status"><span class="status-dot"></span><div><strong>Live model</strong><small>Updates as you adjust inputs</small></div></div>
          <div class="control-note"><strong>All controls follow the selected route</strong><p>Choose any of the 33 departure countries in the supplied flight file. The month, seats, load factor and P2P starting values refresh for that country.</p></div>
          <div class="control-note"><strong>Hotel conversion</strong><p>This combines visitor purpose and hotel capture because the supplied files do not separately identify tourists, returning residents and people staying with family or friends.</p></div>
        </aside>
   
        <div class="workspace">
-         <section class="smart-box">
-           <div><span>Scenario assistant</span><strong>Describe a change in normal words</strong></div>
-           <input id="smartPrompt" value="Add 3 weekly flights from India in December with 220 seats and an 84% load factor">
-           <button id="applyPrompt">Apply</button>
-           <p id="assistantReply">The assistant turns your sentence into controlled scenario inputs.</p>
+         <section class="smart-box assistant-collapsed">
+           <div><span>Scenario assistant</span><strong>Ask about or change the live scenario</strong></div>
+           <div id="assistantChat" class="assistant-chat" aria-live="polite"></div>
+           <input id="smartPrompt" aria-label="Message the scenario assistant" placeholder="Ask me a scenario...">
+           <button id="applyPrompt">Send</button>
          </section>
   
          <section class="page-heading">
