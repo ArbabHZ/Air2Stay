@@ -64,24 +64,9 @@
    $("#conversionRateValue").textContent = `${Number($("#conversionRate").value).toFixed(1)}%`;
  }
 
- function scenarioPromptForState() {
-   const route = findRoute(data, state.originKey, state.month);
-   return `Add ${state.extraFlights >= 0 ? state.extraFlights : Math.abs(state.extraFlights)} ${
-     state.extraFlights < 0 ? "fewer" : "extra"
-   } weekly flights from ${route.origin} in ${data.months[state.month - 1]} with ${
-     state.seatsPerFlight
-   } seats, a ${(state.loadFactor * 100).toFixed(1)}% load factor, a ${
-     (state.p2pShare * 100).toFixed(1)
-   }% P2P share, an average stay of ${
-     state.averageStay
-   } nights, and hotel conversion of ${(state.conversionRate * 100).toFixed(1)}%`;
- }
-
- function syncAssistantPrompt(force = false) {
-   if (force || !assistantPromptDirty) {
-     $("#smartPrompt").value = scenarioPromptForState();
-     assistantPromptDirty = false;
-   }
+ function clearAssistantPrompt() {
+   $("#smartPrompt").value = "";
+   assistantPromptDirty = false;
  }
 
  function renderAssistantChat() {
@@ -659,9 +644,8 @@
        state = { ...refreshed, extraFlights: state.extraFlights };
        bridgeOverride = null;
        setFormFromState();
-       // A route/month change invalidates the old natural-language sentence.
-       // Force it to follow the newly selected control-room state.
-       syncAssistantPrompt(true);
+       // Keep the assistant input ready for a new user-written request.
+       clearAssistantPrompt();
        renderAll();
        return;
      }
@@ -708,12 +692,12 @@ $("#applyPrompt").addEventListener("click", () => {
     state = defaultState("INDIA", 12);
     bridgeOverride = null;
     setFormFromState();
-    syncAssistantPrompt(true);
+    clearAssistantPrompt();
   } else if (reply.type === "apply") {
     state = reply.parsed.inputs;
     bridgeOverride = null;
     setFormFromState();
-    syncAssistantPrompt();
+    clearAssistantPrompt();
   }
   assistantMessages.push({ role: "bot", text: reply.text });
   setAssistantExpanded(true);
