@@ -120,6 +120,7 @@ ehthumbs.db
 .env
 .env.local
 .env.*.local
+.streamlit/secrets.toml
 
 # Sensitive Overrides (Never Commit)
 # ============================================================================
@@ -143,5 +144,6 @@ docker-compose.override.yml
 !prototype/data/
 !prototype/data/scenario_data.json
 !prototype/data/admin0-countries.svg
+!prototype/data/country_locations.json
 *.xlsx
 *.xls

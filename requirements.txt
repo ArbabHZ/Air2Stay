@@ -1,12 +1,13 @@
 # Air2Stay - Python Dependencies
-# Python 3.8+
+# Python 3.12+; versions match the local demo environment
 
 # Data Processing & Analysis
-numpy>=1.26.0,<3.0.0              # Numerical computing
-pandas>=2.1.0,<3.0.0              # Data manipulation and analysis
-openpyxl>=3.1.0,<4.0.0            # Excel file reading/writing
-streamlit>=1.40.0,<2.0.0            # Live web deployment
-altair>=5.4.0,<6.0.0                # Streamlit charts
+numpy==2.5.3
+pandas==2.3.3
+openpyxl==3.1.5
+streamlit==1.65.0
+certifi==2026.7.22
+altair==5.5.0
 
 # Optional: Testing & Development
 # Uncomment these for development environment:
