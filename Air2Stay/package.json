@@ -1,0 +1,14 @@
+{
+  "name": "air2stay",
+  "version": "2.0.0",
+  "description": "Air2Stay Scenario Copilot - Abu Dhabi DCT Flight to Hotel Demand Forecasting System",
+  "main": "app.py",
+  "scripts": {
+    "start": "python3 run_local.py",
+    "dev": "python3 run_local.py",
+    "check": "python3 run_local.py --check"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "Proprietary"
+}
