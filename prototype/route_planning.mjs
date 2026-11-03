@@ -128,7 +128,7 @@ export function buildPeerProfile(data, locations, country, month) {
     primaryPeerOriginKey: peers[0].originKey,
     peers: peers.map(({ route, ...peer }) => peer),
     nearestPeerOriginKey: nearest.originKey,
-    assumptions: { seatsPerFlight: Math.round(weighted("seatsPerFlight")), loadFactor: weighted("loadFactor", 1),
+    assumptions: { seatsPerFlight: weighted("seatsPerFlight"), loadFactor: weighted("loadFactor", 1),
       p2pShare: weighted("p2pShare", 1), conversionRate: Number(data.defaults?.captureRate || 0), averageStay },
     bridge, approximateRouteKm: targetLength,
     method: "Up to three markets in the same month; weighted by country-centroid proximity and approximate route-length similarity.",

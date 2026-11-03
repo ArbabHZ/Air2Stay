@@ -1217,3 +1217,22 @@ body.proposal-mode .page-heading { margin-bottom:16px; }
   .workspace-toolbar .view-mode-switch { width:100%; }
   .view-mode-switch .view-mode { padding:9px 11px; }
 }
+
+/* Plan controls can be collapsed at every screen size without resetting inputs. */
+body:not(.controls-open) #scenarioView { grid-template-columns:minmax(0,1fr); }
+#planControls[hidden] { display:none !important; }
+.workspace-toolbar > .adjust-controls {
+  display:inline-flex; align-items:center; justify-content:center; gap:8px;
+  justify-self:start; margin:0; padding:9px 12px; min-height:40px;
+  border:1px solid rgba(201,168,76,.45); border-radius:8px;
+  background:#1c2545; color:#f5efe3; font:inherit; font-size:13px;
+  font-weight:600; white-space:nowrap; cursor:pointer;
+}
+.adjust-controls svg { flex:none; }
+body.controls-open .adjust-controls svg path { transform:translateX(29px) scaleX(-1); }
+.adjust-controls:focus-visible { outline:2px solid #f2d58a; outline-offset:3px; }
+@media(max-width:1050px) {
+  .workspace-toolbar { grid-template-columns:minmax(0,1fr) auto; }
+  .workspace-toolbar > .view-mode-switch { grid-column:1/-1; grid-row:2; justify-self:center; }
+  .workspace-toolbar > .pw-launcher { grid-column:2; grid-row:1; }
+}

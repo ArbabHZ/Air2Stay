@@ -31,7 +31,7 @@
   
    <main>
      <section id="scenarioView" class="view active">
-       <aside class="control-panel">
+       <aside id="planControls" class="control-panel" aria-label="Plan controls">
          <div class="panel-kicker">PLAN A ROUTE</div>
          <div class="panel-heading"><div><p>Change the plan</p><small>Change the numbers to see what could happen</small></div><button id="resetScenario" type="button">Reset</button></div>
          <form id="scenarioForm">
@@ -63,9 +63,8 @@
        </aside>
   
        <div class="workspace">
-         <button type="button" id="adjustControls" class="adjust-controls" aria-expanded="false" aria-controls="scenarioForm">Adjust plan</button>
          <div class="workspace-toolbar">
-           <span class="workspace-label">ROUTE WORKSPACE</span>
+           <button type="button" id="adjustControls" class="adjust-controls" aria-expanded="false" aria-controls="planControls"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16M13 9l3 3-3 3"/></svg><span id="adjustControlsLabel">Adjust plan</span></button>
            <div class="view-mode-switch" role="group" aria-label="Planning view">
              <button type="button" class="view-mode active" data-mode="focus" aria-pressed="true" aria-controls="scenarioResults">Focus</button>
              <button type="button" class="view-mode" data-mode="decisions" aria-pressed="false" aria-controls="decisionWorkspace">Compare</button>
@@ -211,14 +210,14 @@
        <div class="intro-row"><div><p>Check against past records</p><h1>How close were the estimates to real hotel arrivals?</h1><span>Air2Stay used earlier records to make estimates for seven later months, then compared them with the actual hotel arrivals for those months.</span></div></div>
        <div class="test-steps">
          <article><strong>1 Learn</strong><p>Use 36 months of older records to learn the usual patterns.</p></article>
-         <article><strong>2 Set aside</strong><p>Keep the next seven months separate so they don’t influence the estimate.</p></article>
+         <article><strong>2 Set aside</strong><p>Keep the next seven months out of conversion calibration and model fitting.</p></article>
          <article><strong>3 Compare</strong><p>Estimate hotel arrivals for those seven months and compare with the actual totals.</p></article>
        </div>
        <p id="validationSummary" class="validation-summary"></p>
        <div id="validationKpis" class="kpi-grid three"></div>
        <details class="content-block result-explanation"><summary>What these scores tested and how they were calculated</summary><div id="validationScope"></div></details>
        <section class="content-block validation-block">
-         <div class="section-heading"><div><p>Monthly hotel arrivals</p><h2>Actual totals and Air2Stay estimates</h2></div><div class="legend"><span class="actual"></span>Recorded hotel arrivals <span class="transparent"></span>Simple estimate from flight totals <span class="predicted"></span>Estimate using past patterns</div></div>
+         <div class="section-heading"><div><p>Monthly hotel arrivals</p><h2>Actual totals and Air2Stay estimates</h2></div><div class="legend"><span class="actual"></span>Recorded hotel arrivals <span class="transparent"></span>Live default calculation <span class="predicted"></span>Hybrid comparison</div></div>
          <div id="validationChart" class="validation-chart"></div>
          <div class="axis-note"><span>Hotel arrivals</span><span>Month checked</span></div>
          <div id="validationTable" class="validation-table-wrap"></div>

@@ -6,6 +6,9 @@ import { fileURLToPath } from 'node:url';
 import { CONVERSION_EVIDENCE as e } from '../prototype/conversion_evidence.mjs';
 
 assert.equal(e.countryRatesAvailable,false);
+const live = JSON.parse(fs.readFileSync(new URL('../prototype/data/scenario_data.json',import.meta.url)));
+assert.equal(live.defaults.captureRate,e.globalRate,'Live conversion must equal the independently reproduced training-only rate');
+assert.ok(Math.abs(live.metrics.liveChainWmape-e.validation.constantTrainingGlobalWmape)<1e-14);
 assert.equal(Object.keys(e.monthlyRates).length,12);
 assert.equal(e.trainingPeriod,'2022-01 to 2024-12');
 assert.equal(e.checkPeriod,'2025-01 to 2025-07');
@@ -24,17 +27,17 @@ const exported=JSON.parse(fs.readFileSync(new URL('../prototype/data/scenario_da
 let errors=0, actuals=0, constantErrors=0;
 for (const row of e.validation.rows) {
   const month=Number(row.month.slice(-2));
-  assert.equal(Math.round(row.p2pPassengers*e.monthlyRates[month]),row.predicted);
+  assert.equal(row.p2pPassengers*e.monthlyRates[month],row.predicted);
   const original=exported.validation.find(r=>r.month===row.month);
   assert.equal(row.actual,original.actual);
-  assert.equal(row.predicted,original.transparent);
+  assert.ok(Math.abs(row.predicted-original.seasonal)<1e-8);
   errors+=Math.abs(row.actual-row.predicted);actuals+=row.actual;
-  constantErrors+=Math.abs(row.actual-Math.round(row.p2pPassengers*e.globalRate));
+  constantErrors+=Math.abs(row.actual-row.p2pPassengers*e.globalRate);
 }
-assert.equal(errors,e.validation.absoluteErrorSum);
+assert.ok(Math.abs(errors-e.validation.absoluteErrorSum)<1e-8);
 assert.equal(actuals,e.validation.actualSum);
-assert.equal(errors/actuals,e.validation.wmape);
-assert.equal(constantErrors/actuals,e.validation.constantTrainingGlobalWmape);
+assert.ok(Math.abs(errors/actuals-e.validation.wmape)<1e-14);
+assert.ok(Math.abs(constantErrors/actuals-e.validation.constantTrainingGlobalWmape)<1e-14);
 assert.ok(e.validation.constantTrainingGlobalWmape<e.validation.wmape);
 for (const source of e.sources) {
   const path=new URL('../'+source.file,import.meta.url);

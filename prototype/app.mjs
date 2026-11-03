@@ -127,7 +127,7 @@ function defaultState(originKey = "INDIA", month = 12, proxyOriginKey = "INDIA")
     proxyOriginKey: route.knownMarket ? "" : (route.proxyOriginKey || proxyOriginKey),
      month,
      extraFlights: 3,
-     seatsPerFlight: Math.round(route.seatsPerFlight || 220),
+     seatsPerFlight: route.seatsPerFlight || 220,
      loadFactor: Math.min(1, route.loadFactor || 0.82),
      p2pShare: route.p2pShare || 0.51,
      conversionRate: data.defaults.captureRate,
@@ -164,7 +164,7 @@ function populatePurposeInputs() {
    $("#purposeAssumptions").hidden = $("#routePurpose").value === "mixed";
    populatePurposeInputs();
    $("#extraFlights").value = state.extraFlights;
-   $("#seatsPerFlight").value = state.seatsPerFlight;
+   $("#seatsPerFlight").value = Math.round(state.seatsPerFlight);
    $("#loadFactor").value = (state.loadFactor * 100).toFixed(1);
    $("#p2pShare").value = (state.p2pShare * 100).toFixed(1);
    $("#conversionRate").value = (state.conversionRate * 100).toFixed(1);
@@ -863,7 +863,10 @@ function bridgeDraftWeight(field) {
   return field.value === field.dataset.displayed ? Number(field.dataset.exact) : Number(field.value) / 100;
 }
 
-function updateBridgeDraftTotal() {
+function updateBridgeDraftTotal(event) {
+  if (event?.target?.classList.contains("bridge-input")) {
+    event.target.dataset.exact = String(Number(event.target.value) / 100);
+  }
   const fields = $$(".bridge-input");
   const invalid = fields.some((field) => !field.value.trim() || !Number.isFinite(Number(field.value)) || Number(field.value) < 0 || Number(field.value) > 100);
   const total = Number($("#bridgeRunningTotal").dataset.other || 0) + fields.reduce((sum, field) => sum + bridgeDraftWeight(field),0);
@@ -905,18 +908,19 @@ function updateBridgeDraftTotal() {
    const metrics = data.metrics;
    const actualTotal = data.validation.reduce((sum, row) => sum + row.actual, 0);
    const errorTotal = (field) => data.validation.reduce((sum, row) => sum + Math.abs(row.actual - row[field]), 0);
-   $("#validationSummary").textContent = `The main flight-to-hotel calculation had ${formatPercent(errorTotal("transparent") / actualTotal, 1)} weighted error across ${data.validation.length} checked months. This tested monthly totals, not individual routes or new-route scenarios.`;
+   $("#validationSummary").textContent = `The live default calculation had ${formatPercent(errorTotal("transparent") / actualTotal, 2)} weighted error across ${data.validation.length} checked months. This tested monthly totals, not individual routes or new-route scenarios.`;
    $("#validationScope").innerHTML = `
      <p>These are error scores, not “percent accurate” scores. Lower means a smaller gap from recorded hotel arrivals.</p>
      <p>Training: ${metrics.flightTrainingPeriod} (${metrics.trainingMonths} months). Check period: ${metrics.validationPeriod} (${data.validation.length} months). The test used recorded flight totals for those same months to estimate total hotel arrivals across all included departure markets, then compared them with recorded monthly hotel totals. It did not forecast future flight demand.</p>
-     <p><strong>Simple flight estimate:</strong> recorded passengers ending their trip here × a hotel-use rate learned from the training period. The test used a seasonal rate (70% month-specific rate + 30% overall training rate). The route planner instead uses the exported overall hotel-use assumption, which was calculated across all overlapping months, including the check period. Therefore this error score does not validate the exact current route-planner configuration.</p>
-     <p><strong>Past-pattern comparison:</strong> 55% regression estimate + 45% simple flight estimate. This is a comparison model; the route planner uses the seats-to-hotel-stays calculation.</p>
-     <p><strong>Reproduce the scores:</strong> add the absolute monthly mistakes, divide by the total recorded hotel arrivals, then multiply by 100 (WMAPE). Simple estimate: ${formatNumber(errorTotal("transparent"))} ÷ ${formatNumber(actualTotal)} × 100 = ${formatPercent(errorTotal("transparent") / actualTotal, 2)}. Past-pattern comparison: ${formatNumber(errorTotal("predicted"))} ÷ ${formatNumber(actualTotal)} × 100 = ${formatPercent(errorTotal("predicted") / actualTotal, 2)}. The rows below contain the numbers used.</p>
+     <p><strong>Live default calculation:</strong> seats × flight occupancy × share ending in Abu Dhabi × a single hotel-use rate learned only from ${metrics.flightTrainingPeriod}. The check runs this chain on each held-out country-month’s recorded flights, then sums the estimates across countries. It uses the same formula and conversion default as the live planner. It does not test future flight schedules, occupancy forecasts, edited assumptions, visitor shares, or guest nights. Historical route baselines and visitor profiles are descriptive summaries, not independently held-out forecasts.</p>
+     <p><strong>Seasonal comparison:</strong> recorded passengers ending here × (70% training month-specific hotel-use rate + 30% overall training rate). Its separate weighted error is ${formatPercent(metrics.seasonalChainWmape, 2)}. This is the optional seasonal assumption in Details, not the default.</p>
+     <p><strong>Hybrid comparison:</strong> 55% regression estimate + 45% seasonal flight estimate. It has its own error score; the route planner does not run this aggregate regression.</p>
+     <p><strong>Reproduce the scores:</strong> add the absolute monthly mistakes and divide by recorded hotel arrivals (WMAPE). Live default: ${formatNumber(errorTotal("transparent"))} ÷ ${formatNumber(actualTotal)} × 100 = ${formatPercent(errorTotal("transparent") / actualTotal, 2)}. Hybrid comparison: ${formatNumber(errorTotal("predicted"))} ÷ ${formatNumber(actualTotal)} × 100 = ${formatPercent(errorTotal("predicted") / actualTotal, 2)}. Scores use full-precision predictions; the table and totals round only for readability.</p>
      <p><strong>Daily hotel guests:</strong> a separate check over ${metrics.stayValidationPeriod}, with ${formatNumber(metrics.stayValidationRows)} held-out daily records. It tested daily hotel guest counts using hotel-arrival information, not route guest-night changes. Its underlying daily rows are not shown in this monthly table.</p>
-     <p>None of these tests establishes accuracy for a specific route, a new country, an added flight, an event uplift, nationality shares, or route-level guest nights. The matching-records badge measures history coverage only. Range multipliers were estimated on the same seven check months and have no separate coverage test.</p>`;
+     <p>None of these tests establishes accuracy for a specific route, a new country, an added flight, an event uplift, nationality shares, or route-level guest nights. The matching-records badge measures history coverage only. Range multipliers use the live default chain’s residuals on the same seven check months and have no separate coverage test.</p>`;
    $("#validationKpis").innerHTML = [
-     kpiCard("Simple estimate: total weighted error", formatPercent(metrics.transparentChainWmape, 1), "Tested monthly hotel arrivals across all included markets", "positive"),
-     kpiCard("Past-pattern comparison: total weighted error", formatPercent(metrics.flightToCheckinsWmape, 1), "Tested the comparison model on the same monthly totals", "positive"),
+     kpiCard("Live default chain: weighted error", formatPercent(metrics.liveChainWmape, 2), "Tested monthly hotel arrivals across all included markets", "positive"),
+     kpiCard("Hybrid comparison: weighted error", formatPercent(metrics.flightToCheckinsWmape, 2), "Tested the comparison model on the same monthly totals", "positive"),
      kpiCard("Daily hotel guests: total weighted error", formatPercent(metrics.stayModelWmape, 1), "Separate daily hotel-guest test; not route guest-night accuracy", "neutral"),
    ].join("");
   
@@ -937,11 +941,11 @@ function updateBridgeDraftTotal() {
        <path d="${path("actual")}" class="actual-line"/>
        <path d="${path("transparent")}" class="transparent-line"/>
        <path d="${path("predicted")}" class="predicted-line"/>
-       ${data.validation.map((row, index) => `<circle cx="${x(index)}" cy="${y(row.transparent)}" r="5" tabindex="0" fill="#c9a84c"><title>${row.month}: recorded ${formatNumber(row.actual)}, simple estimate ${formatNumber(row.transparent)}, comparison ${formatNumber(row.predicted)}</title></circle><text x="${x(index)}" y="${height - 22}" text-anchor="middle">${row.month}</text>`).join("")}
+       ${data.validation.map((row, index) => `<circle cx="${x(index)}" cy="${y(row.transparent)}" r="5" tabindex="0" fill="#c9a84c"><title>${row.month}: recorded ${formatNumber(row.actual)}, live default estimate ${formatNumber(row.transparent)}, comparison ${formatNumber(row.predicted)}</title></circle><text x="${x(index)}" y="${height - 22}" text-anchor="middle">${row.month}</text>`).join("")}
      </svg>`;
   
    $("#validationTable").innerHTML = `<table>
-     <thead><tr><th>Month checked</th><th>Recorded hotel arrivals</th><th>Main estimate</th><th>Error</th><th>Comparison estimate</th><th>Error</th></tr></thead>
+     <thead><tr><th>Month checked</th><th>Recorded hotel arrivals</th><th>Live default estimate</th><th>Error</th><th>Hybrid comparison</th><th>Error</th></tr></thead>
      <tbody>${data.validation.map((row) => `<tr><td>${row.month}</td><td>${formatNumber(row.actual)}</td><td>${formatNumber(row.transparent)}</td><td class="${Math.abs(row.actual-row.transparent)/row.actual > .1 ? "error-large" : "error-small"}">${formatPercent(Math.abs(row.actual-row.transparent)/row.actual,1)}</td><td>${formatNumber(row.predicted)}</td><td class="${Math.abs(row.actual-row.predicted)/row.actual > .1 ? "error-large" : "error-small"}">${formatPercent(Math.abs(row.actual-row.predicted)/row.actual,1)}</td></tr>`).join("")}</tbody>
    </table>
    <p>The difference shows how far each estimate was from the recorded hotel arrivals. Smaller percentages mean a closer estimate.</p>`;
@@ -1245,6 +1249,9 @@ function friendlyPlanError(error) {
    setFormFromState();
   
    $$("#scenarioForm input, #scenarioForm select").forEach((input) => input.addEventListener("input", () => {
+     // An explicit edit owns this value, even if it equals the rounded display.
+     // Untouched controls continue to retain their full-precision source value.
+     if (input.dataset.exact !== undefined) input.dataset.exact = input.value;
      if (input.id === "origin" && input.value === "__NEW_ROUTE__") {
        bridgeOverride = null;
        confirmedNewMarketKey = "";
@@ -1480,6 +1487,18 @@ $("#applyPrompt").addEventListener("click", async () => {
    });
  }
   
+function setControlsOpen(open) {
+  const panel = $("#planControls");
+  const button = $("#adjustControls");
+  const returnFocus = !open && panel.contains(document.activeElement);
+  document.body.classList.toggle("controls-open", open);
+  panel.hidden = !open;
+  button.setAttribute("aria-expanded", String(open));
+  $("#adjustControlsLabel").textContent = open ? "Hide controls" : "Adjust plan";
+  button.title = open ? "Hide plan controls" : "Show plan controls";
+  if (returnFocus) button.focus({preventScroll:true});
+}
+
  function setupTabs() {
    $$(".nav-tab").forEach((button) => button.addEventListener("click", () => {
      $$(".nav-tab").forEach((item) => item.classList.remove("active"));
@@ -1488,9 +1507,7 @@ $("#applyPrompt").addEventListener("click", async () => {
      guidedHelp?.track(`view:${button.dataset.view}`);
      $(`#${button.dataset.view}`).classList.add("active");
      $$(".nav-tab").forEach((item) => item.setAttribute("aria-current", item === button ? "page" : "false"));
-     document.body.classList.remove("controls-open");
-     $("#adjustControls").setAttribute("aria-expanded", "false");
-     $("#adjustControls").textContent = "Adjust plan";
+     setControlsOpen(false);
      window.scrollTo({top:0,behavior:"instant"});
    }));
   
@@ -1531,11 +1548,18 @@ $("#applyPrompt").addEventListener("click", async () => {
      guidedHelp?.track(({focus:"view_focus",details:"view_details",chat:"view_chat",decisions:"view_compare",proposal:"view_actions"})[mode]);
    };
    setMode("focus");
+   setControlsOpen(window.matchMedia("(min-width: 1051px)").matches);
    $("#adjustControls").addEventListener("click", () => {
-     const open = document.body.classList.toggle("controls-open");
-     $("#adjustControls").setAttribute("aria-expanded", String(open));
-     $("#adjustControls").textContent = open ? "Close controls" : "Adjust plan";
-     if (open) $("#origin").focus();
+     const open = !document.body.classList.contains("controls-open");
+     setControlsOpen(open);
+     if (open) $("#origin").focus({preventScroll:true});
+   });
+   document.addEventListener("keydown", (event) => {
+     if (event.key === "Escape" && !event.defaultPrevented &&
+         !document.querySelector("dialog[open]") &&
+         event.target.closest("#planControls, #adjustControls")) {
+       setControlsOpen(false);
+     }
    });
    $$(".view-mode").forEach((button) => button.addEventListener("click", () => {
      setMode(button.dataset.mode);
@@ -1623,6 +1647,7 @@ function restorePlan(plan) {
   bridgeOverride = state.bridgeOverride || null;
   confirmedNewMarketKey = knownOrigins().some((origin) => origin.key === state.originKey) ? "" : state.originKey;
   setFormFromState(); renderAll();
+  $("#planActionStatus").textContent = "Saved inputs restored as written. Reset the plan to use the current training-only defaults.";
 }
 
 function setupPlanActions() {

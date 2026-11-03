@@ -181,7 +181,7 @@ def fit_stay_models(
         predicted = predict_ridge(final_model, features[test_mask])
         predicted = np.maximum(predicted, series["New Arrivals"].to_numpy()[test_mask])
         predicted = np.maximum(predicted, 0.0)
-        result = pd.DataFrame({"Date": date_index[test_mask], "Predicted Guests": np.rint(predicted).astype(int)})
+        result = pd.DataFrame({"Date": date_index[test_mask], "Predicted Guests": predicted})
         if group_column:
             result[group_column] = group
         predictions.append(result)
@@ -231,8 +231,13 @@ def aggregate_flights(flight: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]
         .sum(min_count=1)
     )
     monthly = monthly.merge(route_frequency, on=["Country", "Month"], how="left")
-    monthly["Load Factor"] = monthly["Total_PAX"] / monthly["Total_Seats"].replace(0, np.nan)
-    monthly["P2P Share"] = monthly["Total_P2P"] / monthly["Total_PAX"].replace(0, np.nan)
+    # Keep raw source counts intact for audit. Cap impossible
+    # occupancy in the planning chain and rebase P2P share on the same capped
+    # passenger denominator, preserving recorded P2P whenever capacity permits.
+    monthly["Planning PAX"] = monthly["Total_PAX"].clip(lower=0).clip(upper=monthly["Total_Seats"])
+    monthly["Planning P2P"] = monthly["Total_P2P"].clip(lower=0).clip(upper=monthly["Planning PAX"])
+    monthly["Load Factor"] = monthly["Planning PAX"] / monthly["Total_Seats"].replace(0, np.nan)
+    monthly["P2P Share"] = monthly["Planning P2P"] / monthly["Planning PAX"].replace(0, np.nan)
     monthly["Weeks"] = monthly["Month"].dt.days_in_month / 7.0
     monthly["Seats Per Flight"] = monthly["Total_Seats"] / (
         monthly["Average Weekly Frequency"] * monthly["Weeks"]
@@ -242,8 +247,8 @@ def aggregate_flights(flight: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]
         monthly.groupby(["Country", "Month Number"], as_index=False)
         .agg(
             baseline_seats=("Total_Seats", "mean"),
-            total_pax=("Total_PAX", "sum"),
-            total_p2p=("Total_P2P", "sum"),
+            total_pax=("Planning PAX", "sum"),
+            total_p2p=("Planning P2P", "sum"),
             total_seats=("Total_Seats", "sum"),
             weekly_frequency=("Average Weekly Frequency", "mean"),
             seats_per_flight=("Seats Per Flight", "median"),
@@ -256,7 +261,7 @@ def aggregate_flights(flight: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]
     seasonal["weekly_frequency"] = seasonal["weekly_frequency"].fillna(
         seasonal["baseline_seats"] / (seasonal["seats_per_flight"] * 4.345)
     )
-    seasonal["load_factor"] = seasonal["load_factor"].clip(0.2, 1.10)
+    seasonal["load_factor"] = seasonal["load_factor"].clip(0.0, 1.0)
     seasonal["p2p_share"] = seasonal["p2p_share"].clip(0.05, 1.0)
     return monthly, seasonal
  
@@ -371,11 +376,22 @@ def build_bridge(flight_monthly: pd.DataFrame, hotel_monthly: pd.DataFrame) -> p
     return pd.DataFrame(rows)
  
  
+def planning_chain(seats, load_factor, p2p_share, conversion_rate, average_stay=1.0):
+    """Numerical contract shared with prototype/engine.mjs (no rounding)."""
+    passengers = np.maximum(0.0, seats) * np.maximum(0.0, load_factor)
+    p2p = passengers * np.maximum(0.0, p2p_share)
+    checkins = p2p * np.maximum(0.0, conversion_rate)
+    return {"seats": seats, "passengers": passengers, "p2p": p2p,
+            "hotelCheckins": checkins, "guestNights": checkins * np.maximum(0.0, average_stay)}
+
+
 def validate_flight_chain(
     flight_monthly: pd.DataFrame,
     hotel_monthly: pd.DataFrame,
 ) -> tuple[dict, pd.DataFrame]:
-    flight_total = flight_monthly.groupby("Month")[["Total_Seats", "Total_PAX", "Total_P2P"]].sum()
+    flight_total = flight_monthly.groupby("Month").agg(
+        Total_Seats=("Total_Seats", "sum"), Total_PAX=("Planning PAX", "sum"),
+        Total_P2P=("Planning P2P", "sum"))
     hotel_total = hotel_monthly.groupby("Month")[["Guests", "New_Arrivals"]].sum()
     common = flight_total.join(hotel_total, how="inner").reset_index()
     common["Month Number"] = common["Month"].dt.month
@@ -383,6 +399,17 @@ def validate_flight_chain(
     validation = ~training
  
     global_capture = common.loc[training, "New_Arrivals"].sum() / common.loc[training, "Total_P2P"].sum()
+    # The default live planner uses one training-only conversion rate, not the
+    # seasonal or hybrid comparison model. Exercise the actual chain on each
+    # held-out country-month, then score its sum against aggregate hotel data.
+    live_rows = flight_monthly[flight_monthly["Month"].isin(common.loc[validation, "Month"])].copy()
+    live_counts = planning_chain(
+        live_rows["Total_Seats"].to_numpy(), live_rows["Load Factor"].to_numpy(),
+        live_rows["P2P Share"].to_numpy(), global_capture,
+    )
+    live_rows["Live Prediction"] = live_counts["hotelCheckins"]
+    live_prediction = common.loc[validation, "Month"].map(
+        live_rows.groupby("Month")["Live Prediction"].sum()).to_numpy()
     capture_by_month = (
         common.loc[training].groupby("Month Number")[["New_Arrivals", "Total_P2P"]].sum()
     )
@@ -413,25 +440,27 @@ def validate_flight_chain(
     ensemble = 0.55 * ridge_prediction + 0.45 * parametric
     ensemble = np.maximum(ensemble, 0.0)
  
-    residual_ratio = actual / np.maximum(ensemble, 1.0)
+    residual_ratio = actual / np.maximum(live_prediction, 1.0)
     low_multiplier = float(np.quantile(residual_ratio, 0.10))
     high_multiplier = float(np.quantile(residual_ratio, 0.90))
     validation_frame = common.loc[validation, ["Month", "New_Arrivals"]].copy()
-    validation_frame["Predicted New Arrivals"] = np.rint(ensemble).astype(int)
-    validation_frame["Parametric Prediction"] = np.rint(parametric).astype(int)
+    validation_frame["Predicted New Arrivals"] = ensemble
+    validation_frame["Parametric Prediction"] = parametric
+    validation_frame["Live Prediction"] = live_prediction
     validation_frame["Hybrid Absolute Error"] = np.abs(
         validation_frame["New_Arrivals"] - validation_frame["Predicted New Arrivals"]
     )
     validation_frame["Transparent Absolute Error"] = np.abs(
         validation_frame["New_Arrivals"] - validation_frame["Parametric Prediction"]
     )
+    validation_frame["Live Absolute Error"] = np.abs(validation_frame["New_Arrivals"] - live_prediction)
     validation_frame["Month"] = validation_frame["Month"].astype(str)
-    # Score the same whole-person values that are exported and shown in the app.
-    # This lets a reviewer reproduce WMAPE exactly from the seven visible rows.
-    displayed_hybrid = validation_frame["Predicted New Arrivals"].to_numpy(dtype=float)
-    displayed_transparent = validation_frame["Parametric Prediction"].to_numpy(dtype=float)
-    hybrid_components = wmape_components(actual, displayed_hybrid)
-    transparent_components = wmape_components(actual, displayed_transparent)
+    # Store and score full precision; rounding belongs only in display code.
+    hybrid_values = validation_frame["Predicted New Arrivals"].to_numpy(dtype=float)
+    seasonal_values = validation_frame["Parametric Prediction"].to_numpy(dtype=float)
+    hybrid_components = wmape_components(actual, hybrid_values)
+    transparent_components = wmape_components(actual, seasonal_values)
+    live_components = wmape_components(actual, live_prediction)
     training_months = int(training.sum())
     validation_months = int(validation.sum())
     total_months = training_months + validation_months
@@ -443,14 +472,18 @@ def validate_flight_chain(
         "total_months": total_months,
         "training_share": training_months / total_months,
         "validation_share": validation_months / total_months,
-        "flight_to_checkins_wmape": wmape(actual, displayed_hybrid),
-        "transparent_chain_wmape": wmape(actual, displayed_transparent),
+        "flight_to_checkins_wmape": wmape(actual, hybrid_values),
+        "transparent_chain_wmape": wmape(actual, seasonal_values),
+        "live_chain_wmape": wmape(actual, live_prediction),
         "hybrid_absolute_error_sum": hybrid_components["absolute_error_sum"],
         "transparent_absolute_error_sum": transparent_components["absolute_error_sum"],
+        "live_absolute_error_sum": live_components["absolute_error_sum"],
         "validation_actual_sum": hybrid_components["actual_sum"],
-        "global_capture_rate": float(common["New_Arrivals"].sum() / common["Total_P2P"].sum()),
-        "weighted_load_factor": float(common["Total_PAX"].sum() / common["Total_Seats"].sum()),
-        "p2p_share": float(common["Total_P2P"].sum() / common["Total_PAX"].sum()),
+        "global_capture_rate": float(global_capture),
+        "weighted_load_factor": float(flight_monthly.loc[flight_monthly["Month"].isin(common.loc[training, "Month"]), "Planning PAX"].sum() / common.loc[training, "Total_Seats"].sum()),
+        "p2p_share": float(common.loc[training, "Total_P2P"].sum() / flight_monthly.loc[flight_monthly["Month"].isin(common.loc[training, "Month"]), "Planning PAX"].sum()),
+        "conversion_training_only": True,
+        "uncertainty_method": "Live default chain residual ratios on the seven check months; descriptive bounds, not independently tested coverage",
         "uncertainty_low_multiplier": max(0.5, low_multiplier),
         "uncertainty_high_multiplier": min(1.8, high_multiplier),
     }
@@ -472,11 +505,11 @@ def scenario_payload(
                 "origin": row["Country"].title(),
                 "originKey": row["Country"],
                 "month": int(row["Month Number"]),
-                "baselineSeats": round(float(row["baseline_seats"])),
-                "weeklyFrequency": round(float(row["weekly_frequency"]), 1),
-                "seatsPerFlight": round(float(row["seats_per_flight"])),
-                "loadFactor": round(float(row["load_factor"]), 4),
-                "p2pShare": round(float(row["p2p_share"]), 4),
+                "baselineSeats": float(row["baseline_seats"]),
+                "weeklyFrequency": float(row["weekly_frequency"]),
+                "seatsPerFlight": float(row["seats_per_flight"]),
+                "loadFactor": float(row["load_factor"]),
+                "p2pShare": float(row["p2p_share"]),
                 "yearsObserved": int(row["years_observed"]),
             }
         )
@@ -492,8 +525,8 @@ def scenario_payload(
             {
                 "nationality": row["nationality"].title(),
                 "nationalityKey": row["nationality"],
-                "weight": round(float(row["weight"]), 7),
-                "averageStay": round(los_lookup.get((row["nationality"], int(month)), 3.6), 3),
+                "weight": float(row["weight"]),
+                "averageStay": los_lookup.get((row["nationality"], int(month)), 3.6),
                 "relationship": row["relationship"],
             }
             for _, row in top.iterrows()
@@ -508,8 +541,8 @@ def scenario_payload(
             {
                 "nationality": row["nationality"].title(),
                 "nationalityKey": row["nationality"],
-                "weight": round(float(row["weight"]), 7),
-                "averageStay": round(los_lookup.get((row["nationality"], int(month)), 3.6), 3),
+                "weight": float(row["weight"]),
+                "averageStay": los_lookup.get((row["nationality"], int(month)), 3.6),
                 "relationship": "fallback",
             }
             for _, row in fallback.iterrows()
@@ -526,35 +559,42 @@ def scenario_payload(
             {
                 "month": row["Month"],
                 "actual": int(row["New_Arrivals"]),
-                "predicted": int(row["Predicted New Arrivals"]),
-                "transparent": int(row["Parametric Prediction"]),
+                "predicted": float(row["Predicted New Arrivals"]),
+                "transparent": float(row["Live Prediction"]),
+                "seasonal": float(row["Parametric Prediction"]),
             }
             for _, row in flight_validation.iterrows()
         ],
         "defaults": {
-            "captureRate": round(float(flight_metrics["global_capture_rate"]), 4),
+            "captureRate": float(flight_metrics["global_capture_rate"]),
+            "loadFactor": float(flight_metrics["weighted_load_factor"]),
+            "p2pShare": float(flight_metrics["p2p_share"]),
+            "conversionTrainingPeriod": flight_metrics["training_period"],
             "averageStay": 3.6,
-            "uncertaintyLow": round(float(flight_metrics["uncertainty_low_multiplier"]), 4),
-            "uncertaintyHigh": round(float(flight_metrics["uncertainty_high_multiplier"]), 4),
+            "uncertaintyLow": float(flight_metrics["uncertainty_low_multiplier"]),
+            "uncertaintyHigh": float(flight_metrics["uncertainty_high_multiplier"]),
         },
         "metrics": {
-            "flightToCheckinsWmape": round(float(flight_metrics["flight_to_checkins_wmape"]), 4),
-            "transparentChainWmape": round(float(flight_metrics["transparent_chain_wmape"]), 4),
-            "stayModelWmape": round(float(stay_metrics["wmape"]), 4),
+            "flightToCheckinsWmape": float(flight_metrics["flight_to_checkins_wmape"]),
+            "transparentChainWmape": float(flight_metrics["live_chain_wmape"]),
+            "liveChainWmape": float(flight_metrics["live_chain_wmape"]),
+            "seasonalChainWmape": float(flight_metrics["transparent_chain_wmape"]),
+            "stayModelWmape": float(stay_metrics["wmape"]),
             "flightTrainingPeriod": flight_metrics["training_period"],
             "validationPeriod": flight_metrics["validation_period"],
             "trainingMonths": flight_metrics["training_months"],
             "validationMonths": flight_metrics["validation_months"],
-            "trainingShare": round(float(flight_metrics["training_share"]), 4),
-            "validationShare": round(float(flight_metrics["validation_share"]), 4),
-            "hybridAbsoluteErrorSum": round(float(flight_metrics["hybrid_absolute_error_sum"])),
-            "transparentAbsoluteErrorSum": round(float(flight_metrics["transparent_absolute_error_sum"])),
-            "validationActualSum": round(float(flight_metrics["validation_actual_sum"])),
+            "trainingShare": float(flight_metrics["training_share"]),
+            "validationShare": float(flight_metrics["validation_share"]),
+            "hybridAbsoluteErrorSum": float(flight_metrics["hybrid_absolute_error_sum"]),
+            "transparentAbsoluteErrorSum": float(flight_metrics["live_absolute_error_sum"]),
+            "seasonalAbsoluteErrorSum": float(flight_metrics["transparent_absolute_error_sum"]),
+            "validationActualSum": float(flight_metrics["validation_actual_sum"]),
             "stayValidationPeriod": stay_metrics["validation_period"],
             "stayTrainingRows": stay_metrics["training_rows"],
             "stayValidationRows": stay_metrics["validation_rows"],
-            "stayTrainingShare": round(float(stay_metrics["training_share"]), 4),
-            "stayValidationShare": round(float(stay_metrics["validation_share"]), 4),
+            "stayTrainingShare": float(stay_metrics["training_share"]),
+            "stayValidationShare": float(stay_metrics["validation_share"]),
         },
         "glossary": {
             "Calibration": "Using history to set sensible starting values for the simulator's dials.",
@@ -634,8 +674,9 @@ The flight model estimates international hotel check-ins from flight capacity an
  
 ## Validation results
  
-- Flight to hotel check-ins WMAPE: {metrics['flight_to_checkins_wmape']:.1%}
-- Transparent conversion-chain WMAPE: {metrics['transparent_chain_wmape']:.1%}
+- Live default conversion-chain WMAPE: {metrics['live_chain_wmape']:.1%}
+- Hybrid comparison WMAPE: {metrics['flight_to_checkins_wmape']:.1%}
+- Seasonal conversion comparison WMAPE: {metrics['transparent_chain_wmape']:.1%}
 - International daily guest WMAPE: {international_metrics['wmape']:.1%}
 - Domestic daily guest WMAPE: {domestic_metrics['wmape']:.1%}
 - Flight study period: {metrics['training_period']}
@@ -648,7 +689,11 @@ The flight-chain model studied January 2022 to December 2024, then took a closed
  
 The flight-chain split is {metrics['training_months']} study months ({metrics['training_share']:.1%}) and {metrics['validation_months']} exam months ({metrics['validation_share']:.1%}). The daily international stay split is {international_metrics['training_rows']:,} study rows ({international_metrics['training_share']:.1%}) and {international_metrics['validation_rows']:,} exam rows ({international_metrics['validation_share']:.1%}). These are chronological splits: older observations teach the model and later observations test it.
  
-Transparent-chain WMAPE uses {metrics['transparent_absolute_error_sum']:,.0f} total absolute error divided by {metrics['validation_actual_sum']:,.0f} actual check-ins. Hybrid WMAPE uses {metrics['hybrid_absolute_error_sum']:,.0f} total absolute error divided by the same actual total.
+Live-chain WMAPE uses {metrics['live_absolute_error_sum']} total absolute error divided by {metrics['validation_actual_sum']} actual check-ins. Hybrid WMAPE uses {metrics['hybrid_absolute_error_sum']} and the seasonal comparison uses {metrics['transparent_absolute_error_sum']} divided by that same actual total. All predictions and scores retain full precision; display rounding does not feed back into calculations.
+
+The live check applies the browser's seats × occupancy × P2P share × constant training-only conversion formula to each held-out country-month's recorded flights, then sums across countries. It tests aggregate hotel check-ins conditional on those recorded flights, not future capacity or occupancy forecasts, route-level outcomes, visitor shares, guest nights, or user edits. Historical route baselines and nationality/stay profiles are descriptive summaries and are not claimed to be independently held out.
+
+Occupancy above 100% is capped in Python and the browser. P2P share is rebased on capped passengers, preserving recorded P2P counts where capacity permits; raw input workbooks and raw source counts are retained. Conversion defaults use only 2022–2024. Range multipliers use live-chain residuals on the same seven check months, so they have no independent coverage validation.
  
 ## Uncertainty labels
  
@@ -714,10 +759,13 @@ def main() -> None:
         flight_validation,
     )
     (WEB_DATA_DIR / "scenario_data.json").write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
+    from build_conversion_evidence import derive_evidence, write_evidence_module
+    write_evidence_module(derive_evidence(ROOT), ROOT / "prototype" / "conversion_evidence.mjs")
     write_model_report(flight_metrics, international_metrics, domestic_metrics)
  
     print(json.dumps({
         "flight_chain_wmape": flight_metrics["flight_to_checkins_wmape"],
+        "live_chain_wmape": flight_metrics["live_chain_wmape"],
         "transparent_chain_wmape": flight_metrics["transparent_chain_wmape"],
         "international_stay_wmape": international_metrics["wmape"],
         "domestic_stay_wmape": domestic_metrics["wmape"],

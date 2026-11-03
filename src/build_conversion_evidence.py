@@ -12,7 +12,7 @@ Python standard library are needed. No workbook or application asset is rewritte
 Calibration follows src/build_model.py: train on common calendar months before
 2025-01 and check on the later common months. A seasonal rate combines 70% of the
 calendar-month aggregate ratio with 30% of the overall training ratio. Comparison
-scores use the same recorded P2P inputs and whole-arrival rounding for both methods.
+scores use the same capacity-consistent recorded P2P inputs at full precision.
 """
 
 from __future__ import annotations
@@ -43,6 +43,8 @@ def aggregate_source(path: Path, value_column: str, country_column: str):
         if missing:
             raise ValueError(f"{path.name}: missing columns {', '.join(missing)}")
         date_index, value_index, country_index = [headers.index(name) for name in required]
+        flight_indices = [headers.index(name) for name in ["Total PAX", "Total Seats"]] if value_column == "Total P2P" else None
+        flight_groups = defaultdict(lambda: [0.0, 0.0, 0.0])
         monthly: dict[str, float] = defaultdict(float)
         countries: set[str] = set()
         row_count = 0
@@ -63,8 +65,18 @@ def aggregate_source(path: Path, value_column: str, country_column: str):
                 raise ValueError(f"{path.name}, Export row {row_number}: invalid {value_column}")
             monthly[f"{observed.year:04d}-{observed.month:02d}"] += float(value)
             country = row[country_index]
+            if flight_indices:
+                group = flight_groups[(f"{observed.year:04d}-{observed.month:02d}", str(country))]
+                for index, amount in enumerate([value, row[flight_indices[0]], row[flight_indices[1]]]):
+                    if amount is not None and (not isinstance(amount, (int, float)) or not math.isfinite(amount)):
+                        raise ValueError(f"{path.name}, Export row {row_number}: invalid flight count")
+                    group[index] += float(amount or 0)
             if country is not None:
                 countries.add(str(country))
+        if flight_indices:
+            monthly = defaultdict(float)
+            for (period, _), (p2p, pax, seats) in flight_groups.items():
+                monthly[period] += max(0.0, min(p2p, max(0.0, min(pax, seats))))
         return dict(monthly), row_count, len(countries)
     finally:
         workbook.close()
@@ -113,8 +125,8 @@ def derive_evidence(root: Path) -> dict:
     for period in check:
         actual = hotel[period]
         p2p = flight[period]
-        predicted = round(p2p * monthly_rates[str(int(period[-2:]))])
-        constant_prediction = round(p2p * global_rate)
+        predicted = p2p * monthly_rates[str(int(period[-2:]))]
+        constant_prediction = p2p * global_rate
         errors += abs(actual - predicted)
         constant_errors += abs(actual - constant_prediction)
         validation_rows.append({"month": period, "actual": actual,
@@ -128,6 +140,7 @@ def derive_evidence(root: Path) -> dict:
         "trainingHotelArrivals": training_arrivals,
         "monthlyRates": monthly_rates, "monthlyEvidence": monthly_evidence,
         "countryRatesAvailable": False,
+        "conclusion": "Compare the seasonal and constant training-only scores. These aggregate checks do not establish route-level demand accuracy or a benefit from seasonal conversion.",
         "method": "Seasonal rate = 70% of the training month-of-year aggregate hotel-arrivals / P2P ratio + 30% of the overall training aggregate ratio. Ratios use only common months before 2025-01.",
         "scope": "All included markets combined. This is an aggregate planning calibration, not an observed route-specific or person-level hotel-choice probability.",
         "validation": {
@@ -148,11 +161,17 @@ def derive_evidence(root: Path) -> dict:
             {"file": path.name, "sheet": "Export", "columns": columns,
              "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
             for path, columns in [
-                (flight_path, ["Date", "Total P2P", "Departure Country Name"]),
+                (flight_path, ["Date", "Total P2P", "Total PAX", "Total Seats", "Departure Country Name"]),
                 (hotel_path, ["Date", "New Arrivals", "Nationality"]),
             ]
         ],
     }
+
+
+def write_evidence_module(evidence: dict, path: Path) -> None:
+    path.write_text("// Generated from supplied workbooks by src/build_conversion_evidence.py.\n"
+                    "// Training-only calibration; scores retain full precision.\n"
+                    "export const CONVERSION_EVIDENCE = " + json.dumps(evidence, indent=2, allow_nan=False) + ";\n", encoding="utf-8")
 
 
 def main() -> None:
