@@ -8,20 +8,15 @@ data/
 *.xlsx
 *.xls
 *.csv
-!requirements.txt  # Exception: requirements.txt is tracked
 
 # Generated Model Outputs
 # ============================================================================
-prototype/data/scenario_data.json
-prototype/data/*.json
 outputs/
-outputs/model/*.csv
-outputs/model/*.json
 deliverables/
-*.json
-!package.json
-!*.example.json
-!prototype/data/scenario_data.json
+
+# Obsolete packaged copy and separately supplied reference project
+/Air2Stay/
+/website/
 
 # Python
 # ============================================================================
@@ -118,6 +113,9 @@ ehthumbs.db
 # Environment Variables
 # ============================================================================
 .env
+.env.*
+!.env.example
+!**/.env.example
 .env.local
 .env.*.local
 .streamlit/secrets.toml
@@ -145,5 +143,3 @@ docker-compose.override.yml
 !prototype/data/scenario_data.json
 !prototype/data/admin0-countries.svg
 !prototype/data/country_locations.json
-*.xlsx
-*.xls
