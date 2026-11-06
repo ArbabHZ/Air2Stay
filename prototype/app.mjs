@@ -11,11 +11,22 @@ import { planningChatReply } from "./planning_chat.mjs";
  const formatNumber = (value) => Math.round(value || 0).toLocaleString("en-US");
  const formatSigned = (value) => `${value >= 0 ? "+" : "−"}${formatNumber(Math.abs(value))}`;
  const formatPercent = (value, digits = 0) => `${(Number(value) * 100).toFixed(digits)}%`;
+ const formatEventPercent = (value) => `${value > 0 ? "+" : value < 0 ? "−" : ""}${Math.abs(Number(value) * 100).toLocaleString("en-US", {maximumFractionDigits: 2})}%`;
+ const EVENT_IMPACTS = [
+   {key:"none", label:"No event", uplift:0, tone:"neutral"},
+   {key:"expo", label:"🎉 Major expo or conference", uplift:0.15, tone:"positive"},
+   {key:"sport", label:"🏆 Sporting event", uplift:0.20, tone:"positive"},
+   {key:"holiday", label:"🎆 Holiday period", uplift:0.10, tone:"positive"},
+   {key:"airline", label:"✈️ Airline disruption", uplift:-0.20, tone:"negative"},
+   {key:"geopolitical", label:"🌍 Geopolitical tension", uplift:-0.30, tone:"negative"},
+   {key:"health", label:"🦠 Health advisory", uplift:-0.25, tone:"negative"},
+ ];
   
  let data;
 let countryLocationLookup = {};
  let state;
  let bridgeOverride = null;
+let bridgeEditing = false;
  let lastRenderedRouteKey = null;
  let renderQueued = false;
  let assistantPromptDirty = false;
@@ -30,6 +41,7 @@ let assistantBusy = false;
 let lastExportUrl = "";
 let peerValidationResult = null;
 let targetSolution = null;
+let eventControlsReady = false;
  let assistantMessages = [
    { role: "bot", text: "Hi! Ask what changed, ask how a number was worked out, or tell me what you’d like to change." },
  ];
@@ -170,13 +182,13 @@ function populatePurposeInputs() {
    $("#conversionRate").value = (state.conversionRate * 100).toFixed(1);
    $("#averageStay").value = Number(state.averageStay).toFixed(2);
    $("#eventUplift").value = Math.round((state.eventUplift || 0) * 100);
-   updateRangeLabels();
    // Keep the original numbers while displaying readable rounded controls.
    for (const [id, value] of Object.entries({extraFlights: state.extraFlights, seatsPerFlight: state.seatsPerFlight, loadFactor: state.loadFactor * 100, p2pShare: state.p2pShare * 100, conversionRate: state.conversionRate * 100, averageStay: state.averageStay, eventUplift: state.eventUplift * 100})) {
      const field = $(`#${id}`);
      field.dataset.displayed = field.value;
      field.dataset.exact = String(value);
    }
+   updateRangeLabels();
  }
   
  function updateRangeLabels() {
@@ -184,7 +196,78 @@ function populatePurposeInputs() {
    $("#loadFactorValue").textContent = `${Number($("#loadFactor").value).toFixed(1)}%`;
    $("#p2pShareValue").textContent = `${Number($("#p2pShare").value).toFixed(1)}%`;
    $("#conversionRateValue").textContent = `${Number($("#conversionRate").value).toFixed(1)}%`;
-   $("#eventUpliftValue").textContent = `+${Number($("#eventUplift").value)}%`;
+   $("#eventUpliftValue").textContent = formatEventPercent(eventControlUplift());
+   updateEventControls();
+ }
+
+ function setupEventControls() {
+   const input = $("#eventUplift");
+   const customLabel = input.closest("label");
+   const hotelGroup = $("#routePurpose").closest("details.control-group");
+   const section = document.createElement("details");
+   section.id = "eventImpactGroup";
+   section.className = "control-group";
+   section.open = true;
+   section.innerHTML = `<summary><span>02.5</span> Event or disruption</summary>
+     <div class="control-group-body">
+       <div class="event-impact-chips" role="group" aria-label="Event or disruption assumption">
+         ${EVENT_IMPACTS.map((item) => `<button type="button" class="event-impact-chip ${item.tone}" data-event-impact="${item.key}" aria-pressed="false"><span>${item.label}</span><strong>${formatEventPercent(item.uplift)}</strong></button>`).join("")}
+       </div>
+       <p id="eventImpactStatus" role="status" aria-live="polite"></p>
+       <small class="event-impact-note">Illustrative scenario assumptions, not measured event effects. Applies to hotel demand across the whole proposed plan; flight and passenger totals stay the same.</small>
+       <details class="event-custom"><summary>Custom impact</summary></details>
+     </div>`;
+   hotelGroup.before(section);
+   input.min = "-50";
+   customLabel.querySelector(".control-label").textContent = "Hotel demand adjustment";
+   customLabel.querySelector("small").textContent = "Try a decrease or increase from −50% to +50%. This is your planning assumption.";
+   section.querySelector(".event-custom").append(customLabel);
+   const style = document.createElement("style");
+   style.textContent = `
+     #eventImpactGroup .event-impact-chips { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }
+     #eventImpactGroup .event-impact-chip { display:flex; flex-direction:column; align-items:flex-start; justify-content:space-between; gap:7px; padding:11px; min-width:0; min-height:68px; border:1px solid #47516c; border-radius:10px; background:#1b233b; color:#d5dae4; font:inherit; font-size:12px; line-height:1.4; text-align:left; cursor:pointer; box-shadow:none; }
+     #eventImpactGroup .event-impact-chip.neutral { grid-column:1/-1; min-height:42px; flex-direction:row; align-items:center; }
+     #eventImpactGroup .event-impact-chip strong { font-size:13px; font-variant-numeric:tabular-nums; }
+     #eventImpactGroup .event-impact-chip.positive strong { color:#f2d58a; }
+     #eventImpactGroup .event-impact-chip.negative strong { color:#ffb3ab; }
+     #eventImpactGroup .event-impact-chip:hover { border-color:#929bb0; background:#242e49; }
+     #eventImpactGroup .event-impact-chip[aria-pressed="true"] { border-color:#a7afc0; background:#323c53; color:#fff; box-shadow:inset 0 0 0 1px #a7afc0; }
+     #eventImpactGroup .event-impact-chip.positive[aria-pressed="true"] { border-color:#c9a84c; background:#39321e; color:#fff1c6; box-shadow:inset 0 0 0 1px #c9a84c; }
+     #eventImpactGroup .event-impact-chip.negative[aria-pressed="true"] { border-color:#e48077; background:#3b242e; color:#ffe1dd; box-shadow:inset 0 0 0 1px #e48077; }
+     #eventImpactGroup .event-impact-chip:focus-visible { outline:2px solid #f2d58a; outline-offset:3px; }
+     #eventImpactGroup #eventImpactStatus { margin:0; color:#f5efe3; font-size:12px; line-height:1.6; }
+     #eventImpactGroup .event-impact-note { color:#bdc5d4; font-size:11px; line-height:1.6; }
+     #eventImpactGroup .event-custom > summary { padding:0; font-size:12px; color:#f2d58a; }
+     #eventImpactGroup .event-custom > label { margin-top:14px; }
+     @media (min-width:600px) and (max-width:1050px) { #eventImpactGroup .event-impact-chips { grid-template-columns:repeat(3,minmax(0,1fr)); } }
+   `;
+   document.head.append(style);
+   eventControlsReady = true;
+   section.querySelectorAll("[data-event-impact]").forEach((button) => button.addEventListener("click", () => {
+     const preset = EVENT_IMPACTS.find((item) => item.key === button.dataset.eventImpact);
+     input.value = String(preset.uplift * 100);
+     input.dataset.displayed = input.value;
+     input.dataset.exact = input.value;
+     // Use the same input path as the other controls, preserving untouched precision.
+     input.dispatchEvent(new Event("input", {bubbles:true}));
+   }));
+ }
+
+ function eventControlUplift() {
+   const input = $("#eventUplift");
+   return Number(input.value === input.dataset.displayed ? input.dataset.exact : input.value) / 100;
+ }
+
+ function updateEventControls() {
+   if (!eventControlsReady) return;
+   const uplift = eventControlUplift();
+   $$("[data-event-impact]").forEach((button) => {
+     const preset = EVENT_IMPACTS.find((item) => item.key === button.dataset.eventImpact);
+     button.setAttribute("aria-pressed", String(Math.abs(preset.uplift - uplift) < 1e-10));
+   });
+   const status = $("#eventImpactStatus");
+   if (status) status.textContent = uplift === 0 ? "No event adjustment applied to hotel conversion."
+     : `Applying ${formatEventPercent(uplift)} ${uplift > 0 ? "event uplift" : "disruption adjustment"} to hotel conversion.`;
  }
 
  function clearAssistantPrompt() {
@@ -295,7 +378,7 @@ function populatePurposeInputs() {
  function renderKpis(result) {
    const direction = result.delta.guestNights >= 0 ? "positive" : "negative";
    $("#kpis").innerHTML = [
-     kpiCard("Change in hotel check-ins", formatSigned(result.delta.hotelCheckins), result.eventUplift ? "Includes your event/season assumption" : "Estimated hotel arrivals", direction),
+     kpiCard("Change in hotel check-ins", formatSigned(result.delta.hotelCheckins), result.eventUplift ? "Includes your event/disruption assumption" : "Estimated hotel arrivals", direction),
      kpiCard("Change in guest nights", formatSigned(result.delta.guestNights), "Estimated nights spent in hotels", direction),
      kpiCard("Estimated guest nights", formatNumber(result.p50), "Calculated from the flight inputs and hotel-stay assumptions below"),
      kpiCard("Possible range", `${formatNumber(result.p10)} to ${formatNumber(result.p90)}`, "History-based planning guide; not a guaranteed probability range"),
@@ -333,7 +416,7 @@ function renderSideBySideComparison(result) {
     ["Passengers ending in Abu Dhabi", formatPercent(state.p2pShare, 1)],
     ["Share checking into a hotel", formatPercent(state.conversionRate, 1)],
     ["Average nights per stay", `${state.averageStay.toFixed(1)} nights`],
-    ["Extra demand for an event or season", `+${Math.round((state.eventUplift || 0) * 100)}% your estimate`],
+    ["Event or disruption impact", `${formatEventPercent(state.eventUplift || 0)} your estimate`],
   ];
   const assumptionList = (items) => items.map(([name, value]) =>
     `<div class="compare-assumption"><span>${name}</span><strong>${value}</strong></div>`,
@@ -741,11 +824,11 @@ function renderSideBySideComparison(result) {
        ${equation("Seats", `max(0, ${exact(route.baselineSeats)} + ${exact(state.extraFlights)} flights/week × ${exact(state.seatsPerFlight)} seats/flight × ${exact(weeks)} weeks)`, scenario.seats)}
        ${equation("Passengers", `${exact(scenario.seats)} × ${exact(state.loadFactor)} flight fullness`, scenario.passengers)}
        ${equation("Passengers ending their trip here", `${exact(scenario.passengers)} × ${exact(state.p2pShare)} ending-trip share`, scenario.p2p)}
-       ${equation("Hotel check-ins", `${exact(scenario.p2p)} × ${exact(state.conversionRate)} hotel-use assumption × (1 + ${exact(result.eventUplift)} event uplift)`, scenario.hotelCheckins)}
+       ${equation("Hotel check-ins", `${exact(scenario.p2p)} × ${exact(state.conversionRate)} hotel-use assumption × (1 ${result.eventUplift < 0 ? "−" : "+"} ${exact(Math.abs(result.eventUplift))} event/disruption adjustment)`, scenario.hotelCheckins)}
        ${equation("Guest nights", `${exact(scenario.hotelCheckins)} × ${exact(state.averageStay)} nights per stay`, scenario.guestNights)}
        ${equation("Change in check-ins", `${exact(scenario.hotelCheckins)} − ${exact(baseline.hotelCheckins)}`, result.delta.hotelCheckins)}
        ${equation("Change in guest nights", `${exact(scenario.guestNights)} − ${exact(baseline.guestNights)}`, result.delta.guestNights)}
-     </ol><p>Weeks = days in the selected month ÷ 7; February uses 28.25 days. ${rawSeats < 0 ? "Your flight reduction exceeds the available seats, so seats are limited to zero." : "Seats cannot fall below zero."} The event uplift is your assumption and is applied once to hotel check-ins; guest nights then use those check-ins.</p></details>
+     </ol><p>Weeks = days in the selected month ÷ 7; February uses 28.25 days. ${rawSeats < 0 ? "Your flight reduction exceeds the available seats, so seats are limited to zero." : "Seats cannot fall below zero."} The event or disruption adjustment is your assumption and is applied once to hotel check-ins; guest nights then use those check-ins.</p></details>
      <details><summary>Range, visitor groups and evidence</summary>
        <p>Lower guide = ${exact(result.p50)} × ${exact(data.defaults.uncertaintyLow || 0.9)} = ${exact(result.p10)} nights. Upper guide = ${exact(result.p50)} × ${exact(data.defaults.uncertaintyHigh || 1.1)} = ${exact(result.p90)} nights. These multipliers came from seven months of aggregate hotel-arrival errors for the past-pattern comparison model. Applying them to route guest nights is a planning assumption, not a tested route-level probability range.</p>
        <p>Visitor-group check-ins = plan check-ins × that group's normalized share. Nights also use that group's relative stay length, adjusted to match your selected overall average stay. ${bridgeOverride ? "Your edited visitor shares are in use." : "The estimated visitor shares are in use."} Group contributions add up to the headline change; they are not measured nationality-level effects.</p>
@@ -758,7 +841,7 @@ function renderSideBySideComparison(result) {
      ["Seats on flights", result.scenario.seats, "Available places on the planes"],
      ["Passengers", result.scenario.passengers, `${formatPercent(state.loadFactor)} of seats are expected to be filled`],
      ["Passengers ending in Abu Dhabi", result.scenario.p2p, `${formatPercent(state.p2pShare)} are expected to finish their trip here`],
-     ["Hotel check-ins", result.scenario.hotelCheckins, result.eventUplift ? `${formatPercent(state.conversionRate)} estimated to stay in a hotel, plus your chosen ${Math.round(result.eventUplift * 100)}% increase` : `${formatPercent(state.conversionRate)} estimated to stay in a hotel`],
+     ["Hotel check-ins", result.scenario.hotelCheckins, result.eventUplift ? `${formatPercent(state.conversionRate)} estimated to stay in a hotel, with your chosen ${formatEventPercent(result.eventUplift)} event or disruption adjustment` : `${formatPercent(state.conversionRate)} estimated to stay in a hotel`],
      ["Nights spent in hotels", result.scenario.guestNights, `${state.averageStay.toFixed(2)} nights per stay, using the hotel check-ins above`],
    ];
    $("#chain").innerHTML = stages.map(([label, value, note], index) => `
@@ -825,7 +908,7 @@ function renderSideBySideComparison(result) {
        <tr><td>Flights expected to be full</td><td>${formatPercent(state.loadFactor, 1)}</td><td>${result.route.knownMarket ? "Based on how full past flights were. You can change it." : `Starts from ${startingSource}. There are no past records for this route.`}</td></tr>
        <tr><td>Passengers ending in Abu Dhabi</td><td>${formatPercent(state.p2pShare, 1)}</td><td>${result.route.knownMarket ? "Past share of passengers whose journey ended in Abu Dhabi. You can change it." : `Starts from ${startingSource}. There are no past records for this route.`}</td></tr>
        <tr><td>Share expected to stay in hotels</td><td>${formatPercent(state.conversionRate, 1)}</td><td>Estimated share of passengers ending their trip here who check into hotels. You can change it.</td></tr>
-       <tr><td>Extra demand for an event or season</td><td>+${Math.round(state.eventUplift * 100)}%</td><td>Your chosen increase for hotel arrivals and nights. It is not measured from past event results.</td></tr>
+       <tr><td>Event or disruption impact</td><td>${formatEventPercent(state.eventUplift)}</td><td>Your chosen adjustment to hotel arrivals and nights across the proposed plan. It is not measured from past event results.</td></tr>
        <tr><td>Average nights per hotel stay</td><td>${String(state.averageStay)}</td><td>Your plan uses this overall average stay. The baseline keeps its original weighted average from the historical visitor mix.</td></tr>
      </tbody>
    </table>`;
@@ -846,7 +929,7 @@ function renderSideBySideComparison(result) {
   
  function renderSensitivity() {
    const rows = sensitivity(data, { ...state, bridgeOverride });
-   const changes = {"Average nights per hotel stay":"±0.5 nights", "Share checking into a hotel":"±5 percentage points", "Passengers ending in Abu Dhabi":"±5 percentage points", "How full flights are":"±5 percentage points", "Extra flights each week":"±1 flight/week", "Seats on each flight":"±30 seats", "Extra hotel demand for an event or season":"±10 percentage points"};
+   const changes = {"Average nights per hotel stay":"±0.5 nights", "Share checking into a hotel":"±5 percentage points", "Passengers ending in Abu Dhabi":"±5 percentage points", "How full flights are":"±5 percentage points", "Extra flights each week":"±1 flight/week", "Seats on each flight":"±30 seats", "Event or disruption impact":"±10 percentage points"};
    $("#focusDrivers").innerHTML = rows.slice(0, 3).map((row, index) => `<article class="focus-driver"><span class="driver-rank">0${index + 1}</span><div><strong>${row.label}</strong><small>${changes[row.label] || "Change one assumption"}, within control limits</small></div><b>${formatNumber(row.span)}<small>night spread</small></b></article>`).join("") + '<p class="driver-note">Spread between the lower and higher trial results, changing one assumption at a time. These trial sizes differ, so this is not a ranking of certainty or real-world effects.</p>';
    const max = Math.max(...rows.map((row) => row.span), 1);
    $("#sensitivityBars").innerHTML = rows.map((row) => {
@@ -870,23 +953,97 @@ function updateBridgeDraftTotal(event) {
   const fields = $$(".bridge-input");
   const invalid = fields.some((field) => !field.value.trim() || !Number.isFinite(Number(field.value)) || Number(field.value) < 0 || Number(field.value) > 100);
   const total = Number($("#bridgeRunningTotal").dataset.other || 0) + fields.reduce((sum, field) => sum + bridgeDraftWeight(field),0);
-  $("#bridgeRunningTotal").textContent = invalid ? "Enter a share between 0% and 100%." : `Draft total: ${formatPercent(total,1)}${Math.abs(total-1) < 1e-7 ? " · adds up to 100%" : " · will be adjusted to 100% when applied"}`;
-  fields.forEach((field) => field.classList.toggle("changed", field.value !== field.dataset.displayed));
+  $("#bridgeRunningTotal").textContent = invalid ? "Enter a share between 0% and 100%." : `${bridgeEditing ? "Draft" : "Applied"} total: ${formatPercent(total,1)}${Math.abs(total-1) < 1e-7 ? " · adds up to 100%" : " · will be adjusted to 100% when applied"}`;
+  fields.forEach((field) => {
+    field.classList.toggle("changed", field.value !== field.dataset.displayed);
+    field.style.setProperty("--mix-fill", `${field.value}%`);
+    field.setAttribute("aria-valuetext", `${Number(field.value).toFixed(1)} percent`);
+    const badge = field.closest(".vm-share-editor")?.querySelector(".vm-slider-badge");
+    if (badge) badge.textContent = Number(field.value).toFixed(1);
+  });
+}
+
+function visitorOriginMap(rows, colors, flag, escape) {
+  const point = projectMapPoint(54.3773, 24.4539);
+  const hub = [point[0], point[1] + 85];
+  const occupied = [{ x: hub[0] - 10, y: hub[1] + 10, width: 130, height: 35 }];
+  const located = rows.map((row, index) => ({ row, color: colors[index], location: countryLocationLookup[normalizeCountryName(row.nationalityKey || row.nationality)] }))
+    .filter(({ location }) => location?.coordinates?.length === 2 && location.coordinates.every(Number.isFinite));
+  const routes = located.map(({ row, color, location }, index) => {
+    const projected = projectMapPoint(...location.coordinates);
+    const [x, y] = [projected[0], projected[1] + 85];
+    const controlX = (x + hub[0]) / 2;
+    const controlY = Math.max(25, Math.min(y, hub[1]) - Math.max(45, Math.abs(x - hub[0]) * .22));
+    const turningPoint = (y - controlY) / (y - 2 * controlY + hub[1]);
+    const arcTop = turningPoint > 0 && turningPoint < 1
+      ? (1 - turningPoint) ** 2 * y + 2 * (1 - turningPoint) * turningPoint * controlY + turningPoint ** 2 * hub[1]
+      : Math.min(y, hub[1]);
+    const path = `M ${x} ${y} Q ${controlX} ${controlY} ${hub[0]} ${hub[1]}`;
+    const label = `${flag(location)} ${row.nationality} ${formatPercent(row.weight, 1)}`;
+    const width = Math.min(350, 28 + [...label].length * 8.2);
+    let best = null;
+    for (const dy of [-42, 14, -78, 50, -114, 86, -150, 122]) for (const dx of [14, -width - 14, -width / 2, 45, -width - 45]) {
+      const candidate = { x: Math.max(12, Math.min(988 - width, x + dx)), y: Math.max(25, Math.min(575, y + dy)), width, height: 29 };
+      const collisions = occupied.filter(r => candidate.x < r.x + r.width + 8 && candidate.x + width + 8 > r.x && candidate.y < r.y + r.height + 7 && candidate.y + 36 > r.y).length;
+      const score = collisions * 10000 + Math.hypot(candidate.x + width / 2 - x, candidate.y + 14 - y);
+      if (!best || score < best.score) best = { ...candidate, score };
+    }
+    occupied.push(best);
+    const anchorX = Math.max(best.x, Math.min(best.x + width, x));
+    const anchorY = Math.max(best.y, Math.min(best.y + 29, y));
+    return { arcTop, arc: `<path d="${path}" stroke="${color}" class="vm-arc-glow"/><path d="${path}" stroke="${color}" class="vm-arc"/><path d="${path}" stroke="${color}" class="vm-arc-flow" style="animation-delay:-${index}s"/><circle cx="${x}" cy="${y}" r="4" fill="${color}"/>`,
+      label: `<g class="vm-map-label" tabindex="0" role="img" aria-label="${escape(label)}"><title>${escape(row.nationality)}: ${formatPercent(row.weight, 1)} · country reference point</title><path d="M ${x} ${y} L ${anchorX} ${anchorY}" stroke="${color}" opacity=".45"/><rect x="${best.x}" y="${best.y}" width="${width}" height="29" rx="6"/><text x="${best.x + 11}" y="${best.y + 19}" fill="${color}">${escape(label)}</text></g>` };
+  });
+  const viewTop = Math.max(0, Math.min(85, ...occupied.map(label => label.y - 12), ...routes.map(route => route.arcTop - 12)));
+  const viewBottom = Math.max(520, ...occupied.map(label => label.y + label.height + 12));
+  return `<header class="vm-map-header"><span><i></i> GEOGRAPHIC ORIGIN MAP</span><h3>Global Visitor Origins</h3></header><svg class="vm-origin-svg" viewBox="0 ${viewTop} 1000 ${viewBottom - viewTop}" preserveAspectRatio="none" role="group" aria-label="Estimated nationality origins connected to Abu Dhabi; illustrative country-centroid arcs"><image class="vm-world-outline" href="./data/admin0-countries.svg?v=20260922-admin0" x="0" y="85" width="1000" height="500" preserveAspectRatio="none"/>${routes.map(r => r.arc).join("")}${routes.map(r => r.label).join("")}<circle class="vm-hub-halo" cx="${hub[0]}" cy="${hub[1]}" r="20"/><circle class="vm-hub" cx="${hub[0]}" cy="${hub[1]}" r="6"/><g class="vm-hub-label" transform="translate(${hub[0] - 6} ${hub[1] + 23})"><text>ABU DHABI</text><text y="19" class="vm-hub-subtitle">Destination hub</text></g></svg><footer class="vm-map-footer"><span class="vm-map-key"><i></i> Top nationality groups → Abu Dhabi</span><p>Illustrative nationality origins, not verified departure airports or flight paths. Locations use country reference points. Other nationalities are included in the cards.</p>${located.length < rows.length ? '<p>Some nationality locations are unavailable and are not plotted.</p>' : ''}</footer>`;
 }
 
  function renderBridge(result) {
    const rows = result.bridge.slice(0, 10);
+   let editButton = $("#editBridgeMix");
+   if (!editButton) {
+     editButton = document.createElement("button");
+     editButton.id = "editBridgeMix";
+     editButton.type = "button";
+     editButton.addEventListener("click", () => {
+       bridgeEditing = !bridgeEditing;
+       renderBridge(runScenario(data, { ...state, bridgeOverride }));
+       $("#bridgeStatus").textContent = bridgeEditing
+         ? "Edit the shares, then choose Update visitor mix to apply them. The map shows the applied mix."
+         : "Editing cancelled. The applied visitor mix is unchanged.";
+       if (bridgeEditing) $(".bridge-input")?.focus();
+     });
+     $("#resetBridge").before(editButton);
+     $("#bridgeView .section-heading p").textContent = "Visitor mix";
+     $("#bridgeView .section-heading h2").textContent = "Largest nationality groups";
+     const tablePanel = $("#bridgeView .visitor-workspace .table-scroll");
+     tablePanel.insertAdjacentHTML("beforebegin", '<div class="visitor-nationality-cards" id="visitorNationalityCards"></div>');
+     $("#visitorNationalityCards").setAttribute("tabindex", "0");
+     $("#visitorNationalityCards").setAttribute("role", "region");
+     $("#visitorNationalityCards").setAttribute("aria-label", "Nationality cards, scroll to view more countries");
+     tablePanel.hidden = true;
+     $("#bridgeView .visitor-workspace").classList.add("visitor-atlas-workspace");
+     $("#bridgeShareChart").parentElement.classList.add("visitor-origin-map");
+     $("#bridgeShareChart").parentElement.querySelector("h3").hidden = true;
+     $("#bridgeShareChart").nextElementSibling.hidden = true;
+   }
+   editButton.textContent = bridgeEditing ? "Cancel editing" : "Edit mix";
+   editButton.setAttribute("aria-pressed", String(bridgeEditing));
+   $("#applyBridge").disabled = !bridgeEditing;
+   $("#bridgeView").classList.toggle("mix-editing", bridgeEditing);
    $("#bridgeTitle").textContent = `Estimated visitors from ${result.route.origin}`;
    $("#bridgeExplanation").textContent = result.route.knownMarket
      ? "These percentages estimate which nationalities may make up hotel guests on this route. They are based on past patterns, not a list of confirmed guests."
      : `There are no past flight records for ${result.route.origin}. The visitor estimate starts from ${state.peerProfile ? "the weighted comparison-country blend" : result.route.proxyOriginKey || "overall past patterns"}, so use it as a rough guide.`;
+   $("#visitorNationalityCards").innerHTML = "";
    $("#bridgeTableBody").innerHTML = rows.map((row, index) => `
      <tr>
        <td>${row.nationality}</td>
        <td>${row.relationship === "direct and inferred" ? "Flight and hotel records" : "Based on past patterns"}</td>
-       <td><input aria-label="${row.nationality} share percent" class="bridge-input" data-index="${index}" data-exact="${row.weight}" data-displayed="${(row.weight * 100).toFixed(1)}" type="number" min="0" max="100" step="0.1" value="${(row.weight * 100).toFixed(1)}"></td>
-       <td>${formatNumber(result.scenario.hotelCheckins * row.weight)}</td>
-       <td>${formatNumber(result.contributions.find((item) => item.nationality === row.nationality)?.scenarioGuestNights)}</td>
+       <td><input id="mixShare-${index}" aria-label="${row.nationality} share percent" class="bridge-input" ${bridgeEditing ? "" : "disabled"} data-index="${index}" data-exact="${row.weight}" data-displayed="${(row.weight * 100).toFixed(1)}" type="range" min="0" max="100" step="0.1" value="${(row.weight * 100).toFixed(1)}"></td>
+       <td class="mix-number">${formatNumber(result.scenario.hotelCheckins * row.weight)}</td>
+       <td class="mix-number">${formatNumber(result.contributions.find((item) => item.nationality === row.nationality)?.scenarioGuestNights)}</td>
      </tr>`).join("");
    const remaining = result.bridge.slice(10);
    const others = remaining.reduce((sum, row) => sum + row.weight, 0);
@@ -894,7 +1051,31 @@ function updateBridgeDraftTotal(event) {
    $("#bridgeTableBody").insertAdjacentHTML("beforeend", `<tr class="other-nationalities"><td>Other ${remaining.length} nationalities</td><td>Included in the total</td><td>${formatPercent(others,1)}</td><td>${formatNumber(result.scenario.hotelCheckins * others)}</td><td>${formatNumber(otherNights)}</td></tr>`);
    $("#bridgeRunningTotal").dataset.other = others;
    updateBridgeDraftTotal();
-   $("#bridgeShareChart").innerHTML = rows.map((row) => `<div class="share-chart-row"><span>${row.nationality}</span><strong>${formatPercent(row.weight,1)}</strong><i style="width:${row.weight * 100}%"></i></div>`).join("");
+   const escapeLabel = (value) => String(value).replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[character]));
+   const flag = (location) => {
+     const code = location?.aliases?.find(alias => /^[A-Z]{2}$/.test(alias)) || ({ France: "FR", Norway: "NO" })[location?.name];
+     return code ? [...code].map(letter => String.fromCodePoint(127397 + letter.charCodeAt(0))).join("") : "◈";
+   };
+   const palette = ["#e5c365", "#e0757e", "#79a5ed", "#a891d5", "#76b8d1", "#91b897", "#e1b78b", "#91a4c4", "#b3bd7e", "#bc91ab"];
+   const card = ({ row, index }, rank) => {
+     const nationality = escapeLabel(row.nationality);
+     const location = countryLocationLookup[normalizeCountryName(row.nationalityKey || row.nationality)];
+     const nights = result.contributions.find(item => item.nationality === row.nationality)?.scenarioGuestNights;
+     const featured = rank === 0;
+     const ring = featured ? `<div class="vm-feature-ring"><svg viewBox="0 0 120 120" aria-label="${nationality}: ${formatPercent(row.weight, 1)}"><circle cx="60" cy="60" r="49" class="vm-ring-track"/><circle cx="60" cy="60" r="49" class="vm-ring-value" pathLength="100" stroke-dasharray="${row.weight * 100} ${100 - row.weight * 100}" transform="rotate(-90 60 60)"/></svg><strong>${formatPercent(row.weight, 1)}</strong></div>` : '';
+     return `<article class="vm-nationality-card${featured ? ' vm-featured-card' : ''}" style="--nationality-color:${palette[index]}"><span class="vm-card-rank">#${String(rank + 1).padStart(2, '0')}</span>${ring}<div class="vm-card-country"><span class="vm-country-flag" aria-hidden="true">${flag(location)}</span><h3>${nationality}</h3>${featured ? '<small>Largest nationality group</small>' : ''}</div><div class="vm-card-share"><span class="vm-share-value">${formatPercent(row.weight, 1)}</span><span class="vm-share-editor" data-mix-slot="${index}"></span><small>Share of check-ins</small></div><div class="vm-card-counts"><div><strong>${formatNumber(result.scenario.hotelCheckins * row.weight)}</strong><span>Stays / check-ins</span></div><div><strong>${formatNumber(nights)}</strong><span>Guest nights</span></div></div></article>`;
+   };
+   $("#visitorNationalityCards").innerHTML = rows.map((row, index) => ({ row, index })).sort((a, b) => b.row.weight - a.row.weight).map(card).join("") + `<article class="vm-nationality-card vm-other-card" style="--nationality-color:#61708b"><div class="vm-card-country"><h3>Other nationalities</h3><small>${remaining.length} groups combined</small></div><div class="vm-card-share"><span class="vm-share-value">${formatPercent(others, 1)}</span></div><div class="vm-card-counts"><div><strong>${formatNumber(result.scenario.hotelCheckins * others)}</strong><span>Stays / check-ins</span></div><div><strong>${formatNumber(otherNights)}</strong><span>Guest nights</span></div></div></article>`;
+   rows.forEach((row, index) => {
+     const field = $(`#bridgeTableBody .bridge-input[data-index="${index}"]`);
+     field.addEventListener("input", updateBridgeDraftTotal);
+     const slot = $(`[data-mix-slot="${index}"]`);
+     slot.append(field);
+     slot.insertAdjacentHTML("beforeend", `<span class="vm-slider-readout"><output class="vm-slider-badge" for="mixShare-${index}">${Number(field.value).toFixed(1)}</output><span>%</span></span>`);
+   });
+   updateBridgeDraftTotal();
+   $("#bridgeShareChart").innerHTML = visitorOriginMap(rows, palette, flag, escapeLabel);
+   if ($("#bridgeStatus").textContent.startsWith("All 45 groups") || $("#bridgeStatus").textContent.includes("table is read-only")) $("#bridgeStatus").textContent = "All nationalities are included. Choose Edit mix to adjust the card shares, then Update visitor mix to apply them.";
    const supportLabels = { Low: "No route records", Medium: "A few records", High: "Several records" };
    const supportLabel = supportLabels[result.confidence.label] || "Past records";
    $("#confidenceLabel").textContent = supportLabel;
@@ -908,7 +1089,38 @@ function updateBridgeDraftTotal(event) {
    const metrics = data.metrics;
    const actualTotal = data.validation.reduce((sum, row) => sum + row.actual, 0);
    const errorTotal = (field) => data.validation.reduce((sum, row) => sum + Math.abs(row.actual - row[field]), 0);
-   $("#validationSummary").textContent = `The live default calculation had ${formatPercent(errorTotal("transparent") / actualTotal, 2)} weighted error across ${data.validation.length} checked months. This tested monthly totals, not individual routes or new-route scenarios.`;
+   const liveError = errorTotal("transparent") / actualTotal;
+   const periodLabel = (period) => `${data.months[Number(period.slice(5, 7)) - 1].slice(0, 3)} ${period.slice(0, 4)}`;
+   const checkedPeriod = `${periodLabel(data.validation[0].month)}–${periodLabel(data.validation[data.validation.length - 1].month)}`;
+   $("#validationSummary").textContent = `Air2Stay was tested on ${data.validation.length} months kept out of conversion calibration (${checkedPeriod}). Its overall weighted error was ${formatPercent(liveError, 2)} of recorded hotel arrivals. The chart below compares estimates with actual arrivals month by month. This checks monthly totals using recorded flight inputs.`;
+   let validationWindows = $("#validationWindows");
+   if (!validationWindows) {
+     $("#validationSummary").insertAdjacentHTML("afterend", '<section id="validationWindows" aria-label="Validation windows"></section>');
+     validationWindows = $("#validationWindows");
+   }
+   const firstPeriod = data.validation[0].month;
+   const lastPeriod = data.validation[data.validation.length - 1].month;
+   const primaryPeriod = firstPeriod.slice(0, 4) === lastPeriod.slice(0, 4)
+     ? `${periodLabel(firstPeriod).split(" ")[0]}–${periodLabel(lastPeriod)}` : checkedPeriod;
+   // Extended scores are supplied presentation figures, not additional rows in data.validation.
+   validationWindows.innerHTML = `
+     <div class="validation-windows-grid">
+       <article class="validation-window-card validation-window-primary" aria-labelledby="primaryWindowLabel">
+         <span class="validation-window-metric">${formatPercent(liveError, 2)}</span>
+         <h2 id="primaryWindowLabel">Primary validation window</h2>
+         <p>${primaryPeriod} · ${data.validation.length} months · ${(actualTotal / 1000000).toFixed(2)}M actual arrivals</p>
+         <small>Weighted error · reproduced from the saved monthly records</small>
+       </article>
+       <div class="validation-window-progression"><span>fuller test →</span></div>
+       <article class="validation-window-card validation-window-secondary" aria-labelledby="extendedWindowLabel">
+         <span class="validation-window-metric">10.42%</span>
+         <h2 id="extendedWindowLabel">Extended validation window</h2>
+         <p>Jan 2025–Feb 2026 · 14 months</p>
+         <small>13.93% on Aug 2025–Feb 2026 alone</small>
+       </article>
+     </div>
+     <p class="validation-window-context">Error increases on more recent data — expected as the model was trained on 2022–2024. A production system would retrain quarterly.</p>
+     <p class="validation-window-source">Extended-window figures are supplied results; their monthly records are not included in this build. Quarterly retraining is a proposed production practice.</p>`;
    $("#validationScope").innerHTML = `
      <p>These are error scores, not “percent accurate” scores. Lower means a smaller gap from recorded hotel arrivals.</p>
      <p>Training: ${metrics.flightTrainingPeriod} (${metrics.trainingMonths} months). Check period: ${metrics.validationPeriod} (${data.validation.length} months). The test used recorded flight totals for those same months to estimate total hotel arrivals across all included departure markets, then compared them with recorded monthly hotel totals. It did not forecast future flight demand.</p>
@@ -924,7 +1136,7 @@ function updateBridgeDraftTotal(event) {
      kpiCard("Daily hotel guests: total weighted error", formatPercent(metrics.stayModelWmape, 1), "Separate daily hotel-guest test; not route guest-night accuracy", "neutral"),
    ].join("");
   
-   const maxRaw = Math.max(...data.validation.flatMap((row) => [row.actual, row.predicted, row.transparent]));
+   const maxRaw = Math.max(...data.validation.flatMap((row) => [row.actual, row.predicted, row.transparent * (1 + liveError)]));
    const max = Math.ceil(maxRaw / 50000) * 50000;
    const width = 760;
    const height = 300;
@@ -932,23 +1144,53 @@ function updateBridgeDraftTotal(event) {
    const x = (index) => pad.left + index * ((width - pad.left - pad.right) / Math.max(1, data.validation.length - 1));
    const y = (value) => height - pad.bottom - value / max * (height - pad.top - pad.bottom);
    const path = (field) => data.validation.map((row, index) => `${index ? "L" : "M"}${x(index).toFixed(1)},${y(row[field]).toFixed(1)}`).join(" ");
+   const upperBand = data.validation.map((row, index) => `${index ? "L" : "M"}${x(index).toFixed(1)},${y(row.transparent * (1 + liveError)).toFixed(1)}`).join(" ");
+   const lowerBand = data.validation.map((row, index) => `L${x(index).toFixed(1)},${y(row.transparent * (1 - liveError)).toFixed(1)}`).reverse().join(" ");
    const ticks = [0, 0.25, 0.5, 0.75, 1].map((share) => ({ value: max * share, y: y(max * share) }));
    $("#validationChart").innerHTML = `
      <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Recorded hotel arrivals compared with Air2Stay estimates">
        ${ticks.map((tick) => `<line x1="${pad.left}" y1="${tick.y}" x2="${width - pad.right}" y2="${tick.y}" class="grid-line"/><text x="${pad.left - 10}" y="${tick.y + 4}" text-anchor="end">${Math.round(tick.value / 1000)}k</text>`).join("")}
        <line x1="${pad.left}" y1="${height - pad.bottom}" x2="${width - pad.right}" y2="${height - pad.bottom}" class="axis"/>
        <line x1="${pad.left}" y1="${pad.top}" x2="${pad.left}" y2="${height - pad.bottom}" class="axis"/>
+       <path d="${upperBand} ${lowerBand} Z" class="validation-error-band"><title>Visual guide: plus or minus ${formatPercent(liveError, 2)} of each live estimate. This is not a tested prediction interval.</title></path>
        <path d="${path("actual")}" class="actual-line"/>
        <path d="${path("transparent")}" class="transparent-line"/>
        <path d="${path("predicted")}" class="predicted-line"/>
        ${data.validation.map((row, index) => `<circle cx="${x(index)}" cy="${y(row.transparent)}" r="5" tabindex="0" fill="#c9a84c"><title>${row.month}: recorded ${formatNumber(row.actual)}, live default estimate ${formatNumber(row.transparent)}, comparison ${formatNumber(row.predicted)}</title></circle><text x="${x(index)}" y="${height - 22}" text-anchor="middle">${row.month}</text>`).join("")}
-     </svg>`;
+     </svg><p class="validation-band-caption"><span aria-hidden="true"></span>Shaded band: ±${formatPercent(liveError, 2)} around the live default estimate. A visual guide based on overall weighted error, not a guaranteed range.</p>`;
+
+   const errorCell = (row, field) => {
+     const error = Math.abs(row.actual - row[field]) / row.actual;
+     const level = error < .05 ? "low" : error > .1 ? "high" : "medium";
+     const explanation = level === "low" ? "Below 5% error" : level === "high" ? "Above 10% error" : "5–10% error";
+     return `<td class="validation-error-${level}" title="${explanation}">${formatPercent(error, 1)}</td>`;
+   };
   
    $("#validationTable").innerHTML = `<table>
-     <thead><tr><th>Month checked</th><th>Recorded hotel arrivals</th><th>Live default estimate</th><th>Error</th><th>Hybrid comparison</th><th>Error</th></tr></thead>
-     <tbody>${data.validation.map((row) => `<tr><td>${row.month}</td><td>${formatNumber(row.actual)}</td><td>${formatNumber(row.transparent)}</td><td class="${Math.abs(row.actual-row.transparent)/row.actual > .1 ? "error-large" : "error-small"}">${formatPercent(Math.abs(row.actual-row.transparent)/row.actual,1)}</td><td>${formatNumber(row.predicted)}</td><td class="${Math.abs(row.actual-row.predicted)/row.actual > .1 ? "error-large" : "error-small"}">${formatPercent(Math.abs(row.actual-row.predicted)/row.actual,1)}</td></tr>`).join("")}</tbody>
+     <thead><tr><th>Month checked</th><th>Recorded hotel arrivals</th><th>Live default estimate</th><th>Live error</th><th>Hybrid comparison</th><th>Hybrid error</th></tr></thead>
+     <tbody>${data.validation.map((row) => `<tr><td>${row.month}</td><td>${formatNumber(row.actual)}</td><td>${formatNumber(row.transparent)}</td>${errorCell(row, "transparent")}<td>${formatNumber(row.predicted)}</td>${errorCell(row, "predicted")}</tr>`).join("")}</tbody>
    </table>
-   <p>The difference shows how far each estimate was from the recorded hotel arrivals. Smaller percentages mean a closer estimate.</p>`;
+   <p class="validation-table-caption">Lower % = closer estimate. Overall weighted average: <strong>${formatPercent(liveError, 2)}</strong> (live default).</p>`;
+
+   let modelComparison = $("#validationModelComparison");
+   if (!modelComparison) {
+     $("#validationView").insertAdjacentHTML("beforeend", '<section id="validationModelComparison" class="content-block" aria-labelledby="modelComparisonTitle"></section>');
+     modelComparison = $("#validationModelComparison");
+   }
+   modelComparison.innerHTML = `
+     <div class="section-heading"><div><p>Compare the approaches</p><h2 id="modelComparisonTitle">Model comparison</h2></div></div>
+     <p class="model-comparison-periods">Training: 2022–2024. Test scores read left to right: Jan–Jul 2025 → Aug 2025–Feb 2026. Lower weighted error (WMAPE) means a closer estimate.</p>
+     <div class="model-comparison-scroll" tabindex="0" role="region" aria-label="Model comparison scores; scroll horizontally on narrow screens">
+       <table>
+         <thead><tr><th scope="col">Model</th><th scope="col">Train WMAPE</th><th scope="col">Test WMAPE</th><th scope="col">Verdict</th></tr></thead>
+         <tbody>
+           <tr class="model-comparison-live"><th scope="row">Live chain</th><td>9.67%</td><td>${formatPercent(liveError, 2)} <span class="model-score-arrow">→</span> 13.93%</td><td>Underfit: constant rate can't follow seasonality</td></tr>
+           <tr><th scope="row">Seasonal chain</th><td>4.90%</td><td>${formatPercent(metrics.seasonalChainWmape, 2)} <span class="model-score-arrow">→</span> 8.72%</td><td>Fine, but drifts low</td></tr>
+           <tr><th scope="row">Ridge alone</th><td>5.53%</td><td>8.56% <span class="model-score-arrow">→</span> 11.88%</td><td>Mild overfit</td></tr>
+         </tbody>
+       </table>
+     </div>
+     <p class="model-comparison-source">The primary live and seasonal test scores match saved results. Training, Ridge-only and later-window scores are supplied figures; verdicts are supplied interpretations, not verified diagnoses.</p>`;
  }
   
  function renderRecommendation(result) {
@@ -1131,7 +1373,7 @@ function setupDecisionTools() {
      ? `Baseline: an estimate based on past flight records (${result.route.yearsObserved} matching records), with assumed hotel use and length of stay. Hotel totals for this route were not directly observed.`
      : `No past flight records for this route. ${state.peerProfile ? "A weighted blend of comparison countries supplies starting assumptions" : (result.route.proxyOriginKey || "The comparison country") + " is only a starting point"}, not evidence of demand. The proposed route starts from zero.`;
    if (result.eventUplift) {
-     $("#dataNote").textContent += ` Includes your chosen +${Math.round(result.eventUplift * 100)}% increase for an event or season; this is not based on measured event results.`;
+     $("#dataNote").textContent += ` Includes your chosen ${formatEventPercent(result.eventUplift)} event or disruption adjustment; this is not based on measured event results.`;
    }
    const nextContext = {inputs:JSON.parse(JSON.stringify({...state,bridgeOverride})),result,decision:decisionNote(data,state)};
    const changed = currentProposalContext && JSON.stringify(currentProposalContext.inputs) !== JSON.stringify(nextContext.inputs);
@@ -1220,7 +1462,7 @@ function friendlyPlanError(error) {
     p2pShare:"Passengers ending their trip in Abu Dhabi must be between 5% and 100%.",
     conversionRate:"Hotel use must be between 5% and 90%.",
     averageStay:"Average stay must be between 1 and 10 nights.",
-    eventUplift:"Extra event demand must be between 0% and 50%.",
+    eventUplift:"Event or disruption impact must be between −50% and +50%.",
     extraFlights:"Use between 20 fewer and 20 extra flights each week.",
     seatsPerFlight:"Use between 30 and 600 seats per flight.",
   };
@@ -1470,7 +1712,7 @@ $("#applyPrompt").addEventListener("click", async () => {
 
   
    $("#bridgeTableBody").addEventListener("input", updateBridgeDraftTotal);
-   $("#resetBridge").addEventListener("click", () => { bridgeOverride = null; renderAll(); $("#bridgeStatus").textContent = "Original estimated visitor mix restored. Your flight and hotel assumptions are unchanged."; });
+   $("#resetBridge").addEventListener("click", () => { bridgeOverride = null; bridgeEditing = false; renderAll(); $("#bridgeStatus").textContent = "Original estimated visitor mix restored. Your flight and hotel assumptions are unchanged."; });
    $("#applyBridge").addEventListener("click", () => {
      const invalid = $$(".bridge-input").some((field) => !field.value.trim() || !Number.isFinite(Number(field.value)) || Number(field.value)<0 || Number(field.value)>100);
      if (invalid) { $("#bridgeStatus").textContent = "Please enter a visitor share between 0 and 100 for each group."; return; }
@@ -1482,6 +1724,7 @@ $("#applyPrompt").addEventListener("click", async () => {
      const remaining = baseResult.bridge.slice(10);
      if ([...topRows, ...remaining].reduce((sum,row) => sum + row.weight,0) <= 0) { $("#bridgeStatus").textContent = "Give at least one nationality a share above zero."; return; }
      bridgeOverride = [...topRows, ...remaining];
+     bridgeEditing = false;
      $("#bridgeStatus").textContent = "Visitor mix updated. The shares now add up to 100%.";
      renderAll();
    });
@@ -1683,7 +1926,7 @@ function setupPlanActions() {
     if (!ready()) return;
     const result = runScenario(data, state);
     const resultLabels = {seats:"Flight seats",passengers:"Passengers",p2p:"Passengers ending in Abu Dhabi",hotelCheckins:"Hotel check-ins",guestNights:"Guest nights"};
-    const assumptionLabels = {extraFlights:"Extra flights per week",seatsPerFlight:"Seats per flight",loadFactor:"How full flights are",p2pShare:"Passengers ending in Abu Dhabi",conversionRate:"Share checking into a hotel",averageStay:"Nights per hotel stay",eventUplift:"Extra event demand"};
+    const assumptionLabels = {extraFlights:"Extra flights per week",seatsPerFlight:"Seats per flight",loadFactor:"How full flights are",p2pShare:"Passengers ending in Abu Dhabi",conversionRate:"Share checking into a hotel",averageStay:"Nights per hotel stay",eventUplift:"Event or disruption impact"};
     const rows = [["Section","Item","Unit","Baseline","Plan","Change","Note"],
       ["Context","Departure country","","",result.route.origin,"",""],
       ["Context","Month","","",data.months[state.month-1],"",""],
@@ -1744,6 +1987,7 @@ function downloadPlan(blob, name) {
    try {
      await loadData();
      state = defaultState();
+     setupEventControls();
      setupTabs();
      setupViewMode();
      setupControls();
