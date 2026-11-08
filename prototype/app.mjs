@@ -1677,8 +1677,9 @@ function friendlyPlanError(error) {
    for (const button of $$("[data-flight-step]")) {
      button.addEventListener("click", () => {
        const field = $(`#${button.dataset.flightControl}`);
-       if (Number(button.dataset.flightStep) < 0) field.stepDown();
-       else field.stepUp();
+       const steps = Number(button.dataset.flightStep);
+       if (steps < 0) field.stepDown(-steps);
+       else field.stepUp(steps);
        field.dispatchEvent(new Event("input", { bubbles: true }));
      });
    }

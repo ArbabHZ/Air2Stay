@@ -1590,5 +1590,6 @@ body.controls-open .adjust-controls svg path { transform:translateX(29px) scaleX
 #extraFlights::-moz-range-track { height: 6px; border-radius: 4px; background: var(--flight-track); }
 #extraFlights::-webkit-slider-thumb { appearance: none; -webkit-appearance: none; width: 16px; height: 16px; margin-top: -5px; border: 2px solid #141b33; border-radius: 50%; background: var(--flight-tone); }
 #extraFlights::-moz-range-thumb { width: 14px; height: 14px; border: 2px solid #141b33; border-radius: 50%; background: var(--flight-tone); }
-#scenarioForm #seatsPerFlight { width: 100%; min-width: 0; height: 42px; padding: 0 6px; text-align: center; font-variant-numeric: tabular-nums; appearance: textfield; }
-#seatsPerFlight::-webkit-inner-spin-button, #seatsPerFlight::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+#scenarioForm .flight-stepper input[type="number"] { width: 100%; min-width: 0; height: 42px; padding: 0 6px; text-align: center; font-variant-numeric: tabular-nums; appearance: textfield; }
+#scenarioForm .flight-stepper input[type="number"]::-webkit-inner-spin-button,
+#scenarioForm .flight-stepper input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
