@@ -5,6 +5,7 @@
 # CRITICAL: Data Files (Proprietary DCT Data)
 # ============================================================================
 data/
+/dct Data/
 *.xlsx
 *.xls
 *.csv

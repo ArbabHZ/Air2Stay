@@ -44,6 +44,7 @@ let lastExportUrl = "";
 let peerValidationResult = null;
 let targetSolution = null;
 let eventControlsReady = false;
+let refreshFeaturePack = () => {};
  let assistantMessages = [
    { role: "bot", text: "Hi! Ask what changed, ask how a number was worked out, or tell me what you’d like to change." },
  ];
@@ -204,7 +205,7 @@ function populatePurposeInputs() {
    $("#weeklyFlightSummary").textContent = flights
      ? `${amount} ${direction} ${amount === 1 ? "flight" : "flights"} per week than usual`
      : "No change to the weekly schedule";
-   for (const button of $$("[data-flight-step]")) {
+   for (const button of $("#scenarioForm").querySelectorAll?.("[data-flight-step]") ?? []) {
      const field = $(`#${button.dataset.flightControl}`);
      const value = Number(field.value);
      button.disabled = !field.value || !Number.isFinite(value) || value < Number(field.min) || value > Number(field.max)
@@ -224,8 +225,7 @@ function populatePurposeInputs() {
    const section = document.createElement("details");
    section.id = "eventImpactGroup";
    section.className = "control-group";
-   section.open = true;
-   section.innerHTML = `<summary><span>02.5</span> Event or disruption</summary>
+   section.innerHTML = `<summary><span>03</span> Event or disruption</summary>
      <div class="control-group-body">
        <div class="event-impact-chips" role="group" aria-label="Event or disruption assumption">
          ${EVENT_IMPACTS.map((item) => `<button type="button" class="event-impact-chip ${item.tone}" data-event-impact="${item.key}" aria-pressed="false"><span>${item.label}</span><strong>${formatEventPercent(item.uplift)}</strong></button>`).join("")}
@@ -392,13 +392,19 @@ function populatePurposeInputs() {
    return `<article class="kpi ${tone}"><p>${label}</p><strong>${value}</strong><small>${note}</small></article>`;
  }
   
- function sparklineSvg(values, selectedIndex, { label, format }) {
+ function sparkScale(values, extent, fromZero) {
+   const finite = values.filter(Number.isFinite);
+   const max = Math.max(1, extent, ...finite.map(Math.abs));
+   return fromZero ? [-max, max] : [0, max];
+ }
+
+ function sparklineSvg(values, selectedIndex, { label, format, extent, fromZero = false }) {
    const valid = values.filter(Number.isFinite);
    const min = Math.min(...valid);
    const max = Math.max(...valid);
-   const spread = max - min;
+   const [lower, upper] = sparkScale(values, extent, fromZero);
    const x = (index) => 5 + index * 10;
-   const y = (value) => spread ? 34 - 34 * ((value - min) / spread + 0.1) / 1.2 : 17;
+   const y = (value) => 31 - 28 * (value - lower) / (upper - lower);
    const segments = [];
    let segment = [];
    const hits = values.map((value, index) => {
@@ -427,7 +433,7 @@ function populatePurposeInputs() {
      const line = `M${points[0].join(",")} ${curves.join(" ")}`;
      return `<path class="result-spark-area" d="${line} L${points.at(-1)[0]},34 H${points[0][0]} Z"/><path class="result-spark-line" d="${line}" vector-effect="non-scaling-stroke"/>`;
    }).join("");
-   const zeroLine = min < 0 && max > 0
+   const zeroLine = fromZero
      ? `<path class="result-spark-zero" d="M0,${y(0)} H120" vector-effect="non-scaling-stroke"/>` : "";
    const dot = Number.isFinite(values[selectedIndex])
      ? `<span class="result-spark-dot" style="left:${x(selectedIndex) / 1.2}%;top:${y(values[selectedIndex])}px" aria-hidden="true"></span>` : "";
@@ -505,13 +511,14 @@ function populatePurposeInputs() {
    });
    const tile = (label, value, note, chart, tone = "neutral", kind = "") =>
      `<article class="result-tile ${kind}"><p class="result-tile-label">${label}</p><strong class="result-tile-value">${value}</strong><small class="result-tile-note ${tone}">${note}</small>${chart}</article>`;
+   const extent = (key) => Math.max(1, ...monthly.map((item) => item?.baseline[key] || 0), result.baseline[key]);
    const deltaTile = (key, unit) => {
      const value = result.delta[key];
      const label = value < 0 ? `Change in ${unit}` : `Extra ${unit}`;
      const tone = isNewRoute || Math.round(Math.abs(value)) === 0 ? "neutral" : value > 0 ? "positive" : "negative";
      const direction = { positive: "↑", negative: "↓", neutral: "No change" }[tone];
      const note = isNewRoute ? "New route · all of this is extra" : `${direction} vs a usual ${monthName}`;
-     const chart = sparklineSvg(monthly.map((item) => item?.delta[key]), selectedIndex, { label, format: formatSigned });
+     const chart = sparklineSvg(monthly.map((item) => item?.delta[key]), selectedIndex, { label, format: formatSigned, extent:extent(key), fromZero:true });
      return tile(label, formatSigned(value), note, chart, tone, key === "guestNights" ? "result-tile-guest" : "result-tile-checkins");
    };
    const compact = (value, precision = 0) => value >= 1e6 ? `${+(value / 1e6).toFixed(Math.max(1, precision))}M`
@@ -522,7 +529,7 @@ function populatePurposeInputs() {
    updateKpiTiles([
      ...changes,
      tile("Total guest nights", formatNumber(result.p50), isNewRoute ? "Usual: 0 (new route)" : `Usual: ${formatNumber(result.baseline.guestNights)}`,
-       sparklineSvg(monthly.map((item) => item?.scenario.guestNights), selectedIndex, { label: "Total guest nights", format: formatNumber })),
+       sparklineSvg(monthly.map((item) => item?.scenario.guestNights), selectedIndex, { label: "Total guest nights", format: formatNumber, extent:extent("guestNights") })),
      tile("Possible range", `${compact(result.p10, rangePrecision)} – ${compact(result.p90, rangePrecision)}`, "History-based guide", resultRange(result), "neutral", "result-tile-range"),
    ].join(""));
  }
@@ -586,6 +593,8 @@ function renderSideBySideComparison(result, previousResult, assumptionsOpen = fa
       <small>${caption}</small>
     </div>`;
   }).join("");
+  const country = planningEscape(route.origin);
+  const comparisonTotals = (checkins, nights, formatter) => `<p class="assumption-totals"><span><strong>${formatter(checkins)}</strong> check-ins</span><span><strong>${formatter(nights)}</strong> guest nights</span></p>`;
   const chartLabel = steps.map(([key, label]) => {
     if (isNewRoute) return `${label}: ${formatNumber(shown[key])} for your new route.`;
     const difference = Math.round(Math.abs(delta[key]));
@@ -631,8 +640,8 @@ function renderSideBySideComparison(result, previousResult, assumptionsOpen = fa
     <details class="compare-assumptions"${assumptionsOpen ? " open" : ""}>
       <summary>Assumptions used</summary>
       <div class="comparison-assumption-grid">
-        <div><h4>${isNewRoute ? "New route baseline" : "Baseline estimate"}</h4>${assumptionList(baselineAssumptions)}</div>
-        <div><h4>Your plan</h4>${assumptionList(scenarioAssumptions)}</div>
+        <div class="assumption-column"><h4>Baseline estimate · ${country}</h4>${comparisonTotals(baseline.hotelCheckins, baseline.guestNights, formatNumber)}${assumptionList(baselineAssumptions)}</div>
+        <div class="assumption-column plan-assumptions"><h4>Your plan · ${country}</h4>${comparisonTotals(delta.hotelCheckins, delta.guestNights, formatSigned)}${assumptionList(scenarioAssumptions)}</div>
       </div>
     </details>`;
 }
@@ -1477,6 +1486,27 @@ function resolvedMonthInputs(month, source) {
     routePurpose:source.routePurpose,purposeAssumptionsApplied:source.purposeAssumptionsApplied,seasonalConversion:source.seasonalConversion};
 }
 
+function monthComparisonChart(monthly) {
+  const values = monthly.map((row) => row.incremental.guestNights);
+  const highest = Math.max(...values);
+  const scale = Math.max(1, ...values.map(Math.abs));
+  const mixed = highest > 0 && values.some((value)=>value < 0);
+  const tone = mixed ? "mixed" : highest <= 0 && values.some((value)=>value < 0) ? "all-negative" : "";
+  return `<p class="chart-key">Gold = selected month · Green = highest estimate</p><div class="month-bars ${tone}" role="img" aria-label="${planningEscape(monthly.map((row, i) => `${row.monthName}: ${formatSigned(values[i])} guest nights`).join("; "))}">
+    ${monthly.map((row, i) => `<div class="month-bar ${row.month === state.month ? "selected" : ""} ${values[i] === highest ? "highest" : ""}" title="${planningEscape(row.monthName)}: ${formatSigned(values[i])} guest nights">
+      <div class="month-bar-plot"><i class="${values[i] < 0 ? "negative" : ""}" style="--amount:${Math.abs(values[i]) / scale * (mixed ? 50 : 100)}%"></i></div><small>${planningEscape(row.monthName.slice(0,3))}</small></div>`).join("")}</div>`;
+}
+
+function featureBarChart(rows, label, format = formatNumber) {
+  const scale = Math.max(1, ...rows.map((row) => Math.abs(row.value)));
+  return `<div class="feature-bars" role="img" aria-label="${planningEscape(label + ". " + rows.map((row) => row.label + ": " + format(row.value)).join("; "))}">
+    ${rows.map((row) => `<div class="feature-bar-row" title="${planningEscape(row.label + ": " + format(row.value))}"><div><span>${planningEscape(row.label)}</span><strong>${format(row.value)}</strong></div><div class="feature-bar-track"><i class="${row.value < 0 ? "negative" : ""}" style="width:${Math.abs(row.value) / scale * 100}%"></i></div></div>`).join("")}</div>`;
+}
+
+function stressComparisonChart(stress) {
+  return featureBarChart(stress.trials.map((row) => ({label:row.label, value:row.differenceFromPlan})), "Guest nights compared with the plan", formatSigned);
+}
+
 function renderDecisionWorkspace() {
   if ($("#decisionWorkspace").hidden || !$("#inputError").hidden) return;
   const options = decisionOptions();
@@ -1492,8 +1522,10 @@ function renderDecisionWorkspace() {
   $("#monthComparisonNote").textContent = $("#refreshMonthAssumptions").checked
     ? "Each month refreshes market flight fullness, trip-ending share and starting stay estimates; flight count and aircraft seats stay fixed. Hotel use stays at your chosen rate unless you applied the training-season option. Any visitor-purpose stay assumption is retained. These are seasonal planning estimates, not future bookings."
     : "All selected flight and hotel assumptions stay fixed. Differences mainly reflect days in each month, not a learned seasonal demand effect.";
+  $("#monthChart").innerHTML = monthComparisonChart(monthly);
   $("#monthOptions").innerHTML = planningTable(["Month","Extra guest nights","Nights / 1,000 added seats","Flights full","Hotel use","Nights / stay"],monthly.map((row)=>[row.monthName,formatNumber(row.incremental.guestNights),row.per1000AddedSeats == null ? "—" : formatNumber(row.per1000AddedSeats),formatPercent(row.inputs.loadFactor,1),formatPercent(row.inputs.conversionRate,1),row.inputs.averageStay.toFixed(2)]));
   const stress = stressTest(data,state);
+  $("#stressChart").innerHTML = stressComparisonChart(stress);
   $("#stressOptions").innerHTML = planningTable(["Trial","Extra guest nights","Change from selected assumptions"],[["Selected assumptions",formatNumber(stress.base.incremental.guestNights),"—"],...stress.trials.map((row)=>[row.label,formatNumber(row.incremental.guestNights),formatSigned(row.differenceFromPlan)])]);
   const note = decisionNote(data,state,options);
   const ending = note.workplaceDecision;
@@ -1531,6 +1563,23 @@ function renderPlanningEvidence(result) {
   $("#peerValidation").innerHTML = `<p>We hid one known market at a time and reconstructed its flight assumptions from other markets in the same month: ${validation.caseCount} market-month checks across ${validation.marketCount} markets.</p><div class="table-scroll">${planningTable(["Assumption","Three-market average error","Nearest-country average error"],Object.values(validation.metrics).map((row)=>[row.label,row.blendedMae.toFixed(2)+" "+row.unit,row.nearestMae.toFixed(2)+" "+row.unit]))}</div><ul>${validation.limitations.map((line)=>'<li>'+planningEscape(line)+'</li>').join('')}</ul>`;
 }
 
+function decisionNoteForExport() {
+  const note = decisionNote(data,state,decisionOptions());
+  const peers = state.peerProfile ? "\n\nComparison-country starting weights\n" + state.peerProfile.peers.map((peer)=>peer.origin+": "+formatPercent(peer.weight,1)).join("\n") + "\nGeographic assumptions only; not measured route demand." : "";
+  const target = targetSolution ? "\n\nCapacity target check\n" + $("#targetResult").textContent : "";
+  return note.text + peers + target;
+}
+
+function printDecisionNote(note) {
+  const sheet = document.createElement("section");
+  sheet.id = "printSheet";
+  sheet.innerHTML = "<h1>Air2Stay · Decision note</h1><pre>" + planningEscape(note) + "</pre>";
+  document.body.append(sheet);
+  document.body.classList.add("printing-note");
+  try { window.print(); }
+  finally { sheet.remove(); document.body.classList.remove("printing-note"); }
+}
+
 function setupDecisionTools() {
   ["alternativeOrigin","sameComparisonAssumptions","refreshMonthAssumptions"].forEach((id)=>$("#"+id).addEventListener("input",()=>{if(id==="alternativeOrigin") $("#alternativeOrigin").dataset.userSelected="true";renderDecisionWorkspace();}));
   $("#refreshMonthAssumptions").addEventListener("input", () => {
@@ -1549,12 +1598,12 @@ function setupDecisionTools() {
   $("#targetGuestNights").addEventListener("input",()=>{targetSolution=null;$("#applyTarget").hidden=true;$("#targetResult").textContent="Choose Calculate capacity to update the result.";});
   $("#applyTarget").addEventListener("click",()=>{if(!targetSolution?.met)return;state.extraFlights=targetSolution.requiredWeeklyFlights;setFormFromState();renderAll();});
   $("#applySeasonalConversion").addEventListener("click",()=>{state.conversionRate=CONVERSION_EVIDENCE.monthlyRates[state.month];state.seasonalConversion=true;setFormFromState();renderAll();$("#conversionStatus").textContent="Optional training-season assumption applied to your plan. The baseline is unchanged; the test did not show an accuracy improvement.";});
+  $("#printDecisionNote").addEventListener("click",()=>{
+    if ($("#inputError").hidden) printDecisionNote(decisionNoteForExport());
+  });
   $("#exportDecisionNote").addEventListener("click",()=>{
     if(!$("#inputError").hidden)return;
-    const note=decisionNote(data,state,decisionOptions());
-    const peerText=state.peerProfile ? "\n\nComparison-country starting weights\n"+state.peerProfile.peers.map((peer)=>peer.origin+": "+formatPercent(peer.weight,1)).join("\n")+"\nGeographic assumptions only; not measured route demand." : "";
-    const targetText = targetSolution ? "\n\nCapacity target check\n" + $("#targetResult").textContent : "";
-    downloadPlan(new Blob([note.text+peerText+targetText],{type:"text/plain;charset=utf-8"}),"Air2Stay-decision-note.txt");
+    downloadPlan(new Blob([decisionNoteForExport()],{type:"text/plain;charset=utf-8"}),"Air2Stay-decision-note.txt");
     guidedHelp?.track("export_decision");
     $("#planActionStatus").textContent="Decision note exported with assumptions, stress trials and next checks.";
   });
@@ -1580,6 +1629,7 @@ function setupDecisionTools() {
      $("#phoneMarketSummary").textContent = phoneScenario;
      currentProposalContext = null;
      proposalWorkspace?.update(null);
+     refreshFeaturePack();
      $("#inputError").textContent = pendingCountry ? "Choose and confirm a departure country to calculate a new route." : `Please enter ${invalid.id === "averageStay" ? "average nights per stay" : invalid.id === "seatsPerFlight" ? "seats per flight" : "a value"} between ${invalid.min} and ${invalid.max} to see the results.`;
      $("#phoneDrawerImpact").textContent = "—";
      $("#phoneDrawerImpactNote").textContent = $("#inputError").textContent;
@@ -1619,6 +1669,7 @@ function setupDecisionTools() {
    const nextContext = {inputs:JSON.parse(JSON.stringify({...state,bridgeOverride})),result,decision:decisionNote(data,state)};
    const changed = currentProposalContext && JSON.stringify(currentProposalContext.inputs) !== JSON.stringify(nextContext.inputs);
    currentProposalContext = nextContext;
+   refreshFeaturePack();
    proposalWorkspace?.update(nextContext);
    guidedHelp?.update(nextContext);
    if (changed) guidedHelp?.track("scenario_change");
@@ -1989,6 +2040,10 @@ function setControlsOpen(open) {
   button.setAttribute("aria-expanded", String(open));
   $("#adjustControlsLabel").textContent = open ? "Hide controls" : "Adjust plan";
   button.title = open ? "Hide plan controls" : "Show plan controls";
+  const wideToggle = $("#wideControlsToggle");
+  wideToggle.setAttribute("aria-expanded", String(open));
+  wideToggle.setAttribute("aria-label", open ? "Hide controls" : "Adjust plan");
+  wideToggle.title = open ? "Hide controls" : "Adjust plan";
   if (returnFocus) button.focus({preventScroll:true});
 }
 
@@ -2034,7 +2089,7 @@ function syncPhoneFocus() {
    }));
   
    const requested = new URLSearchParams(window.location.search).get("view");
-   const requestedButton = $(`.nav-tab[data-view="${requested}"]`);
+   const requestedButton = $$(".nav-tab").find((button) => button.dataset.view === requested);
    if (requestedButton) requestedButton.click();
  }
 
@@ -2048,11 +2103,11 @@ function syncPhoneFocus() {
    const weekly = $("#weeklyFlightControl");
    const aircraft = $("#aircraftControls");
    const aircraftBody = aircraft.querySelector(".control-group-body");
-   const wideControls = [$("#marketControls"), aircraft, $("#eventImpactGroup")];
+   const controlGroups = $$("#scenarioForm > .control-group");
    const syncPhoneLayout = () => {
      document.body.classList.toggle("phone-plan", phone.matches);
      (phone.matches ? $("#scenarioForm") : aircraftBody).prepend(weekly);
-     wideControls.forEach((group) => { group.open = !phone.matches; });
+     controlGroups.forEach((group) => { group.open = !phone.matches && group === aircraft; });
      syncPhoneFocus();
    };
    const setMode = (mode) => {
@@ -2096,15 +2151,17 @@ function syncPhoneFocus() {
    });
    $("#phoneDonePlan").addEventListener("click", () => setControlsOpen(false));
    $("#phoneResetPlan").addEventListener("click", () => $("#resetScenario").click());
-   $("#adjustControls").addEventListener("click", () => {
+   const toggleControls = () => {
      const open = !document.body.classList.contains("controls-open");
      setControlsOpen(open);
-     if (open) (phone.matches ? $("#extraFlights") : $("#origin")).focus({preventScroll:true});
-   });
+     if (open) (phone.matches ? $("#extraFlights") : $("#aircraftControls summary")).focus({preventScroll:true});
+   };
+   $("#adjustControls").addEventListener("click", toggleControls);
+   $("#wideControlsToggle").addEventListener("click", toggleControls);
    document.addEventListener("keydown", (event) => {
      if (event.key === "Escape" && !event.defaultPrevented &&
          !document.querySelector("dialog[open]") &&
-         event.target.closest("#planControls, #adjustControls")) {
+         event.target.closest("#planControls, #adjustControls, #controlRail")) {
        setControlsOpen(false);
      }
    });
@@ -2117,6 +2174,7 @@ function syncPhoneFocus() {
    }));
    $("#showDetails").addEventListener("click", () => {
      setMode("details");
+     $('.detail-tier[data-tier="1"]').open = true;
      $(".workspace-toolbar").scrollIntoView({block: "start"});
      $('.view-mode[data-mode="details"]').focus();
    });
@@ -2144,7 +2202,28 @@ function updateStartingMarkers() {
     const position = Math.max(0, Math.min(100, (value - Number(field.min)) / (Number(field.max) - Number(field.min)) * 100));
     shell.style.setProperty("--start", position + "%");
     shell.querySelector(".starting-tick").title = "Starting value: " + value.toFixed(1);
-    shell.closest("label").classList.toggle("changed", Math.abs(Number(state[field.id]) - starting[field.id]) > 1e-7);
+    const group = shell.closest("label, .flight-control");
+    if (!group) continue;
+    const changed = Math.abs(Number(state[field.id]) - starting[field.id]) > 1e-7;
+    group.classList.toggle("changed", changed);
+    let undo = shell.querySelector(".undo-range-change");
+    if (!undo) {
+      undo = document.createElement("button");
+      undo.type = "button";
+      undo.className = "undo-range-change text-action";
+      undo.textContent = "Undo change";
+      undo.setAttribute("aria-label", "Undo change to " + (group.querySelector(".control-label")?.textContent || field.id));
+      undo.addEventListener("click", () => {
+        field.value = undo.dataset.start;
+        field.dataset.displayed = field.value;
+        field.dataset.exact = undo.dataset.start;
+        if (field.id === "conversionRate") state.seasonalConversion = false;
+        renderAll();
+      });
+      shell.append(undo);
+    }
+    undo.dataset.start = String(value);
+    undo.hidden = !changed;
   }
 }
 
@@ -2291,6 +2370,564 @@ function downloadPlan(blob, name) {
    $("#printGuide").addEventListener("click", () => window.print());
  }
   
+function featureLineChart(labels, series, unit) {
+  const maximum = Math.max(1, ...series.flatMap((row) => row.values));
+  const x = (index) => 24 + index * 432 / Math.max(1, labels.length - 1);
+  const y = (value) => 132 - value * 112 / maximum;
+  const description = series.map((row) => row.label + ": " + row.values.map((value, i) => labels[i] + " " + formatNumber(value)).join(", ")).join(". ");
+  return `<div class="feature-line-key">${series.map((row, i) => `<span class="series-${i}"><i></i>${planningEscape(row.label)}</span>`).join("")}</div>
+    <svg class="feature-line-chart" viewBox="0 0 480 160" role="img" aria-label="${planningEscape(unit + ". " + description)}">
+      <path class="feature-chart-axis" d="M24 132H456"/>${series.map((row, i) => `<polyline class="series-${i}" fill="none" points="${row.values.map((value, j) => x(j) + "," + y(value)).join(" ")}"/>`).join("")}
+      ${labels.map((label, i) => `<text x="${x(i)}" y="153" text-anchor="middle">${planningEscape(label)}</text>`).join("")}
+    </svg>`;
+}
+
+function renderFeatureStatistics(context) {
+  if (!context) {
+    $("#statsContext").textContent = "Correct the highlighted plan inputs to refresh these charts.";
+    $("#statsCharts").replaceChildren();
+    return;
+  }
+  const { inputs, result } = context;
+  const shortMonths = data.months.map((name) => name.slice(0, 3));
+  const yearly = data.months.map((_, index) => {
+    const month = index + 1;
+    return month === inputs.month ? result : runScenario(data, resolvedMonthInputs(month, inputs));
+  });
+  const markets = data.routes.filter((row) => row.month === inputs.month).sort((a,b) => b.baselineSeats - a.baselineSeats);
+  const visitors = [...result.contributions].sort((a,b) => b.weight - a.weight);
+  const seatTotals = data.months.map((_, index) => data.routes.filter((row) => row.month === index + 1).reduce((sum,row) => sum + row.baselineSeats,0));
+  const labels = data.validation.map((row) => shortMonths[Number(row.month.slice(5)) - 1]);
+  const metrics = data.metrics;
+  const charts = [
+    ["Guest nights through the year", "Selected route · baseline and current plan", featureLineChart(shortMonths, [
+      {label:"Usual",values:yearly.map((row)=>row.baseline.guestNights)},
+      {label:"Plan",values:yearly.map((row)=>row.scenario.guestNights)},
+    ],"Guest nights")],
+    ["Largest departure markets", "Past flight seats in the selected month", featureBarChart(markets.slice(0,6).map((row)=>({label:row.origin,value:row.baselineSeats})), "Past flight seats")],
+    ["Visitor nationality shares", "Estimated hotel check-in mix for this plan", featureBarChart([
+      ...visitors.slice(0,5).map((row)=>({label:row.nationality,value:row.weight})),
+      {label:"Other nationalities",value:visitors.slice(5).reduce((sum,row)=>sum+row.weight,0)},
+    ],"Estimated nationality share",(value)=>formatPercent(value,1))],
+    ["Estimates vs real hotel arrivals (2025)", metrics.validationPeriod, featureLineChart(labels, [
+      {label:"Recorded",values:data.validation.map((row)=>row.actual)},
+      {label:"Live chain",values:data.validation.map((row)=>row.transparent)},
+      {label:"Hybrid",values:data.validation.map((row)=>row.predicted)},
+    ],"Hotel arrivals")],
+    ["Error of each method", "Weighted error on the same held-out months · lower is closer", featureBarChart([
+      {label:"Live chain",value:metrics.liveChainWmape},
+      {label:"Seasonal",value:metrics.seasonalChainWmape},
+      {label:"Hybrid",value:metrics.flightToCheckinsWmape},
+    ],"Weighted validation error",(value)=>formatPercent(value,2))],
+    ["Total seats by month", "Past average seats across included markets", featureLineChart(shortMonths,[{label:"Past seats",values:seatTotals}],"Flight seats")],
+  ];
+  $("#statsContext").textContent = result.route.origin + " · " + data.months[inputs.month - 1];
+  $("#statsCharts").innerHTML = charts.map(([title,note,chart])=>`<section class="content-block stats-card"><h2>${planningEscape(title)}</h2><p>${planningEscape(note)}</p>${chart}</section>`).join("");
+}
+
+function setupFeaturePack() {
+  const storageKey = "air2stay:team-workspace:v1";
+  const directory = [
+    {name:"Planning team",email:"planning@air2stay.example"},
+    {name:"Hotel partners",email:"hotels@air2stay.example"},
+    {name:"Airline team",email:"airline@air2stay.example"},
+    {name:"Review team",email:"review@air2stay.example"},
+  ];
+  const requestStates = {waiting:"Waiting",approved:"Approved",changes:"Changes requested",rejected:"Rejected"};
+  const team = {
+    profile:null,
+    requests:[{id:"example-review",title:"Review the seasonal flight proposal",recipient:"Review team",priority:"Normal",note:"Example request to demonstrate the review flow.",status:"waiting",example:true}],
+    messages:[{id:"example-message",folder:"inbox",from:directory[0].email,recipients:[],subject:"Welcome to the planning workspace",body:"Use this example to try a reply or make a follow-up task.",priority:"Normal",tone:"Professional",attachments:[],unread:true,example:true}],
+    notifications:[{id:"example-notification",text:"Example · A sample plan is waiting for review.",unread:true}],
+  };
+  try {
+    const stored = JSON.parse(localStorage.getItem(storageKey));
+    if (stored?.profile?.name && typeof stored.profile.name === "string") team.profile = stored.profile;
+    for (const key of ["requests","messages","notifications"]) {
+      if (Array.isArray(stored?.[key])) team[key] = stored[key].filter((item)=>item && typeof item.id === "string");
+    }
+  } catch { /* Unavailable or unreadable browser storage. */ }
+
+  const esc = planningEscape;
+  const makeId = () => globalThis.crypto?.randomUUID?.() || Date.now().toString(36) + Math.random().toString(36).slice(2);
+  const shortcutRail = $(".team-rail");
+  const railHandle = $(".team-rail-handle");
+  let railDrag = null;
+  const positionRail = (top) => {
+    const headerBottom = document.querySelector("body > header")?.getBoundingClientRect().bottom || 0;
+    const lower = Math.max(8, headerBottom + 8);
+    const upper = Math.max(lower, window.innerHeight - shortcutRail.offsetHeight - 8);
+    shortcutRail.style.top = `${Math.min(upper, Math.max(lower, top))}px`;
+    shortcutRail.style.transform = "none";
+  };
+  railHandle.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) return;
+    railDrag = { y:event.clientY, top:shortcutRail.getBoundingClientRect().top };
+    railHandle.setPointerCapture(event.pointerId);
+    event.preventDefault();
+  });
+  railHandle.addEventListener("pointermove", (event) => {
+    if (railDrag) positionRail(railDrag.top + event.clientY - railDrag.y);
+  });
+  const finishRailDrag = () => { railDrag = null; };
+  railHandle.addEventListener("pointerup", finishRailDrag);
+  railHandle.addEventListener("pointercancel", finishRailDrag);
+  railHandle.addEventListener("lostpointercapture", finishRailDrag);
+  railHandle.addEventListener("keydown", (event) => {
+    if (!["ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    const top = shortcutRail.getBoundingClientRect().top;
+    positionRail(event.key === "Home" ? 0 : event.key === "End" ? window.innerHeight : top + (event.key === "ArrowUp" ? -24 : 24));
+  });
+  window.addEventListener("resize", () => {
+    if (shortcutRail.style.top && shortcutRail.offsetHeight) positionRail(shortcutRail.getBoundingClientRect().top);
+  });
+  const teamDrawer = $("#teamDrawer");
+  const drawerBody = $("#teamDrawerBody");
+  const profileDialog = $("#profileDialog");
+  const profileForm = $("#profileForm");
+  const compose = $("#composeDialog");
+  const messageForm = $("#messageForm");
+  let teamTab = "tasks";
+  let folder = "inbox";
+  let draftId = "";
+  let attachments = [];
+  let toastTimer;
+  const selectPage = (view) => $$(".nav-tab").find((button)=>button.dataset.view === view)?.click();
+  const selectPlanMode = (mode) => {
+    selectPage("scenarioView");
+    $$(".view-mode").find((button)=>button.dataset.mode === mode)?.click();
+  };
+  const reveal = (element) => {
+    if (!element) return;
+    for (let group = element.closest("details"); group; group = group.parentElement.closest("details")) group.open = true;
+    element.scrollIntoView({block:"nearest"});
+  };
+  const toast = (text) => {
+    const element = $("#featureToast");
+    element.textContent = text;
+    element.hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { element.hidden = true; }, 4500);
+  };
+  const persist = (notice) => {
+    let saved = true;
+    try { localStorage.setItem(storageKey, JSON.stringify(team)); }
+    catch { saved = false; }
+    renderBadges();
+    if (notice || !saved) toast((notice || "") + (saved ? "" : " Browser storage is unavailable. Changes last for this visit only."));
+  };
+  const addNotification = (text) => {
+    team.notifications.unshift({id:makeId(),text,unread:true});
+    team.notifications.length = Math.min(team.notifications.length, 100);
+  };
+  function renderBadges() {
+    const unread = team.notifications.filter((row)=>row.unread).length;
+    const waiting = team.requests.filter((row)=>row.status === "waiting").length;
+    const counts = {
+      messageUnread:team.messages.filter((row)=>row.folder==="inbox" && row.unread).length,
+      notificationCount:unread + (proposalWorkspace?.contextSummary()?.checks || []).filter(row=>row.status !== "green").length,
+      railNotificationCount:unread + (proposalWorkspace?.contextSummary()?.checks || []).filter(row=>row.status !== "green").length,
+      railTaskCount:waiting,
+    };
+    for (const [id,count] of Object.entries(counts)) {
+      const badge = $("#"+id);
+      badge.textContent = count > 99 ? "99+" : String(count);
+      badge.hidden = !count;
+    }
+    const pendingChecks = (proposalWorkspace?.contextSummary()?.checks || []).filter(row=>row.status !== "green").length;
+    const notificationLabel = `Actions and notifications (${pendingChecks} checks need attention, ${unread} unread notifications)`;
+    $("#openNotifications").setAttribute("aria-label", notificationLabel);
+    $("#railNotificationCount").parentElement.setAttribute("aria-label", notificationLabel);
+    $("#railTaskCount").parentElement.setAttribute("aria-label", waiting ? `Tasks (${waiting} waiting)` : "Tasks");
+  }
+
+  function renderProfile() {
+    const name = team.profile?.name || "";
+    $("#profileAvatar").textContent = name[0]?.toUpperCase() || "";
+    $("#profileWelcome").textContent = name ? "Welcome, " + name.split(/\s+/)[0] : "Sign in";
+    const menu = $(".profile-menu summary");
+    menu.title = name ? name + " · " + team.profile.role : "Sign in";
+    menu.setAttribute("aria-label", name ? "Welcome, " + name.split(/\s+/)[0] + " · Profile menu" : "Sign in");
+  }
+
+  function openProfile() {
+    $(".profile-menu").open = false;
+    profileForm.reset();
+    if (!profileDialog.open) profileDialog.showModal();
+    $("#profileName").focus();
+  }
+
+  $("#profileName").addEventListener("input", (event)=>event.target.setCustomValidity(""));
+  profileForm.addEventListener("submit", (event)=>{
+    event.preventDefault();
+    const fields = new FormData(profileForm);
+    const name = fields.get("name").trim();
+    if (!name) {
+      $("#profileName").setCustomValidity("Enter your name.");
+      $("#profileName").reportValidity();
+      return;
+    }
+    team.profile = {name,role:fields.get("role")};
+    renderProfile();
+    profileDialog.close();
+    persist("Welcome, " + name.split(/\s+/)[0] + ".");
+  });
+  profileDialog.addEventListener("cancel", (event)=>{ if (!team.profile) event.preventDefault(); });
+  $("#switchProfile").addEventListener("click", openProfile);
+  $("#signOutProfile").addEventListener("click", ()=>{
+    team.profile = null;
+    renderProfile();
+    persist();
+    openProfile();
+  });
+
+  function renderTeamDrawer() {
+    $$(".team-tabs [data-team-tab]").forEach((button)=>button.setAttribute("aria-pressed", String(button.dataset.teamTab === teamTab)));
+    if (teamTab === "tasks") {
+      const count = (status) => team.requests.filter((item)=>item.status === status).length;
+      drawerBody.innerHTML = `<h3>Approvals and tasks</h3><p class="feature-muted">Local review workspace. Requests and decisions stay in this browser.</p>
+        <div class="request-counts"><span><strong>${count("waiting")}</strong> Waiting</span><span><strong>${count("approved")}</strong> Approved</span><span><strong>${count("changes")+count("rejected")}</strong> Sent back</span></div>
+        <details class="feature-card" id="requestComposer"><summary>Ask for approval of this plan</summary><form id="requestForm" class="feature-form">
+          <label>Title<input name="title" required maxlength="140"></label>
+          <div class="feature-form-grid"><label>Send to<input name="recipient" required maxlength="100" placeholder="Review team"></label><label>Priority<select name="priority"><option>Normal</option><option>High</option><option>Low</option></select></label></div>
+          <label>Due date<input type="date" name="due"></label><label>Note<textarea name="note" rows="3" maxlength="1000"></textarea></label>
+          <label class="feature-checkbox"><input type="checkbox" name="attach" ${currentProposalContext ? "checked" : "disabled"}>Attach the current plan</label>
+          <p class="feature-muted" id="requestStatus" role="status"></p><button class="feature-primary" type="submit">Create request</button>
+        </form></details>
+        <div class="feature-stack">${team.requests.map((item)=>`<article class="feature-card request-card" data-request-id="${esc(item.id)}">
+          <div class="feature-card-title"><h4>${esc(item.title)}</h4><span class="feature-status status-${esc(item.status)}">${esc(requestStates[item.status] || "Waiting")}</span></div>
+          <p class="feature-muted">${esc(item.recipient)} · ${esc(item.priority)}${item.due ? " · Due " + esc(item.due) : ""}${item.example ? " · Example" : ""}</p>
+          ${item.note ? `<p>${esc(item.note)}</p>` : ""}
+          <div class="feature-button-row">${item.status === "waiting"
+            ? '<button type="button" data-request-action="approved">Approve</button><button type="button" data-request-action="changes">Ask for changes</button><button type="button" data-request-action="rejected">Reject</button>'
+            : '<button type="button" data-request-action="waiting">Reopen</button>'}
+            ${item.plan ? '<button type="button" data-request-action="open">Open this plan</button>' : ""}</div></article>`).join("") || '<p class="feature-muted">No review requests yet.</p>'}</div>`;
+    } else if (teamTab === "notifications") {
+      const checks = proposalWorkspace?.contextSummary()?.checks || [];
+      drawerBody.innerHTML = `<h3>Actions</h3><p class="feature-muted">Review a check to open it in Follow-ups.</p>
+        <div class="notification-checks">${checks.map(row=>`<article class="notification-check is-${esc(row.status)}"><div><h4>${esc(row.title)}</h4><small>${row.status === "green" ? "Done" : row.status === "red" ? "Overdue" : "To check"}</small></div><button type="button" data-review-planning-check="${esc(row.id)}">Review</button></article>`).join("") || '<p class="feature-muted">Choose a valid plan to see its checks.</p>'}</div>
+        <div class="feature-card-title"><h3>Notifications</h3><button type="button" id="readAllNotifications"${team.notifications.some((item)=>item.unread) ? "" : " disabled"}>Mark all as read</button></div>
+        <ul class="notification-list">${team.notifications.map((item)=>`<li class="${item.unread ? "unread" : ""}">${esc(item.text)} ${item.unread ? '<small>Unread</small>' : ""}</li>`).join("") || "<li>No notifications yet.</li>"}</ul>`;
+    } else {
+      const messages = teamTab === "messages";
+      drawerBody.innerHTML = messages ? `<h3>Messages</h3><p class="feature-muted">${team.messages.filter((row)=>row.folder==="inbox"&&row.unread).length} unread in this browser.</p>
+        <button type="button" data-feature-page="messagesView" class="feature-primary">Open Messages</button>`
+        : '<h3>Statistics</h3><p class="feature-muted">See the current plan, past flight capacity, visitor mix and model checks.</p><button type="button" data-feature-page="statsView" class="feature-primary">Open Statistics</button>';
+    }
+  }
+
+  function openTeam(tab) {
+    teamTab = tab;
+    renderTeamDrawer();
+    if (!teamDrawer.open) teamDrawer.showModal();
+  }
+
+  drawerBody.addEventListener("submit", (event)=>{
+    if (event.target.id !== "requestForm") return;
+    event.preventDefault();
+    const fields = new FormData(event.target);
+    const title = fields.get("title").trim();
+    const recipient = fields.get("recipient").trim();
+    if (!title || !recipient) { $("#requestStatus").textContent = "Enter a title and recipient."; return; }
+    const attached = fields.has("attach") && currentProposalContext ? planSnapshot() : null;
+    team.requests.unshift({id:makeId(), title, recipient, priority:fields.get("priority"), due:fields.get("due"), note:fields.get("note").trim(), plan:attached, status:"waiting"});
+    addNotification("Approval requested · " + title);
+    persist("Approval request saved.");
+    renderTeamDrawer();
+  });
+
+  drawerBody.addEventListener("click", (event)=>{
+    const button = event.target.closest("button");
+    if (!button) return;
+    if (button.dataset.reviewPlanningCheck) {
+      teamDrawer.close();
+      selectPage("scenarioView");
+      const review = [...document.querySelectorAll('[data-pw-rail="review"]')].find(item=>item.dataset.check === button.dataset.reviewPlanningCheck);
+      if (review) review.click();
+      else selectPlanMode("proposal");
+      return;
+    }
+    if (button.id === "readAllNotifications") {
+      team.notifications.forEach((item)=>{item.unread=false;});
+      persist();
+      renderTeamDrawer();
+      return;
+    }
+    const item = team.requests.find((row)=>row.id === button.closest("[data-request-id]")?.dataset.requestId);
+    const action = button.dataset.requestAction;
+    if (!item || !action) return;
+    if (action === "open") {
+      try {
+        restorePlan(item.plan);
+        teamDrawer.close();
+        selectPlanMode("focus");
+        toast("Attached plan opened.");
+      } catch (error) { toast(error.message); }
+      return;
+    }
+    item.status = action;
+    addNotification(requestStates[action] + " · " + item.title);
+    persist("Request updated · " + requestStates[action] + ".");
+    renderTeamDrawer();
+  });
+
+  function renderMessages() {
+    const priority = $("#messagePriority").value;
+    const search = $("#messageSearch").value.trim().toLowerCase();
+    const shown = team.messages.filter((item)=>item.folder === folder && (!priority || item.priority === priority)
+      && [item.subject,item.body,item.from,...(item.recipients || [])].join(" ").toLowerCase().includes(search));
+    $("#messageList").innerHTML = shown.map((item)=>`<article class="feature-card message-card" data-message-id="${esc(item.id)}">
+      <details${item.expanded ? " open" : ""}><summary><span>${esc(item.subject)}${item.unread ? " · Unread" : ""}</span><small>${esc(item.priority)}${item.example ? " · Example" : ""}</small></summary>
+      <p class="feature-muted">${esc(item.folder === "inbox" ? "From " + item.from : "To " + (item.recipients || []).join(", "))}</p>
+      <p class="message-body">${esc(item.body || "")}</p>
+      ${item.attachments?.length ? `<ul>${item.attachments.map((file)=>`<li>${esc(file.label)}</li>`).join("")}</ul>` : ""}
+      <div class="feature-button-row">${item.folder === "drafts" ? '<button type="button" data-message-action="edit">Edit draft</button>' : '<button type="button" data-message-action="reply">Reply</button><button type="button" data-message-action="forward">Forward</button><button type="button" data-message-action="task">Make it a task</button>'}<button type="button" data-message-action="delete">Delete</button></div>
+      </details></article>`).join("") || '<p class="feature-muted">No messages match this view.</p>';
+    $$(".message-card > details").forEach((details)=>details.addEventListener("toggle", ()=>{
+      const item = team.messages.find((row)=>row.id === details.parentElement.dataset.messageId);
+      if (!item) return;
+      item.expanded = details.open;
+      if (details.open && item.unread) {
+        item.unread = false;
+        const title = details.querySelector("summary > span");
+        title.textContent = item.subject;
+        persist();
+      }
+    }));
+  }
+
+  const field = (name) => messageForm.elements.namedItem(name);
+  const recipients = () => [...messageForm.querySelectorAll('[name="recipient"]:checked')].map((input)=>input.value);
+  function renderAttachments() {
+    $("#attachmentList").innerHTML = attachments.map((file,index)=>`<li>${esc(file.label)} <button type="button" data-attachment-index="${index}" aria-label="Remove ${esc(file.label)}">Remove</button></li>`).join("");
+  }
+
+  function openCompose(item = {}, edit = false) {
+    draftId = edit ? item.id : "";
+    messageForm.reset();
+    field("subject").value = item.subject || "";
+    field("body").value = item.body || "";
+    field("priority").value = item.priority || "Normal";
+    field("tone").value = item.tone || "Professional";
+    messageForm.querySelectorAll('[name="recipient"]').forEach((input)=>{input.checked = (item.recipients || []).includes(input.value);});
+    attachments = [...(item.attachments || [])];
+    renderAttachments();
+    $("#composeStatus").textContent = "";
+    if (teamDrawer.open) teamDrawer.close();
+    if (!compose.open) compose.showModal();
+    (edit ? field("body") : field("subject")).focus();
+  }
+
+  function saveMessage(destination) {
+    const subject = field("subject").value.trim();
+    const to = recipients();
+    if (destination === "sent" && (!subject || !to.length)) {
+      $("#composeStatus").textContent = "Choose at least one recipient and enter a subject.";
+      return;
+    }
+    const item = {id:draftId || makeId(), folder:destination, subject:subject || "Untitled draft", recipients:to,
+      priority:field("priority").value, tone:field("tone").value, body:field("body").value.trim(), attachments, unread:false};
+    team.messages = [item,...team.messages.filter((row)=>row.id !== item.id)];
+    persist(destination === "sent" ? "Message saved in Sent on this browser." : "Draft saved.");
+    compose.close();
+    folder = destination;
+    $("#messagePriority").value = "";
+    $("#messageSearch").value = "";
+    updateMessageFolder();
+  }
+
+  function updateMessageFolder() {
+    $$(".message-toolbar [data-folder]").forEach((button)=>button.setAttribute("aria-pressed",String(button.dataset.folder === folder)));
+    renderMessages();
+  }
+
+  $("#recipientChips").innerHTML = directory.map(({name,email})=>`<label title="${esc(email)}"><input type="checkbox" name="recipient" value="${esc(email)}">${esc(name)}</label>`).join("");
+  $("#composeMessage").addEventListener("click",()=>openCompose());
+  messageForm.addEventListener("submit",(event)=>{event.preventDefault();saveMessage("sent");});
+  $("#saveMessageDraft").addEventListener("click",()=>saveMessage("drafts"));
+  $("#draftAssist").addEventListener("click",()=>{
+    const subject = field("subject").value.trim();
+    if (!subject) { $("#composeStatus").textContent = "Enter a subject for the draft first."; field("subject").focus(); return; }
+    const context = currentProposalContext;
+    const tone = field("tone").value;
+    const greeting = tone === "Friendly" ? "Hi team!" : tone === "Direct" ? "Team," : "Hello team,";
+    const ask = tone === "Friendly" ? "Could you share your thoughts when you get a chance?" : tone === "Direct" ? "Please review the assumptions and flag any changes." : "Please review the plan assumptions and share any feedback.";
+    const summary = context ? `The current proposal covers ${context.result.route.origin} in ${data.months[context.inputs.month-1]}. Compared with the baseline, it estimates ${formatSigned(context.result.delta.hotelCheckins)} hotel check-ins and ${formatSigned(context.result.delta.guestNights)} guest nights.` : "The plan results can be added once its inputs are valid.";
+    const draft = greeting + "\n\n" + subject + "\n\n" + summary + "\n\n" + ask + (tone === "Direct" ? "" : "\n\nThanks,\n" + (team.profile?.name || "Air2Stay planning team"));
+    const body = field("body");
+    body.value = (body.value.trim() ? body.value.trim() + "\n\n" + draft : draft).slice(0,4000);
+    $("#composeStatus").textContent = "Draft text added. Review it before sending.";
+  });
+
+  function addFiles(files) {
+    const additions = [...files].map((file)=>({label:file.name.slice(0,200) + " · " + formatNumber(file.size) + " bytes"}));
+    attachments = [...attachments,...additions].slice(0,20);
+    renderAttachments();
+  }
+  $("#attachmentFiles").addEventListener("change",(event)=>{addFiles(event.target.files);event.target.value="";});
+  $("#attachmentDrop").addEventListener("dragover",(event)=>event.preventDefault());
+  $("#attachmentDrop").addEventListener("drop",(event)=>{event.preventDefault();addFiles(event.dataTransfer.files);});
+  $("#addAttachmentUrl").addEventListener("click",()=>{
+    const input = $("#attachmentUrl");
+    try {
+      const url = new URL(input.value);
+      if (!["https:","http:"].includes(url.protocol) || attachments.length >= 20 || input.value.length > 400) throw Error();
+      attachments.push({label:url.href});
+      input.value = "";
+      $("#composeStatus").textContent = "";
+      renderAttachments();
+    } catch { $("#composeStatus").textContent = "Use a short http or https link. A message can include up to 20 attachments."; }
+  });
+  $("#attachmentList").addEventListener("click",(event)=>{
+    const button = event.target.closest("[data-attachment-index]");
+    if (!button) return;
+    attachments.splice(Number(button.dataset.attachmentIndex),1);
+    renderAttachments();
+  });
+
+  $("#messagePriority").addEventListener("change",renderMessages);
+  $("#messageSearch").addEventListener("input",renderMessages);
+  $("#messageList").addEventListener("click",(event)=>{
+    const action = event.target.closest("[data-message-action]")?.dataset.messageAction;
+    const item = team.messages.find((row)=>row.id === event.target.closest("[data-message-id]")?.dataset.messageId);
+    if (!action || !item) return;
+    if (action === "edit") openCompose(item,true);
+    if (action === "reply") openCompose({subject:"Re: " + item.subject, recipients:item.from ? [item.from] : item.recipients, priority:item.priority});
+    if (action === "forward") openCompose({subject:"Fwd: " + item.subject, body:item.body, attachments:item.attachments, priority:item.priority});
+    if (action === "delete") {
+      team.messages = team.messages.filter((row)=>row.id !== item.id);
+      persist("Message deleted.");
+      renderMessages();
+    }
+    if (action === "task") {
+      team.requests.unshift({id:makeId(),title:item.subject,recipient:"Planning team",priority:item.priority,note:item.body,status:"waiting"});
+      addNotification("Task created · " + item.subject);
+      persist("Task created from this message.");
+      openTeam("tasks");
+    }
+  });
+
+  document.addEventListener("click",(event)=>{
+    const button = event.target.closest("button");
+    if (!button) return;
+    if (button.dataset.teamOpen || button.dataset.teamTab) openTeam(button.dataset.teamOpen || button.dataset.teamTab);
+    if (button.dataset.featurePage) {
+      if (teamDrawer.open) teamDrawer.close();
+      selectPage(button.dataset.featurePage);
+    }
+    if (button.dataset.controlGroup) {
+      setControlsOpen(true);
+      const section = $("#"+button.dataset.controlGroup);
+      section.open = true;
+      reveal(section);
+      section.querySelector("summary").focus({preventScroll:true});
+    }
+    if (button.dataset.folder) { folder = button.dataset.folder; updateMessageFolder(); }
+    if (button.dataset.view === "statsView") refreshFeaturePack();
+    if (button.dataset.view === "messagesView") renderMessages();
+  });
+
+  const search = $("#appSearch");
+  const searchResults = $("#appSearchResults");
+  let matches = [];
+  let activeResult = -1;
+  const jump = (mode, selector) => () => {
+    selectPlanMode(mode);
+    reveal($(selector));
+  };
+  const controls = [
+    ["Departure country","#origin"],["Month","#month"],["Weekly flight change","#extraFlights"],["Seats on each flight","#seatsPerFlight"],
+    ["Flight occupancy","#loadFactor"],["Event or disruption","#eventImpactGroup"],["Hotel use","#conversionRate"],["Average stay","#averageStay"],["Visitor purpose","#routePurpose"],["Trip ends in Abu Dhabi","#p2pShare"],
+  ];
+  function searchEntries() {
+    const pages = $$(".nav-tab").map((button)=>({label:button.childNodes[0].textContent.trim(),type:"Page",open:()=>button.click()}));
+    const modes = $$(".view-mode").filter((button)=>!button.hidden).map((button)=>({label:button.textContent,type:"Plan view",open:()=>selectPlanMode(button.dataset.mode)}));
+    const compare = [["Compare months","#monthChart"],["Stress test","#stressChart"],["Guest-night target","#targetGuestNights"],["Decision note","#planningDecision"],["Compare routes","#routeOptions"]].map(([label,selector])=>({label,type:"Compare",open:jump("decisions",selector)}));
+    const tiers = $$(".detail-tier").map((item)=>({label:item.querySelector("summary").textContent.trim(),type:"Details",open:()=>{selectPlanMode("details");item.open=true;reveal(item);}}));
+    const fields = controls.map(([label,selector])=>({label,type:"Control",open:()=>{selectPlanMode("focus");setControlsOpen(true);const field=$(selector);reveal(field);if (field.matches("input,select")) field.focus({preventScroll:true});}}));
+    const routes = knownOrigins().map(({key,name})=>({label:name,type:"Departure country",open:()=>{selectPlanMode("focus");const origin=$("#origin");origin.value=key;origin.dispatchEvent(new Event("input",{bubbles:true}));}}));
+    const newRoutes = [...$("#newMarketCountryList").options].map((option)=>({label:option.value,type:"New departure country",open:()=>{selectPlanMode("focus");const origin=$("#origin");origin.value="__NEW_ROUTE__";origin.dispatchEvent(new Event("input",{bubbles:true}));const input=$("#newMarketCountry");input.value=option.value;input.dispatchEvent(new Event("input",{bubbles:true}));$("#confirmNewMarket").click();}}));
+    const months = data.months.map((label,index)=>({label,type:"Month",open:()=>{selectPlanMode("focus");const month=$("#month");month.value=String(index+1);month.dispatchEvent(new Event("input",{bubbles:true}));}}));
+    const terms = $$("#glossaryGrid .definition").map((card)=>({label:card.querySelector("h3").textContent,type:"Term guide",open:()=>{selectPage("glossaryView");const field=$("#glossarySearch");field.value="";field.dispatchEvent(new Event("input"));reveal(card);}}));
+    const messages = team.messages.map((item)=>({label:item.subject,type:"Message",open:()=>{item.expanded=true;folder=item.folder;$("#messagePriority").value="";$("#messageSearch").value="";selectPage("messagesView");updateMessageFolder();reveal($$(".message-card").find((card)=>card.dataset.messageId===item.id));}}));
+    const requests = team.requests.map((item)=>({label:item.title,type:"Approval request",open:()=>{openTeam("tasks");reveal($$(".request-card").find((card)=>card.dataset.requestId===item.id));}}));
+    return [...pages,...modes,...compare,...tiers,...fields,...routes,...newRoutes,...months,...terms,...messages,...requests];
+  }
+
+  function closeSearch() {
+    matches = [];
+    activeResult = -1;
+    searchResults.hidden = true;
+    search.setAttribute("aria-expanded","false");
+    search.removeAttribute("aria-activedescendant");
+  }
+  function setSearchResult(index) {
+    activeResult = index;
+    const options = [...searchResults.querySelectorAll('[role="option"]')];
+    options.forEach((option,i)=>option.setAttribute("aria-selected",String(i === index)));
+    if (options[index]) search.setAttribute("aria-activedescendant",options[index].id);
+  }
+  function chooseSearchResult(index) {
+    const selected = matches[index];
+    if (!selected) return;
+    search.value = "";
+    closeSearch();
+    search.blur();
+    selected.open();
+  }
+  search.addEventListener("input",()=>{
+    const query = search.value.trim().toLowerCase();
+    if (!query) { closeSearch(); return; }
+    matches = searchEntries().filter((item)=>[item.label,item.type].join(" ").toLowerCase().includes(query)).slice(0,12);
+    searchResults.innerHTML = matches.map((item,index)=>`<button type="button" id="search-option-${index}" role="option" aria-selected="false" tabindex="-1" data-search-index="${index}"><span>${esc(item.label)}</span><small>${esc(item.type)}</small></button>`).join("") || '<p>No matching results.</p>';
+    searchResults.hidden = false;
+    search.setAttribute("aria-expanded","true");
+    search.removeAttribute("aria-activedescendant");
+    activeResult = -1;
+  });
+  search.addEventListener("keydown",(event)=>{
+    if (event.key === "Escape") { closeSearch(); return; }
+    if (!matches.length) return;
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      setSearchResult(activeResult < 0 ? (event.key === "ArrowDown" ? 0 : matches.length-1) : (activeResult + (event.key === "ArrowDown" ? 1 : -1) + matches.length) % matches.length);
+    }
+    if (event.key === "Enter") { event.preventDefault(); chooseSearchResult(Math.max(0,activeResult)); }
+  });
+  searchResults.addEventListener("click",(event)=>{
+    const option=event.target.closest("[data-search-index]");
+    if (option) chooseSearchResult(Number(option.dataset.searchIndex));
+  });
+  document.addEventListener("click",(event)=>{if (!event.target.closest(".app-search")) closeSearch();});
+  document.addEventListener("focusin",(event)=>{if (!event.target.closest(".app-search")) closeSearch();});
+  document.addEventListener("keydown",(event)=>{
+    if (event.key === "/" && !event.altKey && !event.ctrlKey && !event.metaKey && !$("dialog[open]") && !event.target.closest("input,textarea,select,[contenteditable]")) {
+      event.preventDefault();
+      search.focus();
+    }
+  });
+
+  $('.detail-tier[data-tier="3"]').addEventListener("toggle",(event)=>{
+    if (event.target.open && currentProposalContext) {
+      lastRenderedRouteKey = null;
+      renderRouteMap(currentProposalContext.result);
+    }
+  });
+  refreshFeaturePack = () => {
+    if ($("#statsView").classList.contains("active")) renderFeatureStatistics(currentProposalContext);
+  };
+  $("#refreshMonthAssumptions").addEventListener("input", refreshFeaturePack);
+  new MutationObserver(()=>{
+    renderBadges();
+    if (teamDrawer.open && teamTab === "notifications") renderTeamDrawer();
+  }).observe($("#toggleProposalPanel"), {childList:true, subtree:true, attributes:true, attributeFilter:["disabled", "aria-label"]});
+  renderProfile();
+  renderBadges();
+  refreshFeaturePack();
+  if (!team.profile) openProfile();
+}
+
  async function init() {
    try {
      await loadData();
@@ -2311,6 +2948,7 @@ function downloadPlan(blob, name) {
      renderGlossary();
      if (chatEnabled) renderAssistantChat();
      renderAll();
+     setupFeaturePack();
    } catch (error) {
      document.body.innerHTML = `<main class="fatal"><h1>Air2Stay could not start</h1><p>${planningEscape(error.message)}</p><p>From the project folder, run <code>python run_local.py --check</code> to find missing files or packages. Follow the Quick Start in README.md, then open http://localhost:8765.</p></main>`;
    }

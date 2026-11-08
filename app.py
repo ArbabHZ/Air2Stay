@@ -51,9 +51,10 @@ st.markdown(
     html,
     body,
     [data-testid="stAppViewContainer"],
-    [data-testid="stAppViewContainer"] > .main,
+    [data-testid="stMain"],
     .stApp {
-        overflow: visible !important;
+        height: 100dvh !important;
+        overflow: hidden !important;
     }
 
     [data-testid="stAppViewContainer"], .stApp {
@@ -65,9 +66,8 @@ st.markdown(
         border: none;
         display: block;
         width: 100%;
-        height: 100vh !important;
-        min-height: 100vh;
-        overflow-y: auto;
+        height: 100dvh !important;
+        min-height: 0;
     }
     </style>
     """,
