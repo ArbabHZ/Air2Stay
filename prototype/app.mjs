@@ -392,14 +392,138 @@ function populatePurposeInputs() {
    return `<article class="kpi ${tone}"><p>${label}</p><strong>${value}</strong><small>${note}</small></article>`;
  }
   
+ function sparklineSvg(values, selectedIndex, { label, format }) {
+   const valid = values.filter(Number.isFinite);
+   const min = Math.min(...valid);
+   const max = Math.max(...valid);
+   const spread = max - min;
+   const x = (index) => 5 + index * 10;
+   const y = (value) => spread ? 34 - 34 * ((value - min) / spread + 0.1) / 1.2 : 17;
+   const segments = [];
+   let segment = [];
+   const hits = values.map((value, index) => {
+     if (!Number.isFinite(value)) {
+       segment = [];
+       return "";
+     }
+     if (!segment.length) segments.push(segment);
+     segment.push([x(index), y(value)]);
+     return `<rect x="${x(index) - 5}" width="10" height="34" fill="transparent"><title>${data.months[index].slice(0, 3)}: ${format(value)}</title></rect>`;
+   });
+   const paths = segments.map((points) => {
+     // Ease through the month values without overshooting local peaks or dips.
+     const steps = points.slice(1).map((point, index) => point[1] - points[index][1]);
+     const tangents = points.map((_, index) => {
+       const before = steps[index - 1];
+       const after = steps[index];
+       if (before === undefined || after === undefined) return before ?? after ?? 0;
+       return before * after > 0 ? 2 * before * after / (before + after) : 0;
+     });
+     const curves = points.slice(1).map(([endX, endY], index) => {
+       const [startX, startY] = points[index];
+       const third = (endX - startX) / 3;
+       return `C${startX + third},${startY + tangents[index] / 3} ${endX - third},${endY - tangents[index + 1] / 3} ${endX},${endY}`;
+     });
+     const line = `M${points[0].join(",")} ${curves.join(" ")}`;
+     return `<path class="result-spark-area" d="${line} L${points.at(-1)[0]},34 H${points[0][0]} Z"/><path class="result-spark-line" d="${line}" vector-effect="non-scaling-stroke"/>`;
+   }).join("");
+   const zeroLine = min < 0 && max > 0
+     ? `<path class="result-spark-zero" d="M0,${y(0)} H120" vector-effect="non-scaling-stroke"/>` : "";
+   const dot = Number.isFinite(values[selectedIndex])
+     ? `<span class="result-spark-dot" style="left:${x(selectedIndex) / 1.2}%;top:${y(values[selectedIndex])}px" aria-hidden="true"></span>` : "";
+   const summary = valid.length
+     ? `${label} by month, highest in ${data.months[values.indexOf(max)]} at ${format(max)}, lowest in ${data.months[values.indexOf(min)]} at ${format(min)}.`
+     : `${label} by month. No monthly estimates available.`;
+   const shape = values.map((value) => Number(Number.isFinite(value))).join("") + Number(Boolean(zeroLine)) + Number(Boolean(dot));
+   return `<div class="result-spark" data-shape="${shape}"><svg viewBox="0 0 120 34" preserveAspectRatio="none" role="img" aria-label="${planningEscape(summary)}">${zeroLine}${paths}${hits.join("")}</svg>${dot}</div>`;
+ }
+
+ function updateKpiTiles(markup) {
+   const container = $("#kpis");
+   const template = document.createElement("template");
+   template.innerHTML = markup;
+   [...template.content.children].forEach((next, index) => {
+     const tile = container.children[index];
+     if (!tile) {
+       container.append(next);
+       return;
+     }
+     const chart = tile.lastElementChild;
+     const nextChart = next.lastElementChild;
+     if (!chart.dataset.shape || chart.dataset.shape !== nextChart.dataset.shape) {
+       tile.replaceWith(next);
+       return;
+     }
+     [...next.children].slice(0, -1).forEach((element, i) => {
+       tile.children[i].className = element.className;
+       tile.children[i].textContent = element.textContent;
+     });
+     // Keep matching chart elements mounted so changes in geometry can transition.
+     const svg = chart.firstElementChild;
+     const nextSvg = nextChart.firstElementChild;
+     svg.setAttribute("aria-label", nextSvg.getAttribute("aria-label"));
+     [...nextSvg.children].forEach((element, i) => {
+       const current = svg.children[i];
+       if (element.localName === "path") current.setAttribute("d", element.getAttribute("d"));
+       else current.firstElementChild.textContent = element.firstElementChild.textContent;
+     });
+     const dot = chart.querySelector(".result-spark-dot");
+     if (dot) dot.style.cssText = nextChart.lastElementChild.style.cssText;
+   });
+ }
+
+ function resultRange(result) {
+   const { p10, p50, p90, baseline } = result;
+   const min = Math.min(p10, baseline.guestNights);
+   const max = Math.max(p90, baseline.guestNights);
+   const padding = (max - min) * 0.08 || 1;
+   const x = (value) => 120 * (value - min + padding) / (max - min + 2 * padding);
+   const estimate = Math.min(120, Math.max(0, x(p50)));
+   const description = `Possible range ${formatNumber(p10)} to ${formatNumber(p90)}; estimate ${formatNumber(p50)}. History-based planning guide, not a guaranteed probability range.`;
+   return `<div class="result-range" role="img" tabindex="0" title="${description}" aria-label="${description}">
+     <svg viewBox="0 0 120 34" preserveAspectRatio="none" aria-hidden="true">
+       <rect class="result-range-track" y="10" width="120" height="14" rx="6"/>
+       <rect class="result-range-band" x="${x(p10)}" y="10" width="${x(p90) - x(p10)}" height="14" rx="6"/>
+       <path class="result-range-marker" d="M${estimate},8 V26" vector-effect="non-scaling-stroke"/>
+     </svg><span class="result-range-tooltip" aria-hidden="true">${description}</span>
+   </div>`;
+ }
+
  function renderKpis(result) {
-   const direction = result.delta.guestNights >= 0 ? "positive" : "negative";
-   $("#kpis").innerHTML = [
-     kpiCard("Change in hotel check-ins", formatSigned(result.delta.hotelCheckins), result.eventUplift ? "Includes your event/disruption assumption" : "Estimated hotel arrivals", direction),
-     kpiCard("Change in guest nights", formatSigned(result.delta.guestNights), "Estimated nights spent in hotels", direction),
-     kpiCard("Estimated guest nights", formatNumber(result.p50), "Calculated from the flight inputs and hotel-stay assumptions below"),
-     kpiCard("Possible range", `${formatNumber(result.p10)} to ${formatNumber(result.p90)}`, "History-based planning guide; not a guaranteed probability range"),
-   ].join("");
+   const selectedIndex = state.month - 1;
+   const monthName = data.months[selectedIndex];
+   const isNewRoute = !result.route.knownMarket;
+   const source = { ...state, bridgeOverride };
+   const monthly = data.months.map((_, index) => {
+     if (index === selectedIndex) return result;
+     const month = index + 1;
+     try {
+       return runScenario(data, { ...resolvedMonthInputs(month, source), month });
+     } catch {
+       return null;
+     }
+   });
+   const tile = (label, value, note, chart, tone = "neutral", kind = "") =>
+     `<article class="result-tile ${kind}"><p class="result-tile-label">${label}</p><strong class="result-tile-value">${value}</strong><small class="result-tile-note ${tone}">${note}</small>${chart}</article>`;
+   const deltaTile = (key, unit) => {
+     const value = result.delta[key];
+     const label = value < 0 ? `Change in ${unit}` : `Extra ${unit}`;
+     const tone = isNewRoute || Math.round(Math.abs(value)) === 0 ? "neutral" : value > 0 ? "positive" : "negative";
+     const direction = { positive: "↑", negative: "↓", neutral: "No change" }[tone];
+     const note = isNewRoute ? "New route · all of this is extra" : `${direction} vs a usual ${monthName}`;
+     const chart = sparklineSvg(monthly.map((item) => item?.delta[key]), selectedIndex, { label, format: formatSigned });
+     return tile(label, formatSigned(value), note, chart, tone);
+   };
+   const compact = (value, precision = 0) => value >= 1e6 ? `${+(value / 1e6).toFixed(Math.max(1, precision))}M`
+     : value >= 1e3 ? `${+(value / 1e3).toFixed(precision)}k` : formatNumber(value);
+   const rangePrecision = compact(result.p10) === compact(result.p90) ? 1 : 0;
+   updateKpiTiles([
+     deltaTile("hotelCheckins", "hotel check-ins"),
+     deltaTile("guestNights", "guest nights"),
+     tile("Total guest nights", formatNumber(result.p50), isNewRoute ? "Usual: 0 (new route)" : `Usual: ${formatNumber(result.baseline.guestNights)}`,
+       sparklineSvg(monthly.map((item) => item?.scenario.guestNights), selectedIndex, { label: "Total guest nights", format: formatNumber })),
+     tile("Possible range", `${compact(result.p10, rangePrecision)} – ${compact(result.p90, rangePrecision)}`, "History-based guide", resultRange(result), "neutral", "result-tile-range"),
+   ].join(""));
  }
 
 function renderSideBySideComparison(result) {
@@ -1368,6 +1492,9 @@ function renderPlanningEvidence(result) {
 
 function setupDecisionTools() {
   ["alternativeOrigin","sameComparisonAssumptions","refreshMonthAssumptions"].forEach((id)=>$("#"+id).addEventListener("input",()=>{if(id==="alternativeOrigin") $("#alternativeOrigin").dataset.userSelected="true";renderDecisionWorkspace();}));
+  $("#refreshMonthAssumptions").addEventListener("input", () => {
+    if (currentProposalContext) renderKpis(currentProposalContext.result);
+  });
   $("#applyPurpose").addEventListener("click",()=>{
     if (!$("#inputError").hidden) { $("#purposeStatus").textContent="Correct the highlighted plan input before applying visitor assumptions."; return; }
     const shareField=$("#purposeHotelShare"), stayField=$("#purposeStay");
