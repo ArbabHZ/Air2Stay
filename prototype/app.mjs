@@ -450,7 +450,7 @@ function populatePurposeInputs() {
      }
      const chart = tile.lastElementChild;
      const nextChart = next.lastElementChild;
-     if (!chart.dataset.shape || chart.dataset.shape !== nextChart.dataset.shape) {
+     if (tile.className !== next.className || !chart.dataset.shape || chart.dataset.shape !== nextChart.dataset.shape) {
        tile.replaceWith(next);
        return;
      }
@@ -512,40 +512,92 @@ function populatePurposeInputs() {
      const direction = { positive: "↑", negative: "↓", neutral: "No change" }[tone];
      const note = isNewRoute ? "New route · all of this is extra" : `${direction} vs a usual ${monthName}`;
      const chart = sparklineSvg(monthly.map((item) => item?.delta[key]), selectedIndex, { label, format: formatSigned });
-     return tile(label, formatSigned(value), note, chart, tone);
+     return tile(label, formatSigned(value), note, chart, tone, key === "guestNights" ? "result-tile-guest" : "result-tile-checkins");
    };
    const compact = (value, precision = 0) => value >= 1e6 ? `${+(value / 1e6).toFixed(Math.max(1, precision))}M`
      : value >= 1e3 ? `${+(value / 1e3).toFixed(precision)}k` : formatNumber(value);
    const rangePrecision = compact(result.p10) === compact(result.p90) ? 1 : 0;
+   const changes = [deltaTile("hotelCheckins", "hotel check-ins"), deltaTile("guestNights", "guest nights")];
+   if (document.body.classList.contains("phone-focus")) changes.reverse();
    updateKpiTiles([
-     deltaTile("hotelCheckins", "hotel check-ins"),
-     deltaTile("guestNights", "guest nights"),
+     ...changes,
      tile("Total guest nights", formatNumber(result.p50), isNewRoute ? "Usual: 0 (new route)" : `Usual: ${formatNumber(result.baseline.guestNights)}`,
        sparklineSvg(monthly.map((item) => item?.scenario.guestNights), selectedIndex, { label: "Total guest nights", format: formatNumber })),
      tile("Possible range", `${compact(result.p10, rangePrecision)} – ${compact(result.p90, rangePrecision)}`, "History-based guide", resultRange(result), "neutral", "result-tile-range"),
    ].join(""));
  }
 
-function renderSideBySideComparison(result) {
-  const isNewRoute = !result.route.knownMarket;
-  const baseline = result.baseline;
-  const routeScenario = result.scenario;
-  const scenario = routeScenario;
-  const baselineRoute = result.route;
-  const label = isNewRoute
-    ? `Baseline estimate · ${baselineRoute.origin}`
-    : `Baseline estimate · ${result.route.origin}`;
-  const scenarioLabel = isNewRoute
-    ? `Proposed route · ${result.route.origin}`
-    : `Your plan · ${result.route.origin}`;
+function renderSideBySideComparison(result, previousResult, assumptionsOpen = false) {
+  const { baseline, scenario, route, delta } = result;
+  const isNewRoute = !route.knownMarket;
+  const month = planningEscape(data.months[state.month - 1]);
   const context = isNewRoute
-    ? `The proposed ${result.route.origin} route has no historical baseline. Comparison countries supply starting assumptions only. The headline changes above compare the proposed route with zero. Use Compare to assess adding the same capacity to an existing route.`
-    : "Compare the estimated starting totals with your plan. The headline cards above show the changes; expand the assumptions to see what each side uses.";
+    ? `The proposed ${planningEscape(route.origin)} route has no historical baseline. Comparison countries supply starting assumptions only. The headline changes above compare the proposed route with zero. Use Compare to assess adding the same capacity to an existing route.`
+    : `Gray shows a usual ${month}. The colored block marks your plan level, and the badge shows how much it changes.`;
+  const steps = [
+    ["seats", "Seats", state.extraFlights ? `${formatSigned(state.extraFlights)} flights a week` : "usual schedule"],
+    ["passengers", "Passengers", `${formatPercent(state.loadFactor)} filled`],
+    ["p2p", "End trip here", `${formatPercent(state.p2pShare)} not connecting`],
+    ["hotelCheckins", "Hotel check-ins", `${formatPercent(state.conversionRate)} stay in a hotel`],
+    ["guestNights", "Guest nights", `× ${state.averageStay.toFixed(1)} nights each`],
+  ];
+  // Long stays can put the number of guest nights above the seat count.
+  const chartMaximum = ({ baseline, scenario }) =>
+    Math.max(baseline.seats, scenario.seats, baseline.guestNights, scenario.guestNights) || 1;
+  const maximum = chartMaximum(result);
+  const sameRouteAndMonth = previousResult?.route.originKey === route.originKey
+    && previousResult.route.month === route.month;
+  const previous = sameRouteAndMonth ? previousResult : result;
+  const previousMaximum = chartMaximum(previous);
+  const height = (value, scale) => (150 * value / scale).toFixed(2);
+  const compact = (value) => value >= 1000
+    ? `${(value / 1000).toFixed(value >= 100000 ? 0 : 1)}k`
+    : formatNumber(value);
+  const shown = isNewRoute ? scenario : baseline;
+  const previousShown = isNewRoute ? previous.scenario : previous.baseline;
+  const columns = steps.map(([key, label, caption], index) => {
+    const barHeight = height(shown[key], maximum);
+    const planHeight = height(scenario[key], maximum);
+    const rounded = Math.round(Math.abs(delta[key]));
+    const badge = isNewRoute ? `New ${formatSigned(delta[key])}` : rounded ? formatSigned(delta[key]) : "No change";
+    const tone = !isNewRoute && !rounded ? "unchanged" : delta[key] < 0 ? "lower" : "higher";
+    const exact = isNewRoute ? `${label}: ${formatNumber(shown[key])} for your new route`
+      : `${label}: ${formatNumber(shown[key])} usual, ${formatNumber(scenario[key])} in your plan (${badge})`;
+    let connector = "";
+    if (index < 3) {
+      const nextHeight = Number(height(shown[steps[index + 1][0]], maximum));
+      const drop = Number(barHeight) - nextHeight;
+      connector = `<svg class="comparison-step-link" viewBox="0 0 100 100" preserveAspectRatio="none" focusable="false"
+        style="bottom:${nextHeight - (drop === 0 ? .5 : 0)}px;height:${Math.max(1, drop)}px">
+        <line x1="0" y1="${drop === 0 ? 50 : 0}" x2="100" y2="${drop === 0 ? 50 : 100}" vector-effect="non-scaling-stroke"/>
+      </svg>`;
+    }
+    return `<div class="comparison-step ${tone}">
+      <div class="comparison-step-plot" title="${planningEscape(exact)}" style="--usual-height:${barHeight}px;--plan-height:${planHeight}px">
+        ${connector}
+        <div class="comparison-step-bar${Number(barHeight) < 27 ? " short" : ""}"
+          style="--previous-height:${height(previousShown[key], previousMaximum)}px">
+          <span class="comparison-step-value">${compact(shown[key])}</span>
+          <span class="comparison-step-badge">${badge}</span>
+        </div>
+        ${!isNewRoute && rounded ? `<div class="comparison-step-plan" style="--previous-height:${height(previous.scenario[key], previousMaximum)}px"></div>` : ""}
+      </div>
+      <strong class="comparison-step-label">${key === "hotelCheckins" ? "Hotel <span>check-ins</span>" : label}</strong>
+      <small>${caption}</small>
+    </div>`;
+  }).join("");
+  const chartLabel = steps.map(([key, label]) => {
+    if (isNewRoute) return `${label}: ${formatNumber(shown[key])} for your new route.`;
+    const difference = Math.round(Math.abs(delta[key]));
+    const change = difference ? `${delta[key] < 0 ? "minus" : "plus"} ${formatNumber(difference)} with your plan` : "no change";
+    return `${label}: ${formatNumber(shown[key])} for a usual ${data.months[state.month - 1]}, ${change}.`;
+  }).join(" ");
+
   const baselineAssumptions = isNewRoute ? [["Historical route capacity", "No records · starts at zero"], ["Observed route hotel demand", "Not available"]] : [
     ["Past seats this month", formatNumber(baseline.seats)],
-    ["Flights each week", Number(baselineRoute.weeklyFrequency || 0).toFixed(1)],
-    ["Flights expected to be full", formatPercent(baselineRoute.loadFactor, 1)],
-    ["Passengers ending in Abu Dhabi", formatPercent(baselineRoute.p2pShare, 1)],
+    ["Flights each week", Number(route.weeklyFrequency || 0).toFixed(1)],
+    ["Flights expected to be full", formatPercent(route.loadFactor, 1)],
+    ["Passengers ending in Abu Dhabi", formatPercent(route.p2pShare, 1)],
     ["Share estimated to stay in a hotel", formatPercent(data.defaults.captureRate, 1)],
     ["Average hotel stay", `${(baseline.hotelCheckins ? baseline.guestNights / baseline.hotelCheckins : 0).toFixed(1)} nights`],
   ];
@@ -562,38 +614,27 @@ function renderSideBySideComparison(result) {
   const assumptionList = (items) => items.map(([name, value]) =>
     `<div class="compare-assumption"><span>${name}</span><strong>${value}</strong></div>`,
   ).join("");
-  const metric = (name, value) => `
-    <div class="compare-metric">
-      <span>${name}</span>
-      <strong>${formatNumber(value)}</strong>
-    </div>`;
-
   $("#sideBySideComparison").innerHTML = `
     <div class="section-heading">
-      <div><p>Side-by-side comparison</p><h2>Baseline estimate and your plan</h2></div>
-      <small>${data.months[state.month - 1]} estimate</small>
+      <div><p>From seats to guest nights</p><h2>How your plan flows through to hotels</h2></div>
+      <small>${month} estimate</small>
     </div>
     <p class="comparison-context">${context}</p>
-    <div class="side-by-side-grid">
-      <article class="compare-card baseline-card">
-        <span class="compare-kicker">${isNewRoute ? "NO HISTORICAL ROUTE · ZERO BASELINE" : "ESTIMATE BASED ON PAST FLIGHT RECORDS"}</span>
-        <h3>${label}</h3>
-        <div class="compare-metrics">
-          ${metric("Hotel check-ins", baseline.hotelCheckins)}
-          ${metric("Guest nights", baseline.guestNights)}
-        </div>
-        <details class="compare-assumptions"><summary>Baseline assumptions</summary>${assumptionList(baselineAssumptions)}</details>
-      </article>
-      <article class="compare-card scenario-card">
-        <span class="compare-kicker">YOUR PLAN</span>
-        <h3>${scenarioLabel}</h3>
-        <div class="compare-metrics">
-          ${metric("Hotel check-ins", scenario.hotelCheckins)}
-          ${metric("Guest nights", scenario.guestNights)}
-        </div>
-        <details class="compare-assumptions"><summary>Plan assumptions</summary>${assumptionList(scenarioAssumptions)}</details>
-      </article>
-    </div>`;
+    <div role="img" aria-label="${planningEscape(chartLabel + " Guest nights measure nights spent in hotels.")}">
+      <div class="comparison-steps" aria-hidden="true">${columns}</div>
+    </div>
+    <div class="comparison-step-legend">
+      <span><i aria-hidden="true"></i>${isNewRoute ? "Your new route" : `Usual ${month}`}</span>
+      <span><i aria-hidden="true"></i>${isNewRoute ? "Added by your plan" : "Change from usual"}</span>
+      ${isNewRoute ? "" : '<span class="comparison-plan-key"><i aria-hidden="true"></i>Plan level</span>'}
+    </div>
+    <details class="compare-assumptions"${assumptionsOpen ? " open" : ""}>
+      <summary>Assumptions used</summary>
+      <div class="comparison-assumption-grid">
+        <div><h4>${isNewRoute ? "New route baseline" : "Baseline estimate"}</h4>${assumptionList(baselineAssumptions)}</div>
+        <div><h4>Your plan</h4>${assumptionList(scenarioAssumptions)}</div>
+      </div>
+    </details>`;
 }
 
  function renderRouteMap(result) {
@@ -1523,21 +1564,38 @@ function setupDecisionTools() {
    $("#exportReady").hidden = true;
    const pendingCountry = $("#origin").value === "__NEW_ROUTE__" && !confirmedNewMarketKey;
    const invalid = pendingCountry || $$("#scenarioForm input[type=number], #scenarioForm input[type=range]").filter((field) => !field.closest("#purposeAssumptions")).find((field) => !field.value.trim() || !Number.isFinite(Number(field.value)) || Number(field.value) < Number(field.min) || Number(field.value) > Number(field.max));
+   const resultsWereHidden = $("#scenarioResults").hidden;
    $("#inputError").hidden = !invalid;
    $("#scenarioResults").hidden = Boolean(invalid);
    $("#chatResults").hidden = Boolean(invalid);
    $("#decisionWorkspace").classList.toggle("invalid-plan", Boolean(invalid));
+   if (resultsWereHidden !== Boolean(invalid)) syncPhoneFocus();
+   const weeklyChange = Number($("#extraFlights").value);
+   $("#phoneScenarioFlights").textContent = weeklyChange ? `${formatSigned(weeklyChange)} flights/week` : "Usual weekly flights";
    if (invalid) {
+     const phoneMarket = $("#origin").selectedOptions[0]?.textContent;
+     const phoneMonth = data.months[Number($("#month").value) - 1];
+     const phoneScenario = [phoneMarket, phoneMonth].filter(Boolean).join(" · ");
+     $("#phoneScenarioName").textContent = phoneScenario;
+     $("#phoneMarketSummary").textContent = phoneScenario;
      currentProposalContext = null;
      proposalWorkspace?.update(null);
      $("#inputError").textContent = pendingCountry ? "Choose and confirm a departure country to calculate a new route." : `Please enter ${invalid.id === "averageStay" ? "average nights per stay" : invalid.id === "seatsPerFlight" ? "seats per flight" : "a value"} between ${invalid.min} and ${invalid.max} to see the results.`;
+     $("#phoneDrawerImpact").textContent = "—";
+     $("#phoneDrawerImpactNote").textContent = $("#inputError").textContent;
      return;
    }
    readForm();
    const result = runScenario(data, state);
+   const marketAndMonth = `${result.route.origin} · ${data.months[state.month - 1]}`;
+   $("#phoneScenarioName").textContent = marketAndMonth;
+   $("#phoneMarketSummary").textContent = marketAndMonth;
+   $("#phoneDrawerImpactLabel").textContent = result.delta.guestNights >= 0 ? "Extra guest nights" : "Change in guest nights";
+   $("#phoneDrawerImpact").textContent = formatSigned(result.delta.guestNights);
+   $("#phoneDrawerImpactNote").textContent = `${marketAndMonth} · vs baseline estimate`;
    renderKpis(result);
    renderCalculationExplanation(result);
-   renderSideBySideComparison(result);
+   renderSideBySideComparison(result, currentProposalContext?.result, $("#sideBySideComparison details")?.open);
    renderRouteMap(result);
    renderComparison(result);
    renderSeasonProfile(result);
@@ -1925,10 +1983,42 @@ function setControlsOpen(open) {
   const returnFocus = !open && panel.contains(document.activeElement);
   document.body.classList.toggle("controls-open", open);
   panel.hidden = !open;
+  const phoneDrawer = open && document.body.classList.contains("phone-plan");
+  $(".workspace").inert = phoneDrawer;
+  $(".topbar").inert = phoneDrawer;
   button.setAttribute("aria-expanded", String(open));
   $("#adjustControlsLabel").textContent = open ? "Hide controls" : "Adjust plan";
   button.title = open ? "Hide plan controls" : "Show plan controls";
   if (returnFocus) button.focus({preventScroll:true});
+}
+
+function syncPhoneFocus() {
+  const body = document.body;
+  const compact = body.classList.contains("phone-plan") && body.classList.contains("focus-mode");
+  body.classList.toggle("phone-focus", compact);
+  const tools = $("#phoneFocusTools");
+  const toolbar = $(".workspace-toolbar");
+  const modeSwitch = $(".view-mode-switch");
+  const actionButton = $("#toggleProposalPanel");
+  const exports = $(".scenario-actions");
+  const exportReady = $("#exportReady");
+  const baselineNote = $("#dataNote");
+  const badge = $("#confidenceBadge");
+  const heading = $("#scenarioName").closest(".page-heading");
+  const moveBelow = compact && !$("#scenarioResults").hidden;
+  if (moveBelow && modeSwitch.parentElement !== tools) {
+    tools.prepend(modeSwitch);
+    $("#phoneResultActions").append(exports, actionButton, exportReady);
+    $("#phoneBaselineBody").append(badge, baselineNote);
+  } else if (!moveBelow && modeSwitch.parentElement !== toolbar) {
+    toolbar.append(modeSwitch, actionButton);
+    $("#viewModeDescription").after(exports, exportReady);
+    $("#scenarioName").after(baselineNote);
+    heading.append(badge);
+  }
+  const grid = $("#kpis");
+  const leading = grid.querySelector(compact ? ".result-tile-guest" : ".result-tile-checkins");
+  if (leading && grid.firstElementChild !== leading) grid.prepend(leading);
 }
 
  function setupTabs() {
@@ -1954,6 +2044,17 @@ function setControlsOpen(open) {
    chatTab.disabled = !chatEnabled;
    $("#assistantPanel").inert = !chatEnabled;
    $("#chatPrivacy").hidden = !chatEnabled;
+   const phone = window.matchMedia("(max-width: 760px)");
+   const weekly = $("#weeklyFlightControl");
+   const aircraft = $("#aircraftControls");
+   const aircraftBody = aircraft.querySelector(".control-group-body");
+   const wideControls = [$("#marketControls"), aircraft, $("#eventImpactGroup")];
+   const syncPhoneLayout = () => {
+     document.body.classList.toggle("phone-plan", phone.matches);
+     (phone.matches ? $("#scenarioForm") : aircraftBody).prepend(weekly);
+     wideControls.forEach((group) => { group.open = !phone.matches; });
+     syncPhoneFocus();
+   };
    const setMode = (mode) => {
      if (!chatEnabled && mode === "chat") return;
      const focus = mode === "focus";
@@ -1971,6 +2072,7 @@ function setControlsOpen(open) {
      // Keep one set of results synchronized across all three views.
      if (chat) $("#chatResults").append($("#kpis"));
      else $("#scenarioResults").prepend($("#kpis"));
+     syncPhoneFocus();
      $$(".view-mode").forEach((item) => {
        const selected = item.dataset.mode === mode;
        item.classList.toggle("active", selected);
@@ -1985,12 +2087,19 @@ function setControlsOpen(open) {
      if (decisions && state && $("#inputError").hidden) renderDecisionWorkspace();
      guidedHelp?.track(({focus:"view_focus",details:"view_details",chat:"view_chat",decisions:"view_compare",proposal:"view_actions"})[mode]);
    };
+   syncPhoneLayout();
    setMode("focus");
    setControlsOpen(window.matchMedia("(min-width: 1051px)").matches);
+   phone.addEventListener("change", () => {
+     setControlsOpen(false);
+     syncPhoneLayout();
+   });
+   $("#phoneDonePlan").addEventListener("click", () => setControlsOpen(false));
+   $("#phoneResetPlan").addEventListener("click", () => $("#resetScenario").click());
    $("#adjustControls").addEventListener("click", () => {
      const open = !document.body.classList.contains("controls-open");
      setControlsOpen(open);
-     if (open) $("#origin").focus({preventScroll:true});
+     if (open) (phone.matches ? $("#extraFlights") : $("#origin")).focus({preventScroll:true});
    });
    document.addEventListener("keydown", (event) => {
      if (event.key === "Escape" && !event.defaultPrevented &&
@@ -2001,6 +2110,10 @@ function setControlsOpen(open) {
    });
    $$(".view-mode").forEach((button) => button.addEventListener("click", () => {
      setMode(button.dataset.mode);
+     if (phone.matches) {
+       window.scrollTo({top:0, behavior:"instant"});
+       button.focus({preventScroll:true});
+     }
    }));
    $("#showDetails").addEventListener("click", () => {
      setMode("details");
