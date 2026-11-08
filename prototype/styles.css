@@ -1461,3 +1461,37 @@ body.controls-open .adjust-controls svg path { transform:translateX(29px) scaleX
   #proposalWorkspace .pw-task form, #proposalWorkspace .pw-tools { grid-template-columns: minmax(0, 1fr); }
   #proposalWorkspace .pw-task form > button { grid-column: 1; }
 }
+
+#scenarioForm .flight-control { display: grid; gap: 8px; min-width: 0; }
+.flight-control-heading { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+#weeklyFlightControl {
+  --flight-position: 57.5%;
+  --flight-tone: #f2d58a;
+  --flight-track: linear-gradient(to right, #39445d 0 min(50%, var(--flight-position)), var(--flight-tone) min(50%, var(--flight-position)) max(50%, var(--flight-position)), #39445d max(50%, var(--flight-position)) 100%);
+}
+#weeklyFlightControl[data-direction="fewer"] { --flight-tone: #ffae9f; }
+#weeklyFlightControl[data-direction="same"] { --flight-tone: #c7d0df; }
+#extraFlightsValue {
+  min-width: 2.75rem; padding: 3px 8px; border: 1px solid color-mix(in srgb, var(--flight-tone) 45%, transparent);
+  border-radius: 7px; color: var(--flight-tone); background: #10172c; text-align: center; font-weight: 750; font-variant-numeric: tabular-nums;
+}
+#scenarioForm .flight-stepper { display: grid; grid-template-columns: 42px minmax(0, 1fr) 42px; gap: 8px; align-items: center; }
+#scenarioForm .flight-stepper button {
+  display: grid; place-items: center; width: 42px; min-height: 42px; padding: 0; border: 1px solid #59637a;
+  border-radius: 8px; background: #1c2545; color: #f2d58a; font: inherit; font-size: 1.2rem; font-weight: 750; cursor: pointer;
+}
+#scenarioForm .flight-stepper button:hover:not(:disabled) { background: #2e3654; border-color: #f2d58a; }
+#scenarioForm .flight-stepper button:disabled { opacity: .42; cursor: default; }
+#scenarioForm .flight-stepper :is(button, input):focus-visible { outline: 2px solid #f2d58a; outline-offset: 3px; }
+.flight-control > small { color: #c6bfae; font-size: 11px; line-height: 1.5; }
+#weeklyFlightSummary { color: var(--flight-tone); }
+.flight-scale { display: grid; grid-template-columns: repeat(3, 1fr); margin: -4px 50px 0; color: #c6bfae; font-size: 10px; }
+.flight-scale span:nth-child(2) { text-align: center; }
+.flight-scale span:last-child { text-align: right; }
+#scenarioForm #extraFlights { appearance: none; -webkit-appearance: none; width: 100%; min-width: 0; height: 30px; margin: 0; padding: 0; background: transparent; cursor: pointer; }
+#extraFlights::-webkit-slider-runnable-track { height: 6px; border-radius: 4px; background: var(--flight-track); }
+#extraFlights::-moz-range-track { height: 6px; border-radius: 4px; background: var(--flight-track); }
+#extraFlights::-webkit-slider-thumb { appearance: none; -webkit-appearance: none; width: 16px; height: 16px; margin-top: -5px; border: 2px solid #141b33; border-radius: 50%; background: var(--flight-tone); }
+#extraFlights::-moz-range-thumb { width: 14px; height: 14px; border: 2px solid #141b33; border-radius: 50%; background: var(--flight-tone); }
+#scenarioForm #seatsPerFlight { width: 100%; min-width: 0; height: 42px; padding: 0 6px; text-align: center; font-variant-numeric: tabular-nums; appearance: textfield; }
+#seatsPerFlight::-webkit-inner-spin-button, #seatsPerFlight::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }

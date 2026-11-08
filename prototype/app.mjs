@@ -194,7 +194,22 @@ function populatePurposeInputs() {
  }
   
  function updateRangeLabels() {
-   $("#extraFlightsValue").textContent = `${Number($("#extraFlights").value) >= 0 ? "+" : ""}${$("#extraFlights").value}`;
+   const flights = Number($("#extraFlights").value);
+   const direction = flights > 0 ? "more" : flights < 0 ? "fewer" : "same";
+   const amount = Math.abs(flights);
+   const flightControl = $("#weeklyFlightControl");
+   flightControl.dataset.direction = direction;
+   flightControl.style?.setProperty("--flight-position", `${50 + flights * 2.5}%`);
+   $("#extraFlightsValue").textContent = flights ? formatSigned(flights) : "0";
+   $("#weeklyFlightSummary").textContent = flights
+     ? `${amount} ${direction} ${amount === 1 ? "flight" : "flights"} per week than usual`
+     : "No change to the weekly schedule";
+   for (const button of $$("[data-flight-step]")) {
+     const field = $(`#${button.dataset.flightControl}`);
+     const value = Number(field.value);
+     button.disabled = !field.value || !Number.isFinite(value) || value < Number(field.min) || value > Number(field.max)
+       || (Number(button.dataset.flightStep) < 0 ? value <= Number(field.min) : value >= Number(field.max));
+   }
    $("#loadFactorValue").textContent = `${Number($("#loadFactor").value).toFixed(1)}%`;
    $("#p2pShareValue").textContent = `${Number($("#p2pShare").value).toFixed(1)}%`;
    $("#conversionRateValue").textContent = `${Number($("#conversionRate").value).toFixed(1)}%`;
@@ -1531,6 +1546,15 @@ function friendlyPlanError(error) {
    $("#newMarketCountryList").innerHTML = newMarketOptions;
    $("#month").innerHTML = data.months.map((month, index) => `<option value="${index + 1}">${month}</option>`).join("");
    setFormFromState();
+
+   for (const button of $$("[data-flight-step]")) {
+     button.addEventListener("click", () => {
+       const field = $(`#${button.dataset.flightControl}`);
+       if (Number(button.dataset.flightStep) < 0) field.stepDown();
+       else field.stepUp();
+       field.dispatchEvent(new Event("input", { bubbles: true }));
+     });
+   }
   
    $$("#scenarioForm input, #scenarioForm select").forEach((input) => input.addEventListener("input", () => {
      // An explicit edit owns this value, even if it equals the rounded display.
@@ -1868,7 +1892,7 @@ function setControlsOpen(open) {
   
 function updateStartingMarkers() {
   const starting = { ...defaultState(state.originKey, state.month, state.referenceMode === "peers" ? "__PEERS__" : state.proxyOriginKey), extraFlights: 0 };
-  for (const field of $$('#scenarioForm input[type="range"]')) {
+  for (const field of $$('#scenarioForm input[type="range"]:not(#extraFlights)')) {
     let shell = field.parentElement;
     if (!shell.classList.contains("range-shell")) {
       shell = document.createElement("div"); shell.className = "range-shell";
@@ -1878,7 +1902,7 @@ function updateStartingMarkers() {
     const value = starting[field.id] * (["loadFactor", "p2pShare", "conversionRate", "eventUplift"].includes(field.id) ? 100 : 1);
     const position = Math.max(0, Math.min(100, (value - Number(field.min)) / (Number(field.max) - Number(field.min)) * 100));
     shell.style.setProperty("--start", position + "%");
-    shell.querySelector(".starting-tick").title = "Starting value: " + value.toFixed(field.id === "extraFlights" ? 0 : 1);
+    shell.querySelector(".starting-tick").title = "Starting value: " + value.toFixed(1);
     shell.closest("label").classList.toggle("changed", Math.abs(Number(state[field.id]) - starting[field.id]) > 1e-7);
   }
 }

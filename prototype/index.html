@@ -44,8 +44,25 @@
            <label>Month<select id="month"></select></label>
           </div></details>
           <details class="control-group" open><summary><span>02</span> Flights</summary><div class="control-group-body">
-           <label><span class="control-label">Extra flights each week</span><output id="extraFlightsValue">+3</output><input id="extraFlights" type="range" min="-20" max="20" step="1"><small>Add or remove flights from the usual weekly schedule.</small></label>
-           <label>Seats on each flight<input id="seatsPerFlight" type="number" min="30" max="600" step="1"><small>Number of passenger seats on each flight.</small></label>
+           <div class="flight-control" id="weeklyFlightControl" data-direction="more">
+             <div class="flight-control-heading"><label for="extraFlights">Weekly flight change</label><output id="extraFlightsValue" for="extraFlights">+3</output></div>
+             <div class="flight-stepper">
+               <button type="button" data-flight-control="extraFlights" data-flight-step="-1" aria-label="Remove one weekly flight">−</button>
+               <input id="extraFlights" type="range" min="-20" max="20" step="1" aria-describedby="weeklyFlightSummary">
+               <button type="button" data-flight-control="extraFlights" data-flight-step="1" aria-label="Add one weekly flight">+</button>
+             </div>
+             <div class="flight-scale" aria-hidden="true"><span>−20</span><span>0</span><span>+20</span></div>
+             <small id="weeklyFlightSummary">3 more flights per week than usual</small>
+           </div>
+           <div class="flight-control">
+             <label for="seatsPerFlight">Seats on each flight</label>
+             <div class="flight-stepper">
+               <button type="button" data-flight-control="seatsPerFlight" data-flight-step="-1" aria-label="Remove one seat per flight">−</button>
+               <input id="seatsPerFlight" type="number" min="30" max="600" step="1" aria-describedby="seatsPerFlightHelp">
+               <button type="button" data-flight-control="seatsPerFlight" data-flight-step="1" aria-label="Add one seat per flight">+</button>
+             </div>
+             <small id="seatsPerFlightHelp">Enter the aircraft’s passenger capacity.</small>
+           </div>
            <label><span class="control-label">How full flights are</span><output id="loadFactorValue">82%</output><input id="loadFactor" type="range" min="30" max="100" step="0.1"><small>Estimated share of seats filled by passengers.</small></label>
           </div></details>
           <details class="control-group"><summary><span>03</span> Hotel visitors</summary><div class="control-group-body">
