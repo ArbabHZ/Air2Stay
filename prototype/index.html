@@ -69,7 +69,7 @@
              <button type="button" class="view-mode active" data-mode="focus" aria-pressed="true" aria-controls="scenarioResults">Focus</button>
              <button type="button" class="view-mode" data-mode="decisions" aria-pressed="false" aria-controls="decisionWorkspace">Compare</button>
              <button type="button" class="view-mode" data-mode="details" aria-pressed="false" aria-controls="scenarioResults">Details</button>
-             <button type="button" class="view-mode" data-mode="chat" aria-pressed="false" aria-controls="assistantPanel">Chat</button>
+             <button type="button" class="view-mode" data-mode="chat" aria-pressed="false" aria-controls="assistantPanel" hidden disabled>Chat</button>
              <button type="button" class="view-mode" data-mode="proposal" aria-pressed="false" aria-controls="proposalWorkspace">Follow-ups</button>
            </div>
            <button type="button" id="toggleProposalPanel" class="pw-launcher" aria-label="Open priority actions and communications" aria-haspopup="dialog" aria-controls="proposalDrawer" aria-expanded="false" disabled><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M15 4v16M6.5 9l1.5 1.5 3-3M7 15h4"/></svg><span>Actions</span><span class="pw-count" data-pw-drawer-count hidden></span></button>
@@ -87,7 +87,7 @@
          <div class="scenario-actions" aria-label="Plan actions"><details class="export-menu"><summary>Export</summary><div><button type="button" id="exportCsv">Spreadsheet (.csv)</button><button type="button" id="exportScenario">Full plan (.json)</button></div></details><span id="planActionStatus" role="status"></span></div>
          <p id="exportReady" class="export-ready" role="status" hidden></p>
          <section id="proposalWorkspace" class="proposal-workspace" aria-label="Proposal actions and history" hidden></section>
-         <section class="chat-workspace" id="assistantPanel" aria-label="Chat and scenario results" hidden>
+         <section class="chat-workspace" id="assistantPanel" aria-label="Chat and scenario results" hidden inert>
            <section class="smart-box">
              <div class="assistant-heading"><div><span>Ask Air2Stay</span><strong>Talk through your plan</strong></div><button id="clearChat" class="clear-chat" type="button">Clear chat</button></div>
              <p id="assistantSource" class="chat-help">Air2Stay explains the current calculation. AI never calculates or changes results on its own.</p>
@@ -194,7 +194,7 @@
        <div class="bridge-definitions">
          <article><strong>Share of hotel check-ins</strong><p>Estimated part of hotel arrivals for each nationality. All 45 groups add up to 100%.</p></article>
          <article><strong>Largest visitor groups</strong><p>The table shows the ten largest groups. The other 35 are still included in the estimate.</p></article>
-         <article><strong>Change the visitor mix</strong><p>If you have better numbers, edit the percentages below. Air2Stay will adjust them to add up to 100% and update the estimate.</p></article>
+         <article><strong>Change the visitor mix</strong><p>Set the final share for a nationality. The other groups adjust automatically to keep the total at 100%. Choose Update visitor mix to apply the new shares.</p></article>
        </div>
        </details>
        <section class="content-block">
@@ -235,7 +235,7 @@
        <div class="glossary-tools"><label>Find a term<input type="search" id="glossarySearch" placeholder="Try: nights, flights or accuracy"></label><button type="button" id="printGuide">Print / Save PDF</button></div><nav id="glossaryLetters" aria-label="Jump to a letter"></nav><p id="glossaryCount" role="status"></p>
        <div id="glossaryGrid" class="glossary-grid"></div>
        <section class="content-block limits"><h2>What the records don’t tell us</h2><ul><li>The departure country is where the flight took off, not necessarily where a traveller lives.</li><li>The hotel nationality is based on the guest’s passport, not where the flight started.</li><li>The files don’t show why people travelled, which aircraft they used, how many hotel rooms were available, or which events took place.</li><li>Because the flight records cover different time periods, the app compares monthly totals.</li></ul></section>
-       <section class="content-block limits"><h2>About privacy and sharing</h2><ul><li>The planner runs locally. If you enable Gemini in Chat, other questions send your question, recent chat, plan summary and built-in check statuses to Google.</li><li>Proposal comments, evidence and decisions stay in this browser. Assigned owners are not notified and messages are drafts only.</li><li>It uses totals for groups, not names or details about individual travellers.</li><li>Exported files include your plan assumptions and any edited visitor mix. Proposal-history downloads also include your saved notes.</li><li>Guide me explains local storage, optional usage counts and feedback. Share competition data only with people who are allowed to receive it.</li></ul></section>
+       <section class="content-block limits"><h2>About privacy and sharing</h2><ul><li>The planner runs locally.</li><li id="chatPrivacy" hidden>When Gemini is enabled in Chat, open-ended questions send your question, recent chat, plan summary and built-in check statuses to Google.</li><li>Proposal comments, evidence and decisions stay in this browser. Assigned owners are not notified and messages are drafts only.</li><li>It uses totals for groups, not names or details about individual travellers.</li><li>Exported files include your plan assumptions and any edited visitor mix. Proposal-history downloads also include your saved notes.</li><li>Guide me explains local storage, optional usage counts and feedback. Share competition data only with people who are allowed to receive it.</li></ul></section>
      </section>
    </main>
    <div id="guidedHelp"></div>

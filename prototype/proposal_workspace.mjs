@@ -8,6 +8,14 @@ const CHECKS = [
   { id: 'hotels', title: 'Check hotel use and capacity', owner: 'Hotel or tourism team', ask: 'Check the share choosing hotels, stay length and available capacity for this month. Guest nights are not room nights.' },
   { id: 'visitors', title: 'Check who is travelling', owner: 'Tourism research team', ask: 'Check the assumed visitor mix, trip purpose and returning-resident share against suitable records.' },
 ];
+const CHECK_DISPLAY = {
+  demand: { title: 'Flight demand', why: 'Confirm expected bookings and how full the proposed flights could be.', icon: 'M2 10h16M10 2v16M5 7l5-3 5 3M7 16l3-2 3 2' },
+  hotels: { title: 'Hotel capacity', why: 'Check whether hotels have space for the expected guests and length of stay.', icon: 'M3 16V5m0 8h14v3m0-3v-3H9v3M5 9h2' },
+  visitors: { title: 'Visitor mix', why: 'Check who is likely to travel so the visitor estimates reflect this route.', icon: 'M12 5a3 3 0 1 1-6 0 3 3 0 0 1 6 0ZM3 16v-2a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v2m0-6a3 3 0 0 1 3 3v2' },
+  event: { title: 'Event demand', why: 'Check whether the event is likely to bring in the extra visitors assumed in the plan.', icon: 'M4 5h12v12H4zM4 8h12M7 3v4m6-4v4' },
+};
+const CHECK_STATUS = { red: 'Overdue', amber: 'To check', green: 'Done' };
+const TASK_STATUS = { open: 'Open', waiting: 'Waiting', verified: 'Done' };
 const clone = (value) => JSON.parse(JSON.stringify(value));
 const escape = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
 const fmt = (value) => Number.isFinite(Number(value)) ? Math.round(Number(value)).toLocaleString('en-US') : 'Unavailable';
@@ -121,7 +129,7 @@ function createProposalStore(storage, clock = () => new Date()) {
       if (!['open', 'waiting', 'verified'].includes(status)) throw new Error('Choose a valid action status.');
       const note = String(evidence || '').trim();
       if (note.length > 3000) throw new Error('Evidence must be 3,000 characters or fewer.');
-      if (status === 'verified' && note.length < 8) throw new Error('Add a source and what you confirmed before marking this check verified.');
+      if (status === 'verified' && note.length < 8) throw new Error('To mark this task Done, use Notes to say who confirmed it (your source), when, and what they confirmed.');
       return mutate(proposalKey(context.inputs), null, (proposal) => {
         const task = proposal.tasks.find((row) => row.id === id);
         if (!task) throw new Error('This action was not found in the current proposal.');
@@ -199,7 +207,7 @@ function stakeholderDraft(context, kind, proposal = emptyProposal()) {
   return `Subject: ${title} — ${route}, ${month}\n\n${intro}\n\n${request}\n\nAssumptions to review\n${assumptions.map((row) => `- ${row.label}: ${row.value}`).join('\n')}\n\n${context.result?.route?.knownMarket ? 'The baseline is an estimate based on past flight records, not directly observed hotel outcomes for this route.' : 'There are no route records. Comparison countries are only starting points for the assumptions.'}\n\nPending checks\n${actions.length ? actions.join('\n') : 'All listed checks have user-recorded evidence for the current assumptions. Please review that evidence before making a decision.'}\n\nPlease reply with any corrections and the source/date of the information.\n\nDraft for review — prepared in Air2Stay. Nothing has been sent.`;
 }
 
-function createProposalWorkspace({ mount, rail = null, launcher = null, onOpenWorkspace, getContext, onRestore, onRecommendation, track = () => {} }) {
+function createProposalWorkspace({ mount, rail = null, launcher = null, onOpenWorkspace, getContext, onRestore, onRecommendation, chatEnabled = false, track = () => {} }) {
   if (!mount) throw new Error('A proposal workspace mount is required.');
   const doc = mount.ownerDocument || document;
   let storage;
@@ -213,7 +221,7 @@ function createProposalWorkspace({ mount, rail = null, launcher = null, onOpenWo
   let draftKind = 'airline';
   let selectedCheck = null;
   let drawerOpen = false;
-  let drawerTab = 'priorities';
+  const openTools = new Set();
   function closeDrawer(restoreFocus=true) {
     drawerOpen=false;
     rail?.querySelector('dialog')?.close?.();
@@ -229,11 +237,6 @@ function createProposalWorkspace({ mount, rail = null, launcher = null, onOpenWo
   }
   const toggleDrawer=()=>{if(drawerOpen)closeDrawer();else openDrawer();};
   launcher?.addEventListener('click',toggleDrawer);
-  function selectDrawerTab(tab) {
-    drawerTab=tab;
-    rail.querySelectorAll('[data-pw-tab]').forEach(button=>{const active=button.dataset.pwTab===tab;button.setAttribute('aria-selected',String(active));button.tabIndex=active?0:-1;});
-    rail.querySelectorAll('[data-pw-tab-panel]').forEach(panel=>{panel.hidden=panel.dataset.pwTabPanel!==tab;});
-  }
   let generatedDraft = null;
   let downloadReady = null;
   const draftValues = new Map();
@@ -247,6 +250,8 @@ function createProposalWorkspace({ mount, rail = null, launcher = null, onOpenWo
   function preserveDrafts() {
     if (!lastKey) return;
     for (const field of mount.querySelectorAll('form [name]')) draftValues.set(`${lastKey}:${field.form.dataset.pwForm}:${field.form.dataset.id || ''}:${field.name}`, field.value);
+    openTools.clear();
+    for (const tool of mount.querySelectorAll('[data-pw-tool][open]')) openTools.add(tool.dataset.pwTool);
     const draft = mount.querySelector('[data-pw-draft]');
     if (draft && generatedDraft) generatedDraft.text = draft.value;
   }
@@ -259,38 +264,53 @@ function createProposalWorkspace({ mount, rail = null, launcher = null, onOpenWo
   function forgetForm(form, key) {
     for (const field of form.querySelectorAll('[name]')) draftValues.delete(`${key}:${form.dataset.pwForm}:${form.dataset.id || ''}:${field.name}`);
   }
-  function badge(status) { return `<span class="pw-status pw-${status}">${status === 'red' ? 'Red · Overdue' : status === 'green' ? 'Green · Evidence recorded' : 'Amber · Needs checking'}</span>`; }
-  function renderRail(ctx, proposal, priority) {
-    if (!rail) return;
-    const pending = priority.rows.filter(row => row.status !== 'green').length;
-    const red = priority.rows.filter(row => row.status === 'red').length;
-    const next = priority.recommended;
-    const first = priority.rows.find(row=>row.id===selectedCheck) || next || priority.rows[0];
-    const ordered = first ? [first,...priority.rows.filter(row=>row.id!==first.id)] : [];
-    const card=row=>`<article class="pw-rail-check pw-check-${row.status} ${selectedCheck===row.id?'pw-selected':''}">${badge(row.status)}${row.id===next?.id?'<span class="pw-first">Investigate first</span>':''}<h3>${escape(row.title)}</h3><p class="pw-rail-reason">${escape(row.reason)}</p><p class="control-note">${escape(row.owner)}</p><button type="button" data-pw-rail="review" data-check="${escape(row.id)}" aria-label="Review: ${escape(row.title)}">${selectedCheck===row.id?'Continue review':'Review'}</button></article>`;
-    if(launcher){launcher.disabled=false;launcher.classList.toggle('is-urgent',red>0);const count=launcher.querySelector('[data-pw-drawer-count]');count.textContent=String(pending);count.hidden=pending===0;launcher.setAttribute('aria-label',`Priority actions and communications; ${pending} pending checks${red?`, ${red} overdue`:''}`);}
-    rail.innerHTML = `<dialog id="proposalDrawer" class="pw-drawer" aria-labelledby="pwDrawerTitle" aria-describedby="pwDrawerContext">
-      <header class="pw-drawer-header"><div><h2 id="pwDrawerTitle">Proposal actions</h2><p id="pwDrawerContext" class="pw-rail-context">${escape(ctx.result.route.origin)} · ${escape(monthName(ctx.inputs.month))}</p></div><button type="button" class="pw-drawer-close" data-pw-drawer-close aria-label="Close actions panel"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button></header>
-      <div class="pw-drawer-tabs" role="tablist" aria-label="Proposal panel sections"><button type="button" id="pwPriorityTab" role="tab" data-pw-tab="priorities" aria-controls="pwPriorityPanel" aria-selected="${drawerTab==='priorities'}" tabindex="${drawerTab==='priorities'?0:-1}">Priority actions <span class="pw-count">${pending}</span></button><button type="button" id="pwCommunicationsTab" role="tab" data-pw-tab="communications" aria-controls="pwCommunicationsPanel" aria-selected="${drawerTab==='communications'}" tabindex="${drawerTab==='communications'?0:-1}">Communications</button></div>
-      <div class="pw-rail-body"><section id="pwPriorityPanel" role="tabpanel" aria-labelledby="pwPriorityTab" data-pw-tab-panel="priorities" ${drawerTab==='priorities'?'':'hidden'}>
-      <p class="control-note">${pending?`${pending} checks need attention${red?`; ${red} overdue`:''}.`:'All listed checks have current user-recorded evidence.'} Status describes checks, not forecast accuracy.</p>
-      <div class="pw-rail-checks">${ordered[0]?card(ordered[0]):''}
-      ${ordered.length>1?`<details class="pw-other-checks"><summary>Other checks (${ordered.length-1})</summary>${ordered.slice(1).map(card).join('')}</details>`:''}</div>
-      <p class="pw-rag-key"><span class="pw-red">Red: overdue</span><span class="pw-amber">Amber: needs checking</span><span class="pw-green">Green: evidence recorded</span></p></section>
-      <section id="pwCommunicationsPanel" class="pw-rail-comms" role="tabpanel" aria-labelledby="pwCommunicationsTab" data-pw-tab-panel="communications" ${drawerTab==='communications'?'':'hidden'}><h3>Keep the conversation with the proposal</h3><p class="control-note">Open the discussion or prepare an update using the current numbers and check in focus.</p>
-      <button type="button" data-pw-rail="internal"><strong>Internal discussion <span>${proposal.comments.length}</span></strong><small>Notes and replies recorded on this browser</small><span aria-hidden="true">→</span></button>
-      <button type="button" data-pw-rail="external"><strong>Stakeholder update</strong><small>Draft an airline inquiry, hotel request or team summary</small><span aria-hidden="true">→</span></button>
-      <p class="control-note">Local discussion and reviewable drafts. No message is sent or teammate notified.</p></section></div></dialog>`;
-    const dialog=rail.querySelector('dialog');
-    dialog.addEventListener('cancel',event=>{event.preventDefault();closeDrawer();});
-    dialog.addEventListener('click',event=>{if(event.target!==dialog)return;const r=dialog.getBoundingClientRect();if(event.clientX<r.left||event.clientX>r.right||event.clientY<r.top||event.clientY>r.bottom)closeDrawer();});
-    if(drawerOpen)openDrawer();
-    const review = priority.rows.find(row=>row.id===selectedCheck) || next || priority.rows[0];
-    const area = mount.querySelector('.pw-priorities');
-    if (area && review) {
-      area.innerHTML = `<p class="eyebrow">CHECK IN FOCUS</p>${badge(review.status)}<h3 tabindex="-1" id="pwReviewTitle">${escape(review.title)}</h3><p>${escape(review.reason)}</p><p class="control-note">Who could help: ${escape(review.owner)}</p><details open><summary>What to verify</summary><p>${escape(review.ask)}</p>${review.evidence.map(e=>`<blockquote><p>${escape(e.note)}</p><small>${escape(e.owner)} · ${escape(displayDate(e.date))}</small></blockquote>`).join('')}</details><div class="pw-actions"><button type="button" data-pw-action="prepare-selected-task">Create follow-up</button><button type="button" class="secondary-button" data-pw-action="discuss-check">Discuss this check</button><button type="button" class="secondary-button" data-pw-action="request-check">Draft a request</button></div><p class="control-note">${review.tasks.length} related follow-up${review.tasks.length===1?'':'s'}. Review their evidence below. A completed check is not approval of the proposal.</p>`;
-    }
+  function checkStatus(status, dotOnly = false) {
+    const label = CHECK_STATUS[status];
+    const attributes = dotOnly ? ` role="img" aria-label="${label}" title="${label}"` : '';
+    return `<span class="pw-check-status pw-check-status-${status}"${attributes}><span class="pw-status-dot" aria-hidden="true"></span>${dotOnly ? '' : label}</span>`;
   }
+
+  function renderRail(ctx, priority) {
+    const pending = priority.rows.filter(row => row.status !== 'green').length;
+    if (launcher) {
+      const count = launcher.querySelector('[data-pw-drawer-count]');
+      launcher.disabled = false;
+      launcher.classList.toggle('is-urgent', priority.rows.some(row => row.status === 'red'));
+      count.textContent = String(pending);
+      count.hidden = false;
+      const label = `Actions · ${pending} ${pending === 1 ? 'check needs' : 'checks need'} attention`;
+      launcher.setAttribute('aria-label', label);
+      launcher.setAttribute('title', label);
+    }
+    if (!rail) return;
+    const first = priority.recommended;
+    const rows = first ? [first, ...priority.rows.filter(row => row.id !== first.id)] : priority.rows;
+    rail.innerHTML = `<dialog id="proposalDrawer" class="pw-drawer pw-simple-drawer" aria-labelledby="pwDrawerTitle" aria-describedby="pwDrawerContext">
+      <header class="pw-drawer-header">
+        <div><h2 id="pwDrawerTitle">Priority actions</h2><p id="pwDrawerContext" class="pw-rail-context">${escape(ctx.result.route.origin)} · ${escape(monthName(ctx.inputs.month))}</p></div>
+        <button type="button" class="pw-drawer-close" data-pw-drawer-close aria-label="Close actions panel"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+      </header>
+      <ul class="pw-rail-body pw-simple-list">${rows.map(row => {
+        const display = CHECK_DISPLAY[row.id];
+        const title = escape(display?.title || row.title);
+        return `<li class="pw-simple-row${selectedCheck === row.id ? ' pw-selected' : ''}">
+          <svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${display?.icon || 'M4 10l4 4 8-8'}"/></svg>
+          <span class="pw-simple-title">${title}</span>
+          ${checkStatus(row.status, true)}
+          <button type="button" data-pw-rail="review" data-check="${escape(row.id)}" aria-label="Review ${title}">Review</button>
+        </li>`;
+      }).join('')}</ul>
+    </dialog>`;
+    const dialog = rail.querySelector('dialog');
+    dialog.addEventListener('cancel', event => { event.preventDefault(); closeDrawer(); });
+    dialog.addEventListener('click', event => {
+      if (event.target !== dialog) return;
+      const bounds = dialog.getBoundingClientRect();
+      if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) closeDrawer();
+    });
+    if (drawerOpen) openDrawer();
+  }
+
   function reveal(selector) {
     closeDrawer(false);
     onOpenWorkspace?.();
@@ -300,70 +320,143 @@ function createProposalWorkspace({ mount, rail = null, launcher = null, onOpenWo
     target.scrollIntoView({block:'start',behavior:'instant'});
     target.focus?.({preventScroll:true});
   }
-  function openCommunication(kind) {
-    if (kind==='internal') { reveal('.pw-discussion');mount.querySelector('[data-pw-form="comment"] textarea')?.focus({preventScroll:true});return; }
-    const ctx=current(), proposal=store.get(proposalKey(ctx.inputs));
-    const priority=priorityActions(ctx,proposal);
-    const row=priority.rows.find(row=>row.id===selectedCheck)||priority.recommended;
-    if(kind==='external')kind=row?.id==='hotels'?'hotel':row?.id==='demand'?'airline':'team';
-    const fingerprint=proposalFingerprint(ctx),checkId=row?.id||'';
-    const keepEditedDraft=generatedDraft?.fingerprint===fingerprint && draftKind===kind && generatedDraft.checkId===checkId;
-    draftKind=kind;
-    if(!keepEditedDraft)generatedDraft={fingerprint,checkId,text:stakeholderDraft(ctx,kind,proposal)+(row?`\n\nCheck in focus: ${row.title}\n${row.reason}\nSuggested contact: ${row.owner}`:'')};
-    notice(keepEditedDraft?'Your current draft is open, including your edits. Nothing was sent.':'Draft prepared for review. Edit it before copying or downloading. Nothing was sent.');
-    render();reveal('.pw-drafts');mount.querySelector('[data-pw-draft]')?.focus({preventScroll:true});emit('proposal_draft');
-  }
-  rail?.addEventListener('click',event=>{
-    if(event.target.closest('[data-pw-drawer-close]')){closeDrawer();return;}
-    const tab=event.target.closest('[data-pw-tab]');
-    if(tab){selectDrawerTab(tab.dataset.pwTab);return;}
-    const button=event.target.closest('[data-pw-rail]');
+  rail?.addEventListener('click', event => {
+    if (event.target.closest('[data-pw-drawer-close]')) { closeDrawer(); return; }
+    const button = event.target.closest('[data-pw-rail="review"]');
     if (!button || !current()?.result) return;
     preserveDrafts();
-    if (button.dataset.pwRail==='review') {selectedCheck=button.dataset.check;render();reveal('#pwReviewTitle');}
-    else openCommunication(button.dataset.pwRail);
+    selectedCheck = button.dataset.check;
+    closeDrawer(false);
+    render();
+    reveal('[data-pw-selected-check] h4, .pw-task[data-pw-related] h4');
   });
-  rail?.addEventListener('keydown',event=>{
-    // Let this modal consume Escape before a background walkthrough handles it.
-    if(event.key==='Escape' && drawerOpen){event.stopPropagation();return;}
-    const tab=event.target.closest('[data-pw-tab]');
-    if(!tab||!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;
-    event.preventDefault();const next=event.key==='Home'?'priorities':event.key==='End'?'communications':tab.dataset.pwTab==='priorities'?'communications':'priorities';
-    selectDrawerTab(next);rail.querySelector(`[data-pw-tab="${next}"]`).focus();
+  rail?.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && drawerOpen) event.stopPropagation();
   });
+
   function render() {
     const ctx = current();
-    if (!ctx?.inputs || !ctx?.result) {closeDrawer(false);if(launcher){launcher.disabled=true;launcher.classList.remove('is-urgent');launcher.querySelector('[data-pw-drawer-count]').hidden=true;launcher.setAttribute('aria-label','Actions unavailable: correct the plan inputs');} mount.innerHTML = '<p class="control-note">Choose a valid plan to see its proposal workspace.</p>'; if(rail)rail.innerHTML='<p class="control-note">Correct the plan inputs to see priority actions and communications.</p>'; return; }
+    if (!ctx?.inputs || !ctx?.result) {closeDrawer(false);if(launcher){launcher.disabled=true;launcher.classList.remove('is-urgent');launcher.querySelector('[data-pw-drawer-count]').hidden=true;launcher.setAttribute('aria-label','Actions unavailable: correct the plan inputs');launcher.setAttribute('title','Actions unavailable: correct the plan inputs');} mount.innerHTML = '<p class="control-note">Choose a valid plan to see its proposal workspace.</p>'; if(rail)rail.innerHTML='<p class="control-note">Correct the plan inputs to see priority actions and communications.</p>'; return; }
     const key = proposalKey(ctx.inputs);
-    if (key !== lastKey) selectedCheck=null;
+    if (key !== lastKey) {
+      selectedCheck = null;
+      openTools.clear();
+    }
     const fingerprint = proposalFingerprint(ctx);
     const proposal = store.get(key);
     const priority = priorityActions(ctx, proposal);
     if(selectedCheck && !priority.rows.some(row=>row.id===selectedCheck))selectedCheck=null;
     const currentPlan = `${ctx.result.route.origin || ctx.inputs.originKey} · ${monthName(ctx.inputs.month)}`;
-    const taskHtml = proposal.tasks.slice().reverse().map((task) => {
-      const validEvidence = task.status === 'verified' && task.verifiedFingerprint === fingerprint;
-      const stale = task.status === 'verified' && !validEvidence;
-      const overdue = task.dueDate < localDate(new Date()) && !validEvidence;
-      return `<article class="pw-task"><h4>${escape(task.title)}</h4><p class="control-note">${escape(task.owner)} · Due ${escape(task.dueDate)}${overdue ? ' · Overdue' : ''}${stale ? ' · Evidence needs review after plan changes' : ''}</p>
-        <form data-pw-form="task-update" data-id="${escape(task.id)}"><label>Status<select name="status"><option value="open" ${task.status === 'open' ? 'selected' : ''}>Open</option><option value="waiting" ${task.status === 'waiting' ? 'selected' : ''}>Waiting for response</option><option value="verified" ${task.status === 'verified' ? 'selected' : ''}>Verified with evidence</option></select></label><label>Source, date and what was confirmed<textarea name="evidence" maxlength="3000" rows="2" placeholder="For example: hotel team email, date, and what they confirmed">${escape(task.evidence)}</textarea></label><button type="submit" class="secondary-button">Update action</button></form>
-        ${task.updates.length ? `<details><summary>Action history (${task.updates.length})</summary><ol class="pw-history">${task.updates.slice().reverse().map((row) => `<li>${escape(displayDate(row.createdAt))} · ${escape(row.status)}<p>${escape(row.evidence || 'No evidence added.')}</p></li>`).join('')}</ol></details>` : ''}</article>`;
+    const checkHtml = priority.rows.filter(row => !row.id.startsWith('task:')).map(row => {
+      const display = CHECK_DISPLAY[row.id];
+      const recommended = row.id === priority.recommended?.id;
+      const selected = row.id === selectedCheck;
+      return `<article class="pw-check pw-check-${row.status}${recommended ? ' pw-recommendation' : ''}" ${selected ? 'data-pw-selected-check' : ''}>
+        ${recommended ? '<p class="pw-start-here">Start here</p>' : ''}
+        <div class="pw-check-heading"><h4 tabindex="-1">${escape(display.title)}</h4>${checkStatus(row.status)}</div>
+        <p>${escape(display.why)}</p>
+        <button type="button" data-pw-action="add-task" data-check="${escape(row.id)}" aria-label="Add task for ${escape(display.title)}">Add task</button>
+      </article>`;
     }).join('');
+    const relatedTasks = priority.rows.find(row => row.id === selectedCheck)?.tasks || [];
+    const taskHtml = proposal.tasks.slice().reverse().map(task => {
+      const stale = task.status === 'verified' && task.verifiedFingerprint !== fingerprint;
+      const status = stale ? 'open' : task.status;
+      const overdue = task.dueDate < localDate(new Date()) && status !== 'verified';
+      const check = CHECK_DISPLAY[task.check]?.title;
+      const startHere = priority.recommended?.id === `task:${task.id}`;
+      const options = Object.entries(TASK_STATUS).map(([value, label]) => `<option value="${value}"${status === value ? ' selected' : ''}>${label}</option>`).join('');
+      return `<article class="pw-task" ${relatedTasks.includes(task.id) ? 'data-pw-related' : ''}>
+        ${startHere ? '<p class="pw-start-here">Start here</p>' : ''}
+        <h4 tabindex="-1" id="pwTask-${escape(task.id)}">${escape(task.title)}</h4>
+        <p class="pw-task-meta">${check ? `${escape(check)} · ` : ''}${escape(task.owner)} · Due <time datetime="${escape(task.dueDate)}">${escape(task.dueDate)}</time>
+          ${overdue ? checkStatus('red') : ''}${stale ? '<span class="pw-recheck">Plan changed · Review this again</span>' : ''}
+        </p>
+        <form data-pw-form="task-update" data-id="${escape(task.id)}">
+          <label>Status<select name="status">${options}</select></label>
+          <label>Notes<textarea name="evidence" maxlength="3000" rows="2" placeholder="To mark Done, add who confirmed what, and when.">${escape(task.evidence)}</textarea></label>
+          <button type="submit" class="secondary-button">Save</button>
+        </form>
+        ${task.updates.length ? `<details><summary>Task history (${task.updates.length})</summary><ol class="pw-history">${task.updates.slice().reverse().map(row => `<li>${escape(displayDate(row.createdAt))} · ${escape(TASK_STATUS[row.status] || row.status)}<p>${escape(row.evidence || 'No notes added.')}</p></li>`).join('')}</ol></details>` : ''}
+      </article>`;
+    }).join('');
+    const tool = (name) => openTools.has(name) ? ' open' : '';
     const historyHtml = proposal.versions.slice().reverse().map((version) => `<li><div class="pw-item-heading"><strong>${escape(version.name)}</strong><span>${escape(displayDate(version.createdAt))}</span></div><p>${version.fingerprint === fingerprint ? 'Matches the current assumptions.' : 'Saved assumptions differ from the current plan.'} Estimated guest nights: ${fmt(version.result?.scenario?.guestNights)}.</p><details><summary>Saved assumptions</summary><dl class="pw-assumptions">${Object.entries(version.inputs).filter(([key, value]) => INPUT_LABELS[key] && value != null && value !== '').map(([key, value]) => `<div><dt>${escape(INPUT_LABELS[key])}</dt><dd>${escape(['loadFactor', 'p2pShare', 'conversionRate', 'eventUplift'].includes(key) ? pct(value) : typeof value === 'boolean' ? value ? 'Yes' : 'No' : value)}</dd></div>`).join('')}</dl><p class="control-note">The snapshot also retains the visitor mix and comparison-country details for loading this version and downloading history.</p></details><button type="button" class="secondary-button" data-pw-action="restore" data-id="${escape(version.id)}">Load this version</button></li>`).join('');
-    mount.innerHTML = `<div class="pw-heading"><div><p class="eyebrow">PROPOSAL WORKSPACE</p><h2>Checks, people and next steps</h2><p>${escape(currentPlan)}</p></div><button type="button" class="secondary-button" data-pw-action="backup">Download local history</button></div>
-      <p class="control-note">Notes are saved in this browser on this device. They are not shared with teammates. Owners are labels, not notified users. Download a backup before clearing browser data.</p>
-      ${store.warning ? `<p class="pw-warning" role="alert">${escape(store.warning)}</p>` : ''}
-      <p class="pw-message ${messageIsError ? 'pw-warning' : ''}" role="status" aria-live="polite">${escape(message)}</p>
-      ${downloadReady ? `<p class="pw-download-ready"><a id="pwDownloadReady" href="${escape(downloadReady.url)}" download="${escape(downloadReady.filename)}">Download ${escape(downloadReady.filename)}</a><span class="control-note">If the download did not start automatically, use this link. Keep history files private if your notes contain sensitive details.</span></p>` : ''}
-      <section class="content-block pw-priorities"><div class="section-heading"><h3>Priority checks</h3></div><p class="control-note">Red means a check is overdue. Amber means evidence is missing, pending or no longer matches the plan. Green means a user recorded evidence for these exact assumptions; it does not mean the route is approved or the estimate is accurate.</p><div class="pw-check-grid">${priority.rows.map((row) => `<article class="pw-check pw-check-${row.status}">${badge(row.status)}<h4>${escape(row.title)}</h4><p>${escape(row.reason)}</p><p class="control-note">Suggested contact: ${escape(row.owner)}</p>${row.evidence.map((evidence) => `<details><summary>Recorded evidence</summary><p>${escape(evidence.note)}</p><p class="control-note">${escape(evidence.owner)} · ${escape(displayDate(evidence.date))}</p></details>`).join('')}</article>`).join('')}</div></section>
-      <section class="content-block pw-recommendation"><p class="eyebrow">RECOMMENDED NEXT ACTION</p><h3>${escape(priority.recommended?.title || 'Review the evidence together')}</h3><p>${escape(priority.recommended?.why || 'The listed checks have evidence for the current assumptions. Review sources and remaining uncertainty before deciding whether to advance.')}</p><p>${escape(priority.recommended?.ask || 'Agree a decision with the responsible airline and hotel teams.')}</p><p class="control-note">Who could help: ${escape(priority.recommended?.owner || 'Proposal owner and partner teams')}</p>${priority.recommended ? '<button type="button" class="secondary-button" data-pw-action="prepare-task">Turn this into an action</button>' : ''}<div id="pwRecommendationFeedback"></div></section>
-      <section class="content-block"><h3>Actions and follow-ups</h3><form class="pw-form-grid" data-pw-form="task"><label>What needs checking?<select name="check">${CHECKS.map((check) => `<option value="${check.id}">${escape(check.title)}</option>`).join('')}<option value="event">Event or seasonal increase</option><option value="general">Other follow-up</option></select></label><label>Action<input name="title" required maxlength="300" placeholder="What should the owner find out?"></label><label>Owner or team<input name="owner" required maxlength="100" placeholder="Airline planner, hotel team, or a name"></label><label>Due date<input name="dueDate" type="date" required></label><button type="submit">Add action</button></form><div class="pw-task-list">${taskHtml || '<p class="control-note">No actions recorded for this country and month yet.</p>'}</div></section>
-      <div class="pw-two-column"><section class="content-block pw-discussion"><h3>Internal proposal discussion</h3><p class="control-note">Keep questions and manually recorded replies with this proposal. Visible only in this browser; this is not a live team chat.</p><form data-pw-form="comment"><label>Comment<textarea name="text" required maxlength="3000" rows="3" placeholder="Record a question, response, or useful context"></textarea></label><button type="submit">Add comment</button></form><ol class="pw-history">${proposal.comments.slice().reverse().map((entry) => `<li><span class="control-note">${escape(displayDate(entry.createdAt))} · ${entry.fingerprint === fingerprint ? 'Current assumptions' : 'Earlier assumptions'}</span><p>${escape(entry.text)}</p></li>`).join('') || '<li class="control-note">No comments yet.</li>'}</ol>${proposal.discussions.length ? `<details><summary>Planning chat history (${proposal.discussions.length})</summary><ol class="pw-history">${proposal.discussions.slice().reverse().map((entry) => `<li><strong>${entry.role === 'user' ? 'You' : 'Air2Stay'}</strong><span class="control-note"> · ${escape(displayDate(entry.createdAt))} · ${entry.fingerprint === fingerprint ? 'Current assumptions' : 'Earlier assumptions'}</span><p>${escape(entry.text)}</p></li>`).join('')}</ol></details>` : ''}</section>
-      <section class="content-block"><h3>Decision record</h3><form data-pw-form="decision"><label>Current position<select name="outcome"><option>Investigate</option><option>Hold</option><option>Ready for review</option></select></label><label>Reason and remaining questions<textarea name="text" required maxlength="3000" rows="3"></textarea></label><button type="submit">Record decision</button></form><ol class="pw-history">${proposal.decisions.slice().reverse().map((entry) => `<li><strong>${escape(entry.outcome)}</strong><span class="control-note"> · ${escape(displayDate(entry.createdAt))} · ${entry.fingerprint === fingerprint ? 'Current assumptions' : 'Earlier assumptions'}</span><p>${escape(entry.text)}</p></li>`).join('') || '<li class="control-note">No decision recorded yet.</li>'}</ol></section></div>
-      <section class="content-block"><h3>Saved proposal versions</h3><p class="control-note">Save a version when you reach a useful milestone. It preserves the exact inputs, result and decision note. Loading an older version does not delete later history.</p><form class="pw-inline-form" data-pw-form="version"><label>Version name<input name="name" maxlength="100" placeholder="For example: Initial airline proposal"></label><button type="submit">Save version</button></form><ol class="pw-history">${historyHtml || '<li class="control-note">No versions saved for this country and month.</li>'}</ol></section>
-      <section class="content-block pw-drafts"><h3>Draft a stakeholder update</h3><p class="control-note">Use the current numbers to prepare a message. Review it, then copy or download it. Air2Stay does not send messages.</p><label>Message for<select data-pw-draft-kind><option value="airline" ${draftKind === 'airline' ? 'selected' : ''}>Airline or airport planner</option><option value="hotel" ${draftKind === 'hotel' ? 'selected' : ''}>Hotel team</option><option value="team" ${draftKind === 'team' ? 'selected' : ''}>Your team</option></select></label><button type="button" data-pw-action="draft">Prepare draft</button>${generatedDraft ? `<label>Review and edit the draft<textarea data-pw-draft rows="14">${escape(generatedDraft.text)}</textarea></label><div class="pw-actions"><button type="button" class="secondary-button" data-pw-action="copy-draft">Copy draft</button><button type="button" class="secondary-button" data-pw-action="download-draft">Download draft</button></div>` : ''}</section>`;
+    mount.innerHTML = `<div class="pw-heading">
+      <div><h2>Follow-ups</h2><p>${escape(currentPlan)}</p></div>
+      <span class="pw-local">Saved in this browser</span>
+    </div>
+    ${store.warning ? `<p class="pw-warning" role="alert">${escape(store.warning)}</p>` : ''}
+    <p class="pw-message ${messageIsError ? 'pw-warning' : ''}" role="status" aria-live="polite">${escape(message)}</p>
+    <div class="pw-followup-grid">
+      <section class="pw-priorities" aria-labelledby="pwChecksHeading">
+        <h3 id="pwChecksHeading">What needs checking</h3>
+        <div class="pw-check-list">${checkHtml}</div>
+      </section>
+      <section class="pw-your-tasks" aria-labelledby="pwTasksHeading">
+        <h3 id="pwTasksHeading">Your tasks</h3>
+        <details class="pw-task-editor" data-pw-tool="task"${tool('task')}>
+          <summary>New task</summary>
+          <form class="pw-form-grid" data-pw-form="task">
+            <label>Check<select name="check">
+              ${CHECKS.map(check => `<option value="${check.id}">${escape(CHECK_DISPLAY[check.id].title)}</option>`).join('')}
+              <option value="event">Event demand</option><option value="general">Other follow-up</option>
+            </select></label>
+            <label>Task<input name="title" required maxlength="300" placeholder="What needs confirming?"></label>
+            <label>Owner or team<input name="owner" required maxlength="100" placeholder="For example, hotel team"></label>
+            <label>Due date<input name="dueDate" type="date" required></label>
+            <button type="submit">Add task</button>
+          </form>
+        </details>
+        <div class="pw-task-list">${taskHtml || '<p class="pw-empty">No tasks yet. Choose <strong>Add task</strong> on a check to get started.</p>'}</div>
+      </section>
+    </div>
+    <div class="pw-tools" aria-label="More follow-up tools">
+      <details class="pw-discussion" data-pw-tool="note"${tool('note')}>
+        <summary>Add note</summary>
+        <form data-pw-form="comment">
+          <label>Note<textarea name="text" required maxlength="3000" rows="3" placeholder="Record a question, reply or useful detail"></textarea></label>
+          <button type="submit">Save note</button>
+        </form>
+        <ol class="pw-history">${proposal.comments.slice().reverse().map(entry => `<li><small>${escape(displayDate(entry.createdAt))} · ${entry.fingerprint === fingerprint ? 'Current plan' : 'Earlier plan'}</small><p>${escape(entry.text)}</p></li>`).join('') || '<li>No notes yet.</li>'}</ol>
+        ${chatEnabled && proposal.discussions.length ? `<details><summary>Planning chat history (${proposal.discussions.length})</summary><ol class="pw-history">${proposal.discussions.slice().reverse().map(entry => `<li><strong>${entry.role === 'user' ? 'You' : 'Air2Stay'}</strong> <small>· ${escape(displayDate(entry.createdAt))} · ${entry.fingerprint === fingerprint ? 'Current plan' : 'Earlier plan'}</small><p>${escape(entry.text)}</p></li>`).join('')}</ol></details>` : ''}
+      </details>
+      <details class="pw-drafts" data-pw-tool="email"${tool('email')}>
+        <summary>Draft email</summary>
+        <p class="pw-task-meta">Review the draft, then copy it into your email app to send.</p>
+        <label>Message for<select data-pw-draft-kind>
+          <option value="airline" ${draftKind === 'airline' ? 'selected' : ''}>Airline or airport planner</option>
+          <option value="hotel" ${draftKind === 'hotel' ? 'selected' : ''}>Hotel team</option>
+          <option value="team" ${draftKind === 'team' ? 'selected' : ''}>Your team</option>
+        </select></label>
+        <button type="button" data-pw-action="draft">Prepare draft</button>
+        ${generatedDraft ? `<label>Email draft<textarea data-pw-draft rows="14">${escape(generatedDraft.text)}</textarea></label><div class="pw-actions"><button type="button" class="secondary-button" data-pw-action="copy-draft">Copy draft</button><button type="button" class="secondary-button" data-pw-action="download-draft">Download draft</button></div>` : ''}
+      </details>
+      <details data-pw-tool="decision"${tool('decision')}>
+        <summary>Log decision</summary>
+        <form data-pw-form="decision">
+          <label>Decision<select name="outcome"><option>Investigate</option><option>Hold</option><option>Ready for review</option></select></label>
+          <label>Reason<textarea name="text" required maxlength="3000" rows="3"></textarea></label>
+          <button type="submit">Save decision</button>
+        </form>
+        <ol class="pw-history">${proposal.decisions.slice().reverse().map(entry => `<li><strong>${escape(entry.outcome)}</strong> <small>· ${escape(displayDate(entry.createdAt))} · ${entry.fingerprint === fingerprint ? 'Current plan' : 'Earlier plan'}</small><p>${escape(entry.text)}</p></li>`).join('') || '<li>No decisions yet.</li>'}</ol>
+      </details>
+      <details data-pw-tool="history"${tool('history')}>
+        <summary>Saved versions and backup</summary>
+        <form class="pw-inline-form" data-pw-form="version">
+          <label>Version name<input name="name" maxlength="100" placeholder="For example, initial airline proposal"></label>
+          <button type="submit">Save version</button>
+        </form>
+        <ol class="pw-history">${historyHtml || '<li>No versions saved for this plan yet.</li>'}</ol>
+        <button type="button" class="secondary-button" data-pw-action="backup">Download local history</button>
+        <div id="pwRecommendationFeedback"></div>
+      </details>
+    </div>
+    ${downloadReady ? `<div class="pw-download-ready"><a id="pwDownloadReady" href="${escape(downloadReady.url)}" download="${escape(downloadReady.filename)}">Download ${escape(downloadReady.filename)}</a>
+      ${downloadReady.historyText ? `<details><summary>View or copy history JSON</summary><label>History JSON<textarea readonly rows="8">${escape(downloadReady.historyText)}</textarea></label></details>` : ''}
+    </div>` : ''}`;
     restoreDrafts(key);
-    renderRail(ctx,proposal,priority);
+    renderRail(ctx, priority);
     lastKey = key;
     lastFingerprint = fingerprint;
     try { onRecommendation?.(mount.querySelector('#pwRecommendationFeedback'), { context: ctx, recommended: priority.recommended, fingerprint }); } catch { /* Feedback should not interrupt proposal work. */ }
@@ -373,7 +466,10 @@ function createProposalWorkspace({ mount, rail = null, launcher = null, onOpenWo
     const blob = new view.Blob([text], { type });
     const url = view.URL.createObjectURL(blob);
     if (downloadReady) view.URL.revokeObjectURL(downloadReady.url);
-    downloadReady = { url, filename, fingerprint: proposalFingerprint(current()) };
+    downloadReady = {
+      url, filename, fingerprint: proposalFingerprint(current()),
+      historyText: type === 'application/json' ? text : null,
+    };
     const link = doc.createElement('a');
     link.href = url; link.download = filename; doc.body.append(link); link.click(); link.remove();
   }
@@ -383,6 +479,7 @@ function createProposalWorkspace({ mount, rail = null, launcher = null, onOpenWo
     event.preventDefault();
     const ctx = current();
     const key = proposalKey(ctx.inputs);
+    let savedTask = null;
     const fields = Object.fromEntries([...form.querySelectorAll('[name]')].map((field) => [field.name, field.value]));
     preserveDrafts();
     try {
@@ -390,14 +487,24 @@ function createProposalWorkspace({ mount, rail = null, launcher = null, onOpenWo
       if (action === 'version') store.saveVersion(ctx, fields.name);
       if (action === 'comment') {const selected=priorityActions(ctx,store.get(key)).rows.find(row=>row.id===selectedCheck);store.addComment(ctx,selected?`Check: ${selected.title}\n${fields.text}`:fields.text);}
       if (action === 'decision') store.addDecision(ctx, fields.outcome, fields.text);
-      if (action === 'task') store.addTask(ctx, fields);
-      if (action === 'task-update') store.updateTask(ctx, form.dataset.id, fields.status, fields.evidence);
+      if (action === 'task') {
+        savedTask = store.addTask(ctx, fields);
+        openTools.delete('task');
+      }
+      if (action === 'task-update') savedTask = store.updateTask(ctx, form.dataset.id, fields.status, fields.evidence);
       forgetForm(form, key);
-      notice(store.warning || 'Recorded for this proposal.');
-      generatedDraft = null;
+      notice(store.warning || (action === 'task' ? 'Task added.' : action === 'task-update' ? 'Task saved.' : 'Saved for this plan.'));
       emit(`proposal_${action}`);
     } catch (error) { notice(error.message, true); }
     render();
+    if (savedTask) {
+      const heading = doc.getElementById?.(`pwTask-${savedTask.id}`);
+      heading?.scrollIntoView({ block: 'nearest' });
+      heading?.focus({ preventScroll: true });
+    } else if (messageIsError) {
+      const status = mount.querySelector('.pw-message');
+      status?.scrollIntoView({ block: 'nearest' });
+    }
   });
   mount.addEventListener('change', (event) => {
     if (event.target.matches('[data-pw-draft-kind]')) { draftKind = event.target.value; generatedDraft = null; preserveDrafts(); render(); }
@@ -410,8 +517,12 @@ function createProposalWorkspace({ mount, rail = null, launcher = null, onOpenWo
     const action = button.dataset.pwAction;
     preserveDrafts();
     try {
-      if (action === 'backup') { download(JSON.stringify(store.exportData(), null, 2), 'Air2Stay-proposal-history.json', 'application/json'); notice('History file ready. If the download did not start, choose the Download link below.'); }
-      if (action === 'draft') { generatedDraft = { fingerprint: proposalFingerprint(ctx), text: stakeholderDraft(ctx, draftKind, proposal) }; notice('Draft prepared from the current plan. Review before sharing.'); }
+      if (action === 'backup') { download(JSON.stringify(store.exportData(), null, 2), 'Air2Stay-proposal-history.json', 'application/json'); notice('History file ready. Use the download link or copy the backup text.'); }
+      if (action === 'draft') {
+        const row = priorityActions(ctx, proposal).rows.find(check => check.id === selectedCheck);
+        generatedDraft = { fingerprint: proposalFingerprint(ctx), text: stakeholderDraft(ctx, draftKind, proposal) + (row ? `\n\nCheck in focus: ${row.title}\n${row.reason}\nSuggested contact: ${row.owner}` : '') };
+        notice('Email draft ready to review.');
+      }
       if (action === 'copy-draft') {
         const field = mount.querySelector('[data-pw-draft]');
         generatedDraft.text = field.value;
@@ -434,17 +545,22 @@ function createProposalWorkspace({ mount, rail = null, launcher = null, onOpenWo
         generatedDraft = null;
         notice(`Loaded ${version.name}. The results have been recalculated using the app’s current data.`);
       }
-      if (action === 'discuss-check') {openCommunication('internal');return;}
-      if (action === 'request-check') {const selected=priorityActions(ctx,proposal).rows.find(row=>row.id===selectedCheck)||priorityActions(ctx,proposal).recommended;openCommunication(selected?.id==='hotels'?'hotel':selected?.id==='demand'?'airline':'team');return;}
-      if (action === 'prepare-task' || action === 'prepare-selected-task') {
-        const priorities=priorityActions(ctx,proposal);
-        const recommended = (action==='prepare-selected-task' && priorities.rows.find(row=>row.id===selectedCheck)) || priorities.recommended || priorities.rows[0];
-        const form = mount.querySelector('[data-pw-form="task"]');
-        form.elements.check.value = CHECKS.some((check) => check.id === recommended.id) || recommended.id === 'event' ? recommended.id : 'general';
-        form.elements.title.value = recommended.title;
-        form.elements.owner.value = recommended.owner;
-        form.elements.dueDate.focus();
-        form.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      if (action === 'add-task') {
+        const check = priorityActions(ctx, proposal).rows.find(row => row.id === button.dataset.check);
+        if (!check) return;
+        selectedCheck = check.id;
+        openTools.add('task');
+        render();
+        const editor = mount.querySelector('.pw-task-editor');
+        const form = editor.querySelector('form');
+        if (form.elements.check.value !== check.id || !form.elements.title.value) {
+          form.elements.check.value = check.id;
+          form.elements.title.value = check.title;
+          form.elements.owner.value = check.owner;
+          form.elements.dueDate.value = '';
+        }
+        editor.scrollIntoView({ block: 'nearest' });
+        form.elements.dueDate.focus({ preventScroll: true });
         return;
       }
       emit(`proposal_${action}`);

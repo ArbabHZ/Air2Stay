@@ -78,6 +78,7 @@ st.markdown(
 ROOT = pathlib.Path(__file__).parent
 PROTOTYPE_DIR = ROOT / "prototype"
 HTML_FILE = PROTOTYPE_DIR / "index.html"
+CHAT_ENABLED = False
 GEMINI_BRIDGE_PORT = 8767
 GEMINI_MODEL = "gemini-3.1-flash-lite"
 
@@ -208,8 +209,11 @@ def start_gemini_bridge():
 
 
 try:
-    load_local_env()
-    gemini_bridge = start_gemini_bridge() if os.environ.get("GEMINI_API_KEY") else None
+    gemini_bridge = None
+    if CHAT_ENABLED:
+        load_local_env()
+        if os.environ.get("GEMINI_API_KEY"):
+            gemini_bridge = start_gemini_bridge()
 except OSError:
     gemini_bridge = None
     st.warning("The planner is ready, but the local assistant connection could not start. Close other Air2Stay sessions and restart the app.")
@@ -416,9 +420,9 @@ try:
         asset_signature += ((audit_path.name, audit_path.stat().st_mtime_ns),)
     page_html = load_prototype_html(asset_signature)
     shared_plan = st.query_params.get("plan", "")
-    config = {"sharedPlan": shared_plan if len(shared_plan) <= 20000 else "invalid", "appUrl": "http://localhost:8765/", "assistantToken": gemini_bridge.token if gemini_bridge else ""}
+    config = {"sharedPlan": shared_plan if len(shared_plan) <= 20000 else "invalid", "appUrl": "http://localhost:8765/", "chatEnabled": CHAT_ENABLED, "assistantToken": gemini_bridge.token if gemini_bridge else ""}
     config_b64 = base64.b64encode(json.dumps(config).encode("utf-8")).decode("ascii")
-    config_script = f'<script>(() => {{ const config = JSON.parse(atob("{config_b64}")); window.__AIR2STAY_SHARED_PLAN__ = config.sharedPlan; window.__AIR2STAY_APP_URL__ = config.appUrl; window.__AIR2STAY_ASSISTANT_TOKEN__ = config.assistantToken; }})();</script>'
+    config_script = f'<script>(() => {{ const config = JSON.parse(atob("{config_b64}")); window.__AIR2STAY_SHARED_PLAN__ = config.sharedPlan; window.__AIR2STAY_APP_URL__ = config.appUrl; window.__AIR2STAY_CHAT_ENABLED__ = config.chatEnabled; window.__AIR2STAY_ASSISTANT_TOKEN__ = config.assistantToken; }})();</script>'
     page_html = page_html.replace("<head>", "<head>" + config_script, 1)
 
     st.components.v1.html(

@@ -6,6 +6,7 @@ import { createProposalWorkspace } from "./proposal_workspace.mjs";
 import { createGuidedHelp } from "./guided_help.mjs";
 import { planningChatReply } from "./planning_chat.mjs";
   
+ const chatEnabled = globalThis.__AIR2STAY_CHAT_ENABLED__ === true;
  const $ = (selector) => document.querySelector(selector);
  const $$ = (selector) => [...document.querySelectorAll(selector)];
  const formatNumber = (value) => Math.round(value || 0).toLocaleString("en-US");
@@ -26,6 +27,7 @@ import { planningChatReply } from "./planning_chat.mjs";
 let countryLocationLookup = {};
  let state;
  let bridgeOverride = null;
+ let bridgeDraft = [];
 let bridgeEditing = false;
  let lastRenderedRouteKey = null;
  let renderQueued = false;
@@ -942,32 +944,72 @@ function renderSideBySideComparison(result) {
    }).join("");
  }
   
-function bridgeDraftWeight(field) {
-  return field.value === field.dataset.displayed ? Number(field.dataset.exact) : Number(field.value) / 100;
+// Keep the chosen percentage exact and divide the remainder among all other groups.
+function rebalanceVisitorShares(rows, index, target, reference = []) {
+  if (rows.length < 2) return rows;
+  const remaining = 1 - target;
+  const sum = rows.reduce((total, row, position) => total + (position === index ? 0 : row.weight), 0);
+  const referenceWeights = sum === 0 ? new Map(reference.map(row => [row.nationality, row.weight])) : null;
+  const weights = rows.map((row, position) => position === index ? 0
+    : referenceWeights ? referenceWeights.get(row.nationality) || 0 : row.weight);
+  const total = weights.reduce((sum, weight) => sum + weight, 0);
+  return rows.map((row, position) => ({
+    ...row,
+    weight: position === index ? target : remaining * (total > 0 ? weights[position] / total : 1 / (rows.length - 1)),
+  }));
 }
 
-function updateBridgeDraftTotal(event) {
-  if (event?.target?.classList.contains("bridge-input")) {
-    event.target.dataset.exact = String(Number(event.target.value) / 100);
-  }
-  const fields = $$(".bridge-input");
-  const invalid = fields.some((field) => !field.value.trim() || !Number.isFinite(Number(field.value)) || Number(field.value) < 0 || Number(field.value) > 100);
-  const total = Number($("#bridgeRunningTotal").dataset.other || 0) + fields.reduce((sum, field) => sum + bridgeDraftWeight(field),0);
-  $("#bridgeRunningTotal").textContent = invalid ? "Enter a share between 0% and 100%." : `${bridgeEditing ? "Draft" : "Applied"} total: ${formatPercent(total,1)}${Math.abs(total-1) < 1e-7 ? " · adds up to 100%" : " · will be adjusted to 100% when applied"}`;
-  fields.forEach((field) => {
-    field.classList.toggle("changed", field.value !== field.dataset.displayed);
-    field.style.setProperty("--mix-fill", `${field.value}%`);
-    field.setAttribute("aria-valuetext", `${Number(field.value).toFixed(1)} percent`);
+function validVisitorShare(field) {
+  return field.value.trim() !== "" && Number.isFinite(Number(field.value)) && Number(field.value) >= 0 && Number(field.value) <= 100;
+}
+
+function updateBridgeDraftTotal() {
+  const total = bridgeDraft.reduce((sum, row) => sum + row.weight, 0);
+  const other = bridgeDraft.slice(10).reduce((sum, row) => sum + row.weight, 0);
+  $("#bridgeRunningTotal").textContent = `Visitor shares total ${formatPercent(total, 1)}.`;
+  $$("[data-bridge-other]").forEach(element => { element.textContent = formatPercent(other, 1); });
+  $$(".bridge-input").forEach(field => {
+    const row = bridgeDraft[Number(field.dataset.index)];
+    if (!row) return;
+    const display = (row.weight * 100).toFixed(1);
+    field.value = display;
+    field.classList.toggle("changed", display !== field.dataset.displayed);
+    field.style.setProperty("--mix-fill", `${display}%`);
+    field.setAttribute("aria-valuetext", `${display} percent`);
     const badge = field.closest(".vm-share-editor")?.querySelector(".vm-slider-badge");
-    if (badge) badge.textContent = Number(field.value).toFixed(1);
+    if (badge) badge.textContent = display;
+    const ring = $(`[data-mix-ring="${field.dataset.index}"]`);
+    if (ring) {
+      ring.querySelector("strong").textContent = `${display}%`;
+      ring.querySelector("svg").setAttribute("aria-label", `${row.nationality}: ${display}%`);
+      ring.querySelector(".vm-ring-value").setAttribute("stroke-dasharray", `${row.weight * 100} ${100 - row.weight * 100}`);
+    }
   });
+}
+
+function changeVisitorShare(event) {
+  const field = event.target;
+  if (!field.classList.contains("bridge-input")) return;
+  if (!validVisitorShare(field)) {
+    $("#bridgeStatus").textContent = "Enter a share from 0% to 100%.";
+    return;
+  }
+  const index = Number(field.dataset.index);
+  const target = Number(field.value) / 100;
+  if (!bridgeDraft[index]) return;
+  const needsReference = target < 1 && bridgeDraft.every((row, position) => position === index || row.weight === 0);
+  const reference = needsReference ? runScenario(data, { ...state, bridgeOverride: null }).bridge : [];
+  bridgeDraft = rebalanceVisitorShares(bridgeDraft, index, target, reference);
+  updateBridgeDraftTotal();
+  $("#bridgeStatus").textContent = "Other shares adjust automatically. Check-ins, guest nights and the map update when you apply.";
 }
 
 function visitorOriginMap(rows, colors, flag, escape) {
   const point = projectMapPoint(54.3773, 24.4539);
   const hub = [point[0], point[1] + 85];
   const occupied = [{ x: hub[0] - 10, y: hub[1] + 10, width: 130, height: 35 }];
-  const located = rows.map((row, index) => ({ row, color: colors[index], location: countryLocationLookup[normalizeCountryName(row.nationalityKey || row.nationality)] }))
+  const activeRows = rows.map((row, index) => ({ row, color: colors[index] })).filter(({ row }) => row.weight > 0);
+  const located = activeRows.map(item => ({ ...item, location: countryLocationLookup[normalizeCountryName(item.row.nationalityKey || item.row.nationality)] }))
     .filter(({ location }) => location?.coordinates?.length === 2 && location.coordinates.every(Number.isFinite));
   const routes = located.map(({ row, color, location }, index) => {
     const projected = projectMapPoint(...location.coordinates);
@@ -996,10 +1038,11 @@ function visitorOriginMap(rows, colors, flag, escape) {
   });
   const viewTop = Math.max(0, Math.min(85, ...occupied.map(label => label.y - 12), ...routes.map(route => route.arcTop - 12)));
   const viewBottom = Math.max(520, ...occupied.map(label => label.y + label.height + 12));
-  return `<header class="vm-map-header"><span><i></i> GEOGRAPHIC ORIGIN MAP</span><h3>Global Visitor Origins</h3></header><svg class="vm-origin-svg" viewBox="0 ${viewTop} 1000 ${viewBottom - viewTop}" preserveAspectRatio="none" role="group" aria-label="Estimated nationality origins connected to Abu Dhabi; illustrative country-centroid arcs"><image class="vm-world-outline" href="./data/admin0-countries.svg?v=20260922-admin0" x="0" y="85" width="1000" height="500" preserveAspectRatio="none"/>${routes.map(r => r.arc).join("")}${routes.map(r => r.label).join("")}<circle class="vm-hub-halo" cx="${hub[0]}" cy="${hub[1]}" r="20"/><circle class="vm-hub" cx="${hub[0]}" cy="${hub[1]}" r="6"/><g class="vm-hub-label" transform="translate(${hub[0] - 6} ${hub[1] + 23})"><text>ABU DHABI</text><text y="19" class="vm-hub-subtitle">Destination hub</text></g></svg><footer class="vm-map-footer"><span class="vm-map-key"><i></i> Top nationality groups → Abu Dhabi</span><p>Illustrative nationality origins, not verified departure airports or flight paths. Locations use country reference points. Other nationalities are included in the cards.</p>${located.length < rows.length ? '<p>Some nationality locations are unavailable and are not plotted.</p>' : ''}</footer>`;
+  return `<header class="vm-map-header"><span><i></i> GEOGRAPHIC ORIGIN MAP</span><h3>Global Visitor Origins</h3></header><svg class="vm-origin-svg" viewBox="0 ${viewTop} 1000 ${viewBottom - viewTop}" preserveAspectRatio="none" role="group" aria-label="Estimated nationality origins connected to Abu Dhabi; illustrative country-centroid arcs"><image class="vm-world-outline" href="./data/admin0-countries.svg?v=20260922-admin0" x="0" y="85" width="1000" height="500" preserveAspectRatio="none"/>${routes.map(r => r.arc).join("")}${routes.map(r => r.label).join("")}<circle class="vm-hub-halo" cx="${hub[0]}" cy="${hub[1]}" r="20"/><circle class="vm-hub" cx="${hub[0]}" cy="${hub[1]}" r="6"/><g class="vm-hub-label" transform="translate(${hub[0] - 6} ${hub[1] + 23})"><text>ABU DHABI</text><text y="19" class="vm-hub-subtitle">Destination hub</text></g></svg><footer class="vm-map-footer"><span class="vm-map-key"><i></i> Top nationality groups → Abu Dhabi</span><p>Illustrative nationality origins, not verified departure airports or flight paths. Locations use country reference points. Other nationalities are included in the cards.</p>${located.length < activeRows.length ? '<p>Some nationality locations are unavailable and are not plotted.</p>' : ''}</footer>`;
 }
 
  function renderBridge(result) {
+   bridgeDraft = result.bridge;
    const rows = result.bridge.slice(0, 10);
    let editButton = $("#editBridgeMix");
    if (!editButton) {
@@ -1010,7 +1053,7 @@ function visitorOriginMap(rows, colors, flag, escape) {
        bridgeEditing = !bridgeEditing;
        renderBridge(runScenario(data, { ...state, bridgeOverride }));
        $("#bridgeStatus").textContent = bridgeEditing
-         ? "Edit the shares, then choose Update visitor mix to apply them. The map shows the applied mix."
+         ? "Set a final share. Other shares adjust automatically. Check-ins, guest nights and the map update when you apply."
          : "Editing cancelled. The applied visitor mix is unchanged.";
        if (bridgeEditing) $(".bridge-input")?.focus();
      });
@@ -1041,16 +1084,14 @@ function visitorOriginMap(rows, colors, flag, escape) {
      <tr>
        <td>${row.nationality}</td>
        <td>${row.relationship === "direct and inferred" ? "Flight and hotel records" : "Based on past patterns"}</td>
-       <td><input id="mixShare-${index}" aria-label="${row.nationality} share percent" class="bridge-input" ${bridgeEditing ? "" : "disabled"} data-index="${index}" data-exact="${row.weight}" data-displayed="${(row.weight * 100).toFixed(1)}" type="range" min="0" max="100" step="0.1" value="${(row.weight * 100).toFixed(1)}"></td>
+       <td><input id="mixShare-${index}" aria-label="${row.nationality} share percent" class="bridge-input" ${bridgeEditing ? "" : "disabled"} data-index="${index}" data-displayed="${(row.weight * 100).toFixed(1)}" type="range" min="0" max="100" step="0.1" value="${(row.weight * 100).toFixed(1)}"></td>
        <td class="mix-number">${formatNumber(result.scenario.hotelCheckins * row.weight)}</td>
        <td class="mix-number">${formatNumber(result.contributions.find((item) => item.nationality === row.nationality)?.scenarioGuestNights)}</td>
      </tr>`).join("");
    const remaining = result.bridge.slice(10);
    const others = remaining.reduce((sum, row) => sum + row.weight, 0);
    const otherNights = result.contributions.filter((item) => remaining.some((row) => row.nationality === item.nationality)).reduce((sum, row) => sum + row.scenarioGuestNights, 0);
-   $("#bridgeTableBody").insertAdjacentHTML("beforeend", `<tr class="other-nationalities"><td>Other ${remaining.length} nationalities</td><td>Included in the total</td><td>${formatPercent(others,1)}</td><td>${formatNumber(result.scenario.hotelCheckins * others)}</td><td>${formatNumber(otherNights)}</td></tr>`);
-   $("#bridgeRunningTotal").dataset.other = others;
-   updateBridgeDraftTotal();
+   $("#bridgeTableBody").insertAdjacentHTML("beforeend", `<tr class="other-nationalities"><td>Other ${remaining.length} nationalities</td><td>Included in the total</td><td data-bridge-other>${formatPercent(others,1)}</td><td>${formatNumber(result.scenario.hotelCheckins * others)}</td><td>${formatNumber(otherNights)}</td></tr>`);
    const escapeLabel = (value) => String(value).replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[character]));
    const flag = (location) => {
      const code = location?.aliases?.find(alias => /^[A-Z]{2}$/.test(alias)) || ({ France: "FR", Norway: "NO" })[location?.name];
@@ -1062,13 +1103,13 @@ function visitorOriginMap(rows, colors, flag, escape) {
      const location = countryLocationLookup[normalizeCountryName(row.nationalityKey || row.nationality)];
      const nights = result.contributions.find(item => item.nationality === row.nationality)?.scenarioGuestNights;
      const featured = rank === 0;
-     const ring = featured ? `<div class="vm-feature-ring"><svg viewBox="0 0 120 120" aria-label="${nationality}: ${formatPercent(row.weight, 1)}"><circle cx="60" cy="60" r="49" class="vm-ring-track"/><circle cx="60" cy="60" r="49" class="vm-ring-value" pathLength="100" stroke-dasharray="${row.weight * 100} ${100 - row.weight * 100}" transform="rotate(-90 60 60)"/></svg><strong>${formatPercent(row.weight, 1)}</strong></div>` : '';
+     const ring = featured ? `<div class="vm-feature-ring" data-mix-ring="${index}"><svg viewBox="0 0 120 120" aria-label="${nationality}: ${formatPercent(row.weight, 1)}"><circle cx="60" cy="60" r="49" class="vm-ring-track"/><circle cx="60" cy="60" r="49" class="vm-ring-value" pathLength="100" stroke-dasharray="${row.weight * 100} ${100 - row.weight * 100}" transform="rotate(-90 60 60)"/></svg><strong>${formatPercent(row.weight, 1)}</strong></div>` : '';
      return `<article class="vm-nationality-card${featured ? ' vm-featured-card' : ''}" style="--nationality-color:${palette[index]}"><span class="vm-card-rank">#${String(rank + 1).padStart(2, '0')}</span>${ring}<div class="vm-card-country"><span class="vm-country-flag" aria-hidden="true">${flag(location)}</span><h3>${nationality}</h3>${featured ? '<small>Largest nationality group</small>' : ''}</div><div class="vm-card-share"><span class="vm-share-value">${formatPercent(row.weight, 1)}</span><span class="vm-share-editor" data-mix-slot="${index}"></span><small>Share of check-ins</small></div><div class="vm-card-counts"><div><strong>${formatNumber(result.scenario.hotelCheckins * row.weight)}</strong><span>Stays / check-ins</span></div><div><strong>${formatNumber(nights)}</strong><span>Guest nights</span></div></div></article>`;
    };
-   $("#visitorNationalityCards").innerHTML = rows.map((row, index) => ({ row, index })).sort((a, b) => b.row.weight - a.row.weight).map(card).join("") + `<article class="vm-nationality-card vm-other-card" style="--nationality-color:#61708b"><div class="vm-card-country"><h3>Other nationalities</h3><small>${remaining.length} groups combined</small></div><div class="vm-card-share"><span class="vm-share-value">${formatPercent(others, 1)}</span></div><div class="vm-card-counts"><div><strong>${formatNumber(result.scenario.hotelCheckins * others)}</strong><span>Stays / check-ins</span></div><div><strong>${formatNumber(otherNights)}</strong><span>Guest nights</span></div></div></article>`;
+   $("#visitorNationalityCards").innerHTML = rows.map((row, index) => ({ row, index })).sort((a, b) => b.row.weight - a.row.weight).map(card).join("") + `<article class="vm-nationality-card vm-other-card" style="--nationality-color:#61708b"><div class="vm-card-country"><h3>Other nationalities</h3><small>${remaining.length} groups combined</small></div><div class="vm-card-share"><span class="vm-share-value" data-bridge-other>${formatPercent(others, 1)}</span></div><div class="vm-card-counts"><div><strong>${formatNumber(result.scenario.hotelCheckins * others)}</strong><span>Stays / check-ins</span></div><div><strong>${formatNumber(otherNights)}</strong><span>Guest nights</span></div></div></article>`;
    rows.forEach((row, index) => {
      const field = $(`#bridgeTableBody .bridge-input[data-index="${index}"]`);
-     field.addEventListener("input", updateBridgeDraftTotal);
+     field.addEventListener("input", changeVisitorShare);
      const slot = $(`[data-mix-slot="${index}"]`);
      slot.append(field);
      slot.insertAdjacentHTML("beforeend", `<span class="vm-slider-readout"><output class="vm-slider-badge" for="mixShare-${index}">${Number(field.value).toFixed(1)}</output><span>%</span></span>`);
@@ -1381,7 +1422,7 @@ function setupDecisionTools() {
    proposalWorkspace?.update(nextContext);
    guidedHelp?.update(nextContext);
    if (changed) guidedHelp?.track("scenario_change");
-   syncProposalChat();
+   if (chatEnabled) syncProposalChat();
  }
 
 function syncProposalChat() {
@@ -1410,12 +1451,12 @@ function addAssistantMessage(message) {
 }
 
 function setupProposalTools() {
-  guidedHelp = createGuidedHelp({mount:$("#guidedHelp"),getContext:()=>currentProposalContext,navigate:({view="scenarioView",mode,controls=false})=>{
+  guidedHelp = createGuidedHelp({mount:$("#guidedHelp"),chatEnabled,getContext:()=>currentProposalContext,navigate:({view="scenarioView",mode,controls=false})=>{
     $(`.nav-tab[data-view="${view}"]`)?.click();
     if (mode) $(`.view-mode[data-mode="${mode}"]`)?.click();
     if (controls && !document.body.classList.contains("controls-open") && getComputedStyle($("#adjustControls")).display !== "none") $("#adjustControls").click();
   }});
-  proposalWorkspace = createProposalWorkspace({mount:$("#proposalWorkspace"),rail:$("#proposalRail"),launcher:$("#toggleProposalPanel"),onOpenWorkspace:()=>$(".view-mode[data-mode='proposal']").click(),getContext:()=>currentProposalContext,track:name=>guidedHelp.track(name),onRecommendation:(element,{context,recommended,fingerprint})=>{
+  proposalWorkspace = createProposalWorkspace({mount:$("#proposalWorkspace"),chatEnabled,rail:$("#proposalRail"),launcher:$("#toggleProposalPanel"),onOpenWorkspace:()=>{ if ($("#proposalWorkspace").hidden) $(".view-mode[data-mode='proposal']").click(); },getContext:()=>currentProposalContext,track:name=>guidedHelp.track(name),onRecommendation:(element,{context,recommended,fingerprint})=>{
     const identity = `${fingerprint}|${recommended?.id}|${recommended?.status}`;
     const feedbackKey = [...identity].reduce((hash,letter)=>Math.imul(hash ^ letter.charCodeAt(0),16777619)>>>0,2166136261).toString(36);
     if (recommended) guidedHelp.addFeedback({element,id:`recommendation-${feedbackKey}`,label:`Next action · ${context.result.route.origin} · ${data.months[context.inputs.month-1]}`});
@@ -1424,6 +1465,7 @@ function setupProposalTools() {
     $("#planActionStatus").textContent="Saved assumptions restored. Checks must match these exact values.";
   }});
   $("#openGuide").addEventListener("click",()=>guidedHelp.open());
+  if (!chatEnabled) return;
   $("#chatGuidance").addEventListener("click",()=>guidedHelp.open());
   const configured=Boolean(window.__AIR2STAY_ASSISTANT_TOKEN__);
   $("#allowAi").disabled=!configured;
@@ -1594,7 +1636,7 @@ $("#smartPrompt").addEventListener("keydown", (event) => {
 });
 
 async function askGemini(question, result) {
-  if (!window.__AIR2STAY_ASSISTANT_TOKEN__) throw new Error("AI chat is not configured in this copy. Add your Gemini key to .env and restart to enable open-ended questions.");
+  if (!chatEnabled || !window.__AIR2STAY_ASSISTANT_TOKEN__) throw new Error("AI chat is not configured in this copy. Add your Gemini key to .env and restart to enable open-ended questions.");
   const recorded = proposalWorkspace?.contextSummary();
   const context = {
     route: result.route.origin,
@@ -1640,7 +1682,7 @@ async function askGemini(question, result) {
 }
 
 $("#applyPrompt").addEventListener("click", async () => {
-  if (assistantBusy) return;
+  if (!chatEnabled || assistantBusy) return;
   const prompt = $("#smartPrompt").value.trim();
   if (!prompt) return;
   if (!$("#inputError").hidden) {
@@ -1711,22 +1753,17 @@ $("#applyPrompt").addEventListener("click", async () => {
 });
 
   
-   $("#bridgeTableBody").addEventListener("input", updateBridgeDraftTotal);
    $("#resetBridge").addEventListener("click", () => { bridgeOverride = null; bridgeEditing = false; renderAll(); $("#bridgeStatus").textContent = "Original estimated visitor mix restored. Your flight and hotel assumptions are unchanged."; });
    $("#applyBridge").addEventListener("click", () => {
-     const invalid = $$(".bridge-input").some((field) => !field.value.trim() || !Number.isFinite(Number(field.value)) || Number(field.value)<0 || Number(field.value)>100);
-     if (invalid) { $("#bridgeStatus").textContent = "Please enter a visitor share between 0 and 100 for each group."; return; }
-     const baseResult = runScenario(data, { ...state, bridgeOverride });
-     const topRows = baseResult.bridge.slice(0, 10).map((row, index) => ({
-       ...row,
-       weight: bridgeDraftWeight($(`.bridge-input[data-index="${index}"]`)),
-     }));
-     const remaining = baseResult.bridge.slice(10);
-     if ([...topRows, ...remaining].reduce((sum,row) => sum + row.weight,0) <= 0) { $("#bridgeStatus").textContent = "Give at least one nationality a share above zero."; return; }
-     bridgeOverride = [...topRows, ...remaining];
+     if (!bridgeEditing) return;
+     if ($$(".bridge-input").some(field => !validVisitorShare(field))) {
+       $("#bridgeStatus").textContent = "Enter a share from 0% to 100%.";
+       return;
+     }
+     bridgeOverride = bridgeDraft;
      bridgeEditing = false;
-     $("#bridgeStatus").textContent = "Visitor mix updated. The shares now add up to 100%.";
      renderAll();
+     $("#bridgeStatus").textContent = "Visitor mix updated.";
    });
  }
   
@@ -1760,7 +1797,13 @@ function setControlsOpen(open) {
  }
 
  function setupViewMode() {
+   const chatTab = $('.view-mode[data-mode="chat"]');
+   chatTab.hidden = !chatEnabled;
+   chatTab.disabled = !chatEnabled;
+   $("#assistantPanel").inert = !chatEnabled;
+   $("#chatPrivacy").hidden = !chatEnabled;
    const setMode = (mode) => {
+     if (!chatEnabled && mode === "chat") return;
      const focus = mode === "focus";
      const chat = mode === "chat";
      const decisions = mode === "decisions";
@@ -1783,7 +1826,7 @@ function setControlsOpen(open) {
      });
      $("#viewModeDescription").textContent = focus
        ? "The outcome, the main drivers, and what to check next."
-       : proposal ? "Keep the checks, people, discussions and decisions behind this proposal together."
+       : proposal ? "Review a check, add a task, and log what you find."
        : decisions ? "Compare added capacity, test the assumptions, and prepare a decision note."
        : chat ? "Describe a change or ask a question. The current result stays beside your conversation."
        : "Trace the assumptions, calculations, flight history, and limits behind this plan.";
@@ -2001,7 +2044,7 @@ function downloadPlan(blob, name) {
      setupProposalTools();
      renderValidation();
      renderGlossary();
-     renderAssistantChat();
+     if (chatEnabled) renderAssistantChat();
      renderAll();
    } catch (error) {
      document.body.innerHTML = `<main class="fatal"><h1>Air2Stay could not start</h1><p>${planningEscape(error.message)}</p><p>From the project folder, run <code>python run_local.py --check</code> to find missing files or packages. Follow the Quick Start in README.md, then open http://localhost:8765.</p></main>`;
