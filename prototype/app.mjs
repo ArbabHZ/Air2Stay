@@ -1,10 +1,10 @@
  import { assistantReply, appliedPlanConfirmation, findRoute, getBridge, weeksInMonth, parseScenarioPrompt, runScenario, sensitivity, validateScenarioInputs } from "./engine.mjs";
 import { buildPeerProfile, validatePeerMethod } from "./route_planning.mjs";
-import { ROUTE_PURPOSES, applyRoutePurpose, planningMetrics, compareOptions, compareMonths, launchOptions, stressTest, solveCapacityTarget, reverseTargetPlan, rankingReversals, decisionNote, nextStepPlan, nextStepLines } from "./decision_tools.mjs";
+import { ROUTE_PURPOSES, applyRoutePurpose, planningMetrics, compareOptions, compareMonths, launchOptions, stressTest, rankingReversals, decisionNote, nextStepPlan, nextStepLines } from "./decision_tools.mjs";
 import { CONVERSION_EVIDENCE } from "./conversion_evidence.mjs";
 import { createProposalWorkspace } from "./proposal_workspace.mjs";
 import { createGuidedHelp } from "./guided_help.mjs";
-import { planningChatReply, parseTargetQuestion, arabicPromptToEnglish, pcMessagesQuery, pcMessagesReply, pcFixTypos } from "./planning_chat.mjs";
+import { planningChatReply, arabicPromptToEnglish, pcMessagesQuery, pcMessagesReply, pcFixTypos } from "./planning_chat.mjs";
   
  const chatEnabled = globalThis.__AIR2STAY_CHAT_ENABLED__ === true;
  const $ = (selector) => document.querySelector(selector);
@@ -32,8 +32,6 @@ let assistantBusy = false;
  let assistantGeneration = 0;
 let lastExportUrl = "";
 let peerValidationResult = null;
-let targetSolution = null;
-let targetAnswer = null;
 let teamSnapshot = () => null;
  let assistantMessages = [
    { role: "bot", text: "Hi! Ask what changed, ask how a number was worked out, or tell me what you’d like to change." },
@@ -1284,19 +1282,6 @@ function renderDecisionWorkspace() {
     </details>
     <button type="button" class="text-action" data-evidence="followups">Open follow-ups →</button>`;
   fillFirstCheck();
-  if (targetSolution) updateTargetResult();
-}
-
-function updateTargetResult() {
-  const field = $("#targetGuestNights");
-  const value = Number(field.value);
-  $("#applyTarget").hidden = true;
-  if (!field.value.trim() || !Number.isFinite(value) || value < 0 || value > 100000000) { $("#targetResult").textContent = "Enter a target between 0 and 100,000,000 extra guest nights."; targetSolution=null; return; }
-  targetSolution = solveCapacityTarget(data,state,value);
-  $("#targetResult").textContent = targetSolution.met
-    ? `${targetSolution.requiredWeeklyFlights} extra flights each week would reach at least ${formatNumber(value)} extra guest nights under the selected assumptions (about ${formatNumber(targetSolution.metrics.incremental.guestNights)} nights). This is required capacity, not proof of passenger demand.`
-    : `The target is not reached within 20 extra flights per week. At that limit the estimate is ${formatNumber(targetSolution.metrics.incremental.guestNights)} nights, leaving ${formatNumber(targetSolution.shortfall)} nights below the target.`;
-  $("#applyTarget").hidden = !targetSolution.met;
 }
 
 function renderPlanningEvidence(result) {
@@ -1311,98 +1296,6 @@ function renderPlanningEvidence(result) {
   if (!peerValidationResult) peerValidationResult = validatePeerMethod(data,countryLocationLookup);
   const validation=peerValidationResult;
   $("#peerValidation").innerHTML = `<p>We hid one known market at a time and reconstructed its flight assumptions from other markets in the same month: ${validation.caseCount} market-month checks across ${validation.marketCount} markets.</p><div class="table-scroll">${planningTable(["Assumption","Three-market average error","Nearest-country average error"],Object.values(validation.metrics).map((row)=>[row.label,row.blendedMae.toFixed(2)+" "+row.unit,row.nearestMae.toFixed(2)+" "+row.unit]))}</div><ul>${validation.limitations.map((line)=>'<li>'+planningEscape(line)+'</li>').join('')}</ul>`;
-}
-
-const formatPercentPlain = (value) => Number(value).toLocaleString("en-US", { maximumFractionDigits: 2 }) + "%";
-
-function targetAnswerText(answer) {
-  if (answer.alreadyMet) return `The plan already reaches ${formatNumber(answer.target)} hotel nights without extra flights.`;
-  const goal = answer.basis === "total" ? `reach ${formatNumber(answer.target)} hotel nights in total` : `add ${formatNumber(answer.target)} hotel nights`;
-  return `To ${goal}: about ${answer.requiredWeeklyFlights} extra flights a week (${answer.exactWeeklyFlights.toFixed(2)} before rounding up). ${answer.realism.text}`;
-}
-
-function renderTargetWorkspace() {
-  if ($("#targetWorkspace").hidden || !$("#inputError").hidden || !state) return;
-  const field = $("#targetNights");
-  const value = Number(field.value);
-  const basis = $("#targetBasis").value;
-  const month = data.months[state.month - 1];
-  if (!field.value.trim() || !Number.isFinite(value) || value < 0 || value > 100000000) {
-    targetAnswer = null;
-    $("#targetAnswer").innerHTML = '<p class="planning-callout">Enter a number of hotel nights between 0 and 100,000,000.</p>';
-    $("#targetSteps").innerHTML = ""; $("#targetAlternatives").innerHTML = "";
-    return;
-  }
-  let answer;
-  try { answer = reverseTargetPlan(data, state, value, { basis }); }
-  catch (error) { targetAnswer = null; $("#targetAnswer").innerHTML = `<p class="planning-callout">${planningEscape(error.message)}</p>`; return; }
-  targetAnswer = answer;
-  $("#targetContext").textContent = `${answer.route.origin}, ${month}. Without extra flights this plan gives about ${formatNumber(answer.startingNights)} hotel nights` + (basis === "total" ? `, so the target needs ${formatNumber(answer.neededNights)} more.` : `, so the target total is about ${formatNumber(answer.targetTotalNights)}.`) + " Change the country or month in Adjust plan.";
-  const current = Number(state.extraFlights);
-  const canApply = !answer.alreadyMet && answer.withinControlLimit && answer.requiredWeeklyFlights !== current;
-  const headline = answer.alreadyMet
-    ? `<strong class="target-big">No extra flights needed</strong><p>The plan already reaches this many nights with its usual flights.</p>`
-    : `<strong class="target-big">${answer.requiredWeeklyFlights} extra flights a week</strong><p>${answer.exactWeeklyFlights.toFixed(2)} before rounding up · about ${formatNumber(answer.extraFlightsPerMonth)} more flights in ${planningEscape(month)} · each one adds about ${formatNumber(answer.nightsPerWeeklyFlight)} hotel nights a month</p>`;
-  $("#targetAnswer").innerHTML = `<div class="target-headline"><div>${headline}</div>
-    <div class="target-actions">${canApply ? `<button type="button" id="applyTargetPlan" class="feature-primary">Use ${answer.requiredWeeklyFlights} flights in my plan</button>` : ""}<small>${answer.alreadyMet ? "" : !answer.withinControlLimit ? `Above the planner's limit of 20 extra flights a week, so it can't be applied as one route.` : answer.requiredWeeklyFlights === current ? "Your plan already uses this many extra flights." : `Your plan currently has ${formatSigned(current)} a week.`}</small></div></div>
-    ${answer.alreadyMet ? "" : `<p class="target-realism target-${answer.realism.level}">${planningEscape(answer.realism.text)}</p>`}`;
-  const unit = (key, v) => key === "weeklyFlights" ? v.toFixed(2) : formatNumber(v);
-  $("#targetSteps").innerHTML = answer.alreadyMet ? '<li class="target-step"><span>Nothing to work back: the target is already met.</span></li>'
-    : answer.steps.map((step) => `<li class="target-step${step.key === "weeklyFlights" ? " target-step-final" : ""}"><span class="target-op">${planningEscape(step.operation || "Start")}</span><span class="target-label">${planningEscape(step.label)}</span><strong>${unit(step.key, step.value)}</strong></li>`).join("");
-  $("#targetAlternatives").innerHTML = !answer.alternatives.length
-    ? `<p class="planning-note">${answer.alreadyMet ? "Not needed: the target is already met." : "This route has no current flights, so only new flights can add hotel nights here."}</p>`
-    : `<div class="launch-grid">${answer.alternatives.map((lever) => {
-        const show = (v) => lever.unit === "nights" ? `${v.toFixed(2)} nights` : formatPercent(v, 1);
-        return `<article class="launch-card"><h3>${planningEscape(lever.label)}</h3><strong>${show(lever.from)} → ${show(lever.to)}</strong><p>${lever.withinLimits ? "Within the planner's limits." : `Beyond the planner's limit of ${show(lever.limit)}, so not reachable this way alone.`}</p></article>`;
-      }).join("")}</div><p class="planning-note">Each card changes one assumption for everyone already flying this route, with no extra flights. They suggest where campaigns could help, for example longer stays or more hotel bookings; they are not measured effects.</p>`;
-}
-
-function setupTargetWorkspace() {
-  const rerender = () => renderTargetWorkspace();
-  $("#targetNights").addEventListener("input", () => { $("#targetAskStatus").textContent = ""; rerender(); });
-  $("#targetBasis").addEventListener("input", () => { $("#targetAskStatus").textContent = ""; rerender(); });
-  $("#targetAnswer").addEventListener("click", (event) => {
-    if (!event.target.closest("#applyTargetPlan") || !targetAnswer?.withinControlLimit || targetAnswer.alreadyMet) return;
-    state.extraFlights = targetAnswer.requiredWeeklyFlights;
-    setFormFromState(); renderAll();
-    $("#targetAskStatus").textContent = `Your plan now has ${targetAnswer.requiredWeeklyFlights} extra flights a week. Open Focus to see the full result.`;
-  });
-  $("#targetAskForm").addEventListener("submit", (event) => {
-    event.preventDefault();
-    const status = $("#targetAskStatus");
-    if (!$("#inputError").hidden) { status.textContent = "Please fix the highlighted plan input first, then ask again."; return; }
-    const question = parseTargetQuestion(data, arabicPromptToEnglish(data, $("#targetAsk").value.slice(0, HELP_CHAT_MAX_INPUT)));
-    if (!question) { status.textContent = "I couldn't find a number of hotel nights. Try “How many flights for 10,000 more nights from India in December?”"; return; }
-    if (question.decrease) { status.textContent = "I work out the extra flights needed to increase hotel nights. To test fewer flights, set a negative change, like “Set extra flights to -2”."; return; }
-    if (question.tooLarge) { status.textContent = "That target is too large for this planner. Use fewer than 1,000,000,000 hotel nights, or an increase of up to 100,000%."; return; }
-    const switched = [];
-    if (question.originKey && question.originKey !== state.originKey && [...$("#origin").options].some((option) => option.value === question.originKey)) {
-      $("#origin").value = question.originKey; $("#origin").dispatchEvent(new Event("input", { bubbles: true })); switched.push("country");
-    }
-    if (question.month && question.month !== state.month) {
-      $("#month").value = String(question.month); $("#month").dispatchEvent(new Event("input", { bubbles: true })); switched.push("month");
-    }
-    const switchedNote = switched.length ? [" ", `I switched the plan's ${switched.join(" and ")} to match your question.`] : [];
-    if (!$("#inputError").hidden) { status.textContent = "Please fix the highlighted plan input first, then ask again."; return; }
-    let nights = question.target;
-    if (question.percent != null) {
-      // A percentage is applied to the nights this plan gives without extra flights.
-      const usual = reverseTargetPlan(data, state, 0);
-      if (!(usual.startingNights > 0)) {
-        status.replaceChildren(`${usual.route.origin} in ${data.months[state.month - 1]} has no hotel nights without extra flights, so a percentage increase cannot be worked out. Give a number of nights instead, like “How many flights for 5,000 more nights?”`, ...switchedNote);
-        return;
-      }
-      nights = Math.round(usual.startingNights * question.percent / 100);
-    }
-    $("#targetBasis").value = question.percent != null ? "extra" : question.basis;
-    $("#targetNights").value = String(Math.round(nights));
-    renderTargetWorkspace();
-    const route = targetAnswer?.route?.origin || state.originKey;
-    const answering = question.percent != null
-      ? `Answering for ${route}, ${data.months[state.month - 1]}: a ${formatPercentPlain(question.percent)} increase, about ${formatNumber(nights)} more hotel nights.`
-      : `Answering for ${route}, ${data.months[state.month - 1]}: ${question.basis === "total" ? "reach a total of" : "add"} ${formatNumber(nights)} hotel nights.`;
-    status.replaceChildren(answering, ...switchedNote);
-  });
 }
 
 // Floating "Ask Air2Stay" assistant in the bottom-right corner.
@@ -1436,7 +1329,7 @@ function helpChatInLanguage(text, lang) {
 }
 
 function helpChatGreeting(lang = uiLanguage) {
-  const english = "Hi, I’m the Air2Stay assistant. I run on this computer, so no internet is needed.\n\n- Ask how a number was worked out.\n- Ask what it takes to reach a hotel-night target.\n- Tell me a change, like “Set extra flights to 5”.";
+  const english = "Hi, I’m the Air2Stay assistant. I run on this computer, so no internet is needed.\n\n- Ask how a number was worked out.\n- Tell me a change, like “Set extra flights to 5”.";
   return { role:"bot", lang, text:helpChatInLanguage(english, lang) };
 }
 
@@ -1487,18 +1380,18 @@ function updateHelpChatContext() {
   label.textContent = `About your plan: ${origin} · ${data.months[state.month - 1]} · ${flights ? formatSigned(flights) + " flights a week" : "usual flights"}`;
 }
 
-const HELP_CHAT_NOT_UNDERSTOOD = "I can’t answer that one on this computer yet. Try one of these:\n\n- “How were hotel nights calculated?”\n- “How many flights for 10,000 more nights?”\n- “Set flight occupancy to 80%”\n- “What should I check next?”";
+const HELP_CHAT_NOT_UNDERSTOOD = "I can’t answer that one on this computer yet. Try one of these:\n\n- “How were hotel nights calculated?”\n- “Set flight occupancy to 80%”\n- “What should I check next?”";
 
 function helpChatAnswer(prompt, raw = prompt) {
   const plain = prompt.trim().toLowerCase().replace(/[!.?,]+$/g, "");
   if (/^(?:hi|hello|hey|hiya|salam|salaam|assalamu? ?alaikum|marhaba|good (?:morning|afternoon|evening))(?: there| air2stay)?$/.test(plain)) {
-    return "Hello! I can explain your plan, work out what it takes to reach a hotel-night target, or change an assumption for you.\n\nTry “How were hotel nights calculated?” or tap one of the suggestions below.";
+    return "Hello! I can explain your plan or change an assumption for you.\n\nTry “How were hotel nights calculated?” or tap one of the suggestions below.";
   }
   if (/^(?:thanks|thank you|thx|shukran|great|perfect|ok(?:ay)?|cool|nice)(?: (?:a lot|so much|very much))?$/.test(plain)) {
     return "You’re welcome. Ask me anything else about this plan whenever you need.";
   }
   if (/^(?:help|what can you do|what can i ask(?: you)?|how (?:do|can) i use you|what are your capabilities)$/.test(plain)) {
-    return "I can help with the plan you have open.\n\n- Explain: “How were hotel nights calculated?” or “Where does the baseline come from?”\n- Targets: “How many flights for 10,000 more nights from India in December?”\n- Changes: “Set flight occupancy to 80%” or “Add 5 flights from France in December”.\n- Next steps: “What should I check next?”\n\nI work out numbers with the same calculator as the rest of the app, and I only change your plan when you ask directly.";
+    return "I can help with the plan you have open.\n\n- Explain: “How were hotel nights calculated?” or “Where does the baseline come from?”\n- Changes: “Set flight occupancy to 80%” or “Add 5 flights from France in December”.\n- Next steps: “What should I check next?”\n\nI work out numbers with the same calculator as the rest of the app, and I only change your plan when you ask directly.";
   }
   const messageQuery = pcMessagesQuery(raw);
   if (messageQuery) return pcMessagesReply(messageQuery, teamSnapshot());
@@ -1534,8 +1427,7 @@ function helpChatLocalize(text, depth = 0) {
   if (!text) return text;
   if (!helpChatTemplates.length) {
     for (const [pattern, key, names] of helpChatOwnTemplates) helpChatTemplates.push([pattern, key, names]);
-    for (const [pattern, key, names] of labelTemplates) if (key.startsWith("tgt_")) helpChatTemplates.push([pattern, key, names]);
-    for (const [pattern, key, names] of labelTemplates) if (!key.startsWith("tgt_")) helpChatTemplates.push([pattern, key, names]);
+    helpChatTemplates.push(...labelTemplates);
     for (const [english, key] of labelKeys) helpChatLowerKeys.set(english.toLowerCase(), key);
   }
   const trimmed = String(text).trim();
@@ -1812,8 +1704,7 @@ function helpChatExtras() {
 function decisionNoteText() {
   const note = decisionNote(data,state,decisionOptions(),latestNextSteps?.plan || null);
   const peerText=state.peerProfile ? "\n\nComparison-country starting weights\n"+state.peerProfile.peers.map((peer)=>peer.origin+": "+formatPercent(peer.weight,1)).join("\n")+"\nGeographic assumptions only; not measured route demand." : "";
-  const targetText = targetSolution ? "\n\nCapacity target check\n" + englishUiText($("#targetResult")) : "";
-  return note.text + peerText + targetText;
+  return note.text + peerText;
 }
 
 function printDecisionNote() {
@@ -1854,9 +1745,6 @@ function setupDecisionTools() {
     state.purposeAssumptionsApplied=true; state.seasonalConversion=false;
     setFormFromState(); renderAll(); $("#purposeStatus").textContent="Your visitor assumptions are applied. The historical baseline is unchanged.";
   });
-  $("#calculateTarget").addEventListener("click",()=>{if($("#inputError").hidden) updateTargetResult();});
-  $("#targetGuestNights").addEventListener("input",()=>{targetSolution=null;$("#applyTarget").hidden=true;$("#targetResult").textContent="Choose Calculate capacity to update the result.";});
-  $("#applyTarget").addEventListener("click",()=>{if(!targetSolution?.met)return;state.extraFlights=targetSolution.requiredWeeklyFlights;setFormFromState();renderAll();});
   $("#applySeasonalConversion").addEventListener("click",()=>{state.conversionRate=CONVERSION_EVIDENCE.monthlyRates[state.month];state.seasonalConversion=true;setFormFromState();renderAll();$("#conversionStatus").textContent="Optional training-season assumption applied to your plan. The baseline is unchanged; the test did not show an accuracy improvement.";});
   $("#exportDecisionNote").addEventListener("click",()=>{
     if(!$("#inputError").hidden)return;
@@ -1874,7 +1762,6 @@ function setupDecisionTools() {
    $("#scenarioResults").hidden = Boolean(invalid);
    $("#chatResults").hidden = Boolean(invalid);
    $("#decisionWorkspace").classList.toggle("invalid-plan", Boolean(invalid));
-   $("#targetWorkspace").classList.toggle("invalid-plan", Boolean(invalid));
    if (invalid) {
      currentProposalContext = null;
      refreshPackStatistics(null);
@@ -1895,7 +1782,6 @@ function setupDecisionTools() {
    renderSensitivity();
    renderBridge(result);
    renderDecisionWorkspace();
-   renderTargetWorkspace();
    updateHelpChatContext();
    renderPlanningEvidence(result);
    $("#scenarioName").textContent = `${result.route.origin}, ${data.months[state.month - 1]}`;
@@ -2329,17 +2215,14 @@ function setControlsOpen(open) {
      const focus = mode === "focus";
      const chat = mode === "chat";
      const decisions = mode === "decisions";
-     const target = mode === "target";
      const proposal = mode === "proposal";
      document.body.classList.toggle("focus-mode", focus);
      document.body.classList.toggle("details-mode", mode === "details");
      document.body.classList.toggle("chat-mode", chat);
      document.body.classList.toggle("decisions-mode", decisions);
-     document.body.classList.toggle("target-mode", target);
      document.body.classList.toggle("proposal-mode", proposal);
      $("#assistantPanel").hidden = !chat;
      $("#decisionWorkspace").hidden = !decisions;
-     $("#targetWorkspace").hidden = !target;
      $("#proposalWorkspace").hidden = !proposal;
      // Keep one set of results synchronized across all three views.
      if (chat) $("#chatResults").append($("#kpis"));
@@ -2353,12 +2236,10 @@ function setControlsOpen(open) {
        ? "The outcome, the main drivers, and what to check next."
        : proposal ? "Review a check, add a task, and log what you find."
        : decisions ? "Compare added capacity, test the assumptions, and prepare a decision note."
-       : target ? "Start from the hotel nights you want and work back to the flights needed."
        : chat ? "Describe a change or ask a question. The current result stays beside your conversation."
        : "Trace the assumptions, calculations, flight history, and limits behind this plan.";
      if (decisions && state && $("#inputError").hidden) renderDecisionWorkspace();
-     if (target && state && $("#inputError").hidden) renderTargetWorkspace();
-     guidedHelp?.track(({focus:"view_focus",details:"view_details",chat:"view_chat",decisions:"view_compare",target:"view_target",proposal:"view_actions"})[mode]);
+     guidedHelp?.track(({focus:"view_focus",details:"view_details",chat:"view_chat",decisions:"view_compare",proposal:"view_actions"})[mode]);
    };
    setMode("focus");
    setControlsOpen(window.matchMedia("(min-width: 1051px)").matches);
@@ -3263,7 +3144,6 @@ function setupPackSearch({getMessages, getRequests, openMessage, openRequest}) {
     ["Three launch sizes", "#launchOptions", "cautious standard expanded"],
     ["Compare months", "#monthChart", "calendar season monthly"],
     ["What if fewer visitors stay in hotels?", "#stressChart", "stress test sensitivity hotel use"],
-    ["Work backwards from a hotel-night target", "#targetGuestNights", "goal seek capacity required flights"],
     ["Decision note", "#planningDecision", "print save pdf export"],
   ];
   const controls = [
@@ -3510,6 +3390,8 @@ function setupFeaturePack() {
   let attachments = [];
   const selectedFiles = new WeakMap();
   const attachmentLimit = 25_000_000;
+  const inlineAttachmentLimit = 4_000_000;
+  const attachmentDownloadUrls = new Map();
   let attachmentDatabase;
   let savingMessage = false;
   let openingAttachment = false;
@@ -3547,12 +3429,16 @@ function setupFeaturePack() {
     try { localStorage.setItem(storageKey, JSON.stringify(team)); }
     catch (error) {
       saved = false;
-      const isNewFile = (file) => (file.dataUrl || file.fileId) && !priorDraft?.attachments?.includes(file);
-      if (error?.name === "QuotaExceededError" && message?.attachments.some(isNewFile)) {
-        message.attachments = message.attachments.map(file =>
-          isNewFile(file) ? {name:file.name, size:file.size, type:file.type} : file
-        );
-        notice = "File was too large to save in this browser — only the name was kept.";
+      const dropsInlineData = file => file.dataUrl && !priorDraft?.attachments?.includes(file);
+      if (error?.name === "QuotaExceededError" && message?.attachments.some(dropsInlineData)) {
+        if (message.attachments.some(file => dropsInlineData(file) && !file.fileId)) {
+          notice = I18N.en.attachment_quota;
+        }
+        message.attachments = message.attachments.map(file => {
+          if (!dropsInlineData(file)) return file;
+          const {dataUrl, ...stored} = file;
+          return stored;
+        });
         try {
           localStorage.setItem(storageKey, JSON.stringify(team));
           saved = true;
@@ -3766,15 +3652,23 @@ function setupFeaturePack() {
       const {from, to} = messageParties(item);
       const party = item.folder === "inbox" ? from : to;
       const timestamp = relativeTime(item.createdAt);
-      return `<button type="button" class="message-preview${item.unread ? " unread" : ""}" data-message-select="${esc(item.id)}" aria-pressed="${item === selected}">
+      return `<div class="message-list-row"><button type="button" class="message-preview${item.unread ? " unread" : ""}" data-message-select="${esc(item.id)}" aria-pressed="${item === selected}">
         <span class="message-preview-top"><span class="mail-dot ${priorityClass(item.priority)}" title="${esc(item.priority)} priority"></span>
           <strong class="message-ellipsis">${esc(party)}</strong>${timestamp ? `<time datetime="${esc(item.createdAt)}">${esc(timestamp)}</time>` : ""}</span>
-        <span class="message-preview-subject"><strong class="message-ellipsis" ${item.example ? "" : "data-i18n-ignore"} dir="auto">${esc(item.subject)}</strong>${item.attachments?.length ? `<span title="Has attachments">${paperclipIcon}</span>` : ""}</span>
+        <span class="message-preview-subject"><strong class="message-ellipsis" ${item.example ? "" : "data-i18n-ignore"} dir="auto">${esc(item.subject)}</strong></span>
         <span class="message-ellipsis message-snippet" ${item.example ? "" : "data-i18n-ignore"} dir="auto">${esc(item.example ? (item.body || "") : (item.body || "").replace(/\s+/g, " ").trim())}</span>
         ${item.unread ? '<span class="feature-sr">Unread</span>' : ""}
-      </button>`;
+      </button>${item.attachments?.length ? `<details class="message-list-files"><summary>${paperclipIcon} <span>Attachments</span></summary>
+        ${renderMessageAttachments(item.attachments, item.id)}</details>` : ""}</div>`;
     }).join("") || '<p class="feature-muted">No messages match this view.</p>';
-    $("#messageReader").innerHTML = selected ? renderMessageReader(selected) : '<p class="feature-muted">Messages you select will appear here.</p>';
+    showMessageReader(selected);
+  }
+
+  function showMessageReader(item) {
+    const reader = $("#messageReader");
+    reader.innerHTML = item ? renderMessageReader(item) : '<p class="feature-muted">Messages you select will appear here.</p>';
+    releaseDetachedDownloads();
+    prepareAttachmentDownloads(reader.querySelector(".message-files"), item?.attachments);
   }
 
   function renderMessageReader(item) {
@@ -3786,20 +3680,39 @@ function setupFeaturePack() {
       <p class="message-parties"><bdi>${esc(from)}</bdi><span class="i18n-arrow" aria-hidden="true">→</span><bdi>${esc(to)}</bdi>${Number.isFinite(timestamp) ? " · " + esc(fullDate.format(timestamp)) : ""}</p>
       <p class="message-body" ${item.example ? "" : "data-i18n-ignore"} dir="auto">${esc(item.body || "")}</p>
       ${item.example && item.id === "example-mail-data" ? '<button type="button" class="text-action" data-evidence="validation">Open historical validation results →</button>' : ""}
-      ${item.attachments?.length ? `<ul class="message-attachments" aria-label="Attachments">${item.attachments.map((file,index) => {
-        if (file.url) return `<li class="message-attachment-link">${paperclipIcon}<span data-i18n-ignore dir="auto">${esc(file.url)}</span></li>`;
-        const kind = attachmentKind(file);
-        return `<li><button class="message-attachment-chip" type="button" data-message-attachment="${index}">
-          ${attachmentIcon(kind)}<span class="attachment-kind">${file.exampleWorkbook ? "Excel" : {image:"Image",pdf:"PDF",file:"File"}[kind]}</span>
-          <span data-i18n-ignore dir="auto">${esc(file.name)}</span><small>${file.exampleWorkbook ? "Example template" : esc(attachmentSize(file.size))}</small>
-        </button>${file.exampleWorkbook || file.fileId || file.dataUrl ? `<button class="message-file-download" type="button" data-download-attachment="${index}" aria-label="Download ${esc(file.name)}">Download</button>` : ""}</li>`;
-      }).join("")}</ul>` : ""}
+      ${renderMessageAttachments(item.attachments, item.id)}
       <div class="feature-button-row">
         ${item.folder === "drafts" ? '<button class="feature-primary" type="button" data-message-action="edit">Edit draft</button>'
         : '<button class="feature-primary" type="button" data-message-action="reply">Reply</button><button type="button" data-message-action="forward">Forward</button><button type="button" data-message-action="task">Make it a task</button>'}
         <button type="button" data-message-action="delete">Delete</button>
       </div>
     </article>`;
+  }
+
+  function hasAttachmentContent(file) {
+    return Boolean(file.exampleWorkbook || file.fileId || file.dataUrl || selectedFiles.has(file));
+  }
+
+  function renderMessageAttachments(files, messageId = "") {
+    if (!files?.length) return "";
+    const composing = !messageId;
+    const rows = files.map((file, index) => {
+      const kind = attachmentKind(file);
+      const content = file.url ? `${paperclipIcon}<span data-i18n-ignore dir="auto">${esc(file.url)}</span>`
+        : `<span class="attachment-kind">${file.exampleWorkbook ? "Excel" : {image:"Image",pdf:"PDF",file:"File"}[kind]}</span>
+          <span data-i18n-ignore dir="auto">${esc(file.name)}</span><small>${file.exampleWorkbook ? "Example template" : esc(attachmentSize(file.size))}</small>`;
+      const chip = file.url
+        ? `<span class="message-attachment-link">${content}</span>`
+        : `<button class="message-attachment-chip" type="button" data-message-attachment="${index}">${attachmentIcon(kind)}${content}</button>`;
+      return `<li>${chip}
+        ${hasAttachmentContent(file) ? `<a class="message-file-download export-ready-link" data-download-attachment="${index}" aria-disabled="true" aria-label="Download attachment"><span>Download</span></a>` : ""}
+        ${composing ? `<button type="button" data-attachment-index="${index}" aria-label="Remove ${esc(attachmentLabel(file))}">Remove</button>` : ""}
+      </li>`;
+    });
+    return `<div class="message-files" data-attachment-message="${esc(messageId)}">
+      <ul class="message-attachments" aria-label="Attachments">${rows.join("")}</ul>
+      <p class="message-attachment-status" role="status" hidden></p>
+    </div>`;
   }
 
   function markMessageRead(item) {
@@ -3868,31 +3781,90 @@ function setupFeaturePack() {
   }
 
   async function loadAttachment(file) {
+    if (file.exampleWorkbook && file.name === sampleWorkbook.name) return roomBlocksExample().blob;
+    const selected = selectedFiles.get(file);
+    if (selected) return selected;
     const type = fileType(file);
     if (!type || !(file.size > 0 && file.size <= attachmentLimit)) return null;
     if (file.fileId) {
-      const blob = await attachmentFiles("readonly", store => store.get(file.fileId));
-      return blob instanceof Blob && blob.type === type && blob.size === file.size ? blob : null;
+      try {
+        const blob = await attachmentFiles("readonly", store => store.get(file.fileId));
+        if (blob instanceof Blob && blob.type === type && blob.size === file.size) return blob;
+      } catch { /* The message may also contain a copy. */ }
     }
-    // Keep previews and downloads for messages saved before the file store was added.
     const prefix = `data:${type};base64,`;
     if (typeof file.dataUrl !== "string" || !file.dataUrl.startsWith(prefix)) return null;
     const encoded = file.dataUrl.slice(prefix.length);
     if (encoded.length !== Math.ceil(file.size / 3) * 4) return null;
-    const bytes = Uint8Array.from(atob(encoded), character => character.charCodeAt(0));
-    return bytes.length === file.size ? new Blob([bytes], {type}) : null;
+    try {
+      const bytes = Uint8Array.from(atob(encoded), character => character.charCodeAt(0));
+      return bytes.length === file.size ? new Blob([bytes], {type}) : null;
+    } catch { return null; }
   }
 
-  function downloadAttachment(url, name, link = document.createElement("a")) {
+  function attachmentDataUrl(blob) {
+    return new Promise(resolve => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(typeof reader.result === "string" ? reader.result : "");
+      try { reader.readAsDataURL(blob); }
+      catch { resolve(""); }
+    });
+  }
+
+  function downloadAttachment(url, name, link) {
     link.href = url;
     if (typeof link.setAttribute === "function") link.setAttribute("download", name);
     else link.download = name;
-    return link;
   }
 
-  async function openAttachment(file, downloadOnly = false) {
+  function releaseAttachmentUrl(url) {
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  }
+
+  function releaseDetachedDownloads() {
+    for (const [link, url] of attachmentDownloadUrls) {
+      if (link.isConnected) continue;
+      attachmentDownloadUrls.delete(link);
+      releaseAttachmentUrl(url);
+    }
+  }
+
+  function setAttachmentStatus(group, key) {
+    const status = group.querySelector(".message-attachment-status");
+    status.textContent = key ? t(key) : "";
+    status.hidden = !key;
+  }
+
+  async function prepareAttachmentDownloads(group, files) {
+    if (!group || !files) return;
+    await Promise.all([...group.querySelectorAll("[data-download-attachment]")].map(async link => {
+      if (link.dataset.attachmentState) return;
+      link.dataset.attachmentState = "loading";
+      const file = files[Number(link.dataset.downloadAttachment)];
+      let blob;
+      try { blob = await loadAttachment(file); }
+      catch { /* The reader can still show the saved file name. */ }
+      if (!link.isConnected) return;
+      link.dataset.attachmentState = blob ? "ready" : "missing";
+      if (!blob) {
+        link.setAttribute("tabindex", "0");
+        return;
+      }
+      const url = URL.createObjectURL(blob);
+      attachmentDownloadUrls.set(link, url);
+      downloadAttachment(url, file.name, link);
+      link.removeAttribute("aria-disabled");
+      setAttachmentStatus(group, "");
+    }));
+  }
+
+  async function openAttachment(file, group) {
     if (openingAttachment || $(".attachment-preview[open]")) return;
-    const unavailable = () => toast(t("attachment_unavailable"));
+    const unavailable = () => {
+      const key = hasAttachmentContent(file) ? "attachment_missing"
+        : !fileType(file) || file.size > attachmentLimit ? "attachment_unsupported" : "attachment_unavailable";
+      setAttachmentStatus(group, key);
+    };
     let blob;
     let workbook;
     openingAttachment = true;
@@ -3902,19 +3874,10 @@ function setupFeaturePack() {
     }
     catch { /* Storage can be unavailable. */ }
     finally { openingAttachment = false; }
+    if (!group.isConnected) return;
     if (!blob) { unavailable(); return; }
-
-    // Object URLs let browsers open PDFs natively and download with the original filename.
+    setAttachmentStatus(group, "");
     const url = URL.createObjectURL(blob);
-    const release = () => setTimeout(() => URL.revokeObjectURL(url), 60_000);
-    if (downloadOnly) {
-      const link = downloadAttachment(url, file.name);
-      document.body.append(link);
-      link.click();
-      link.remove();
-      release();
-      return;
-    }
 
     const preview = document.createElement("dialog");
     preview.className = "feature-dialog attachment-preview";
@@ -3925,7 +3888,7 @@ function setupFeaturePack() {
       <h2 id="attachmentPreviewTitle" data-i18n-ignore dir="auto">${esc(file.name)}</h2>
       <form method="dialog"><button aria-label="Close attachment preview">×</button></form>
     </header>
-    ${workbook ? workbook.preview : pdf ? "" : '<img alt="">'}
+    ${workbook ? workbook.preview : pdf ? '<p>Open the PDF in your browser’s PDF viewer, or download a copy.</p>' : '<img alt="">'}
     <div class="attachment-preview-actions">
       ${pdf ? '<a class="attachment-open-pdf" target="_blank" rel="noopener">Open PDF in new tab</a>' : ""}
       <a class="attachment-download export-ready-link"><span>Download</span></a>
@@ -3942,15 +3905,17 @@ function setupFeaturePack() {
     preview.addEventListener("close", () => {
       preview.remove();
       // Let a newly opened tab or a download finish consuming the URL.
-      release();
+      releaseAttachmentUrl(url);
     }, {once:true});
     document.body.append(preview);
     preview.showModal();
-    openPdf?.click();
   }
 
   function renderAttachments() {
-    $("#attachmentList").innerHTML = attachments.map((file,index)=>`<li>${esc(attachmentLabel(file))} <button type="button" data-attachment-index="${index}" aria-label="Remove ${esc(attachmentLabel(file))}">Remove</button></li>`).join("");
+    const list = $("#attachmentList");
+    list.innerHTML = attachments.length ? `<li>${renderMessageAttachments(attachments)}</li>` : "";
+    releaseDetachedDownloads();
+    prepareAttachmentDownloads(list.querySelector(".message-files"), attachments);
   }
 
   function openCompose(item = {}, edit = false) {
@@ -3992,16 +3957,25 @@ function setupFeaturePack() {
     messageForm.inert = true;
     try {
       if (newFiles.length) {
+        const inline = new Map(await Promise.all(newFiles.map(async ({file, blob}) =>
+          [file, blob.size < inlineAttachmentLimit ? await attachmentDataUrl(blob) : ""]
+        )));
+        const savedFiles = new Map(newFiles.map(({file}) => [file, {...file}]));
         try {
           await attachmentFiles("readwrite", store => {
             for (const {blob, fileId} of newFiles) store.put(blob, fileId);
           });
-          const savedFiles = new Map(newFiles.map(({file, fileId}) => [file, {...file, fileId}]));
+          for (const {file, fileId} of newFiles) savedFiles.get(file).fileId = fileId;
           written = [...savedFiles.values()];
-          item.attachments = item.attachments.map(file => savedFiles.get(file) ?? file);
         } catch (error) {
-          notice = error?.name === "QuotaExceededError" ? I18N.en.attachment_quota : I18N.en.attachment_save_error;
+          if (newFiles.some(({file}) => !inline.get(file))) {
+            notice = error?.name === "QuotaExceededError" ? I18N.en.attachment_quota : I18N.en.attachment_save_error;
+          }
         }
+        for (const [file, dataUrl] of inline) {
+          if (dataUrl) savedFiles.get(file).dataUrl = dataUrl;
+        }
+        item.attachments = item.attachments.map(file => savedFiles.get(file) ?? file);
       }
       team.messages = [item,...team.messages.filter((row)=>row.id !== item.id)];
       if (destination === "sent") addNotification("Message saved in Sent · " + item.subject);
@@ -4167,18 +4141,43 @@ function setupFeaturePack() {
     button.classList.remove("unread");
     button.querySelector(".feature-sr")?.remove();
     $$("#messageList [data-message-select]").forEach((preview) => preview.setAttribute("aria-pressed", String(preview === button)));
-    $("#messageReader").innerHTML = renderMessageReader(item);
+    showMessageReader(item);
   });
+  $("#messageList").addEventListener("toggle", event => {
+    if (!event.target.matches(".message-list-files[open]")) return;
+    const group = event.target.querySelector(".message-files");
+    const item = team.messages.find(row => row.id === group.dataset.attachmentMessage);
+    prepareAttachmentDownloads(group, item?.attachments);
+  }, true);
+  compose.addEventListener("close", () => {
+    if (compose.open) return;
+    $("#attachmentList").replaceChildren();
+    releaseDetachedDownloads();
+  });
+  const useAttachment = event => {
+    const control = event.target.closest("[data-message-attachment], [data-download-attachment]");
+    if (!control) return;
+    const group = control.closest(".message-files");
+    const id = group.dataset.attachmentMessage;
+    const files = id ? team.messages.find(item => item.id === id)?.attachments : attachments;
+    const {messageAttachment, downloadAttachment} = control.dataset;
+    const file = files?.[Number(messageAttachment ?? downloadAttachment)];
+    if (!file) return;
+    if (downloadAttachment === undefined) {
+      openAttachment(file, group);
+    } else if (control.dataset.attachmentState !== "ready") {
+      event.preventDefault();
+      const key = control.dataset.attachmentState === "missing" ? "attachment_missing" : "attachment_loading";
+      setAttachmentStatus(group, key);
+      prepareAttachmentDownloads(group, files);
+    }
+  };
+  $("#messagesView").addEventListener("click", useAttachment);
+  compose.addEventListener("click", useAttachment);
   $("#messageReader").addEventListener("click",(event)=>{
     const action = event.target.closest("[data-message-action]")?.dataset.messageAction;
     const item = team.messages.find((row)=>row.id === event.target.closest("[data-message-id]")?.dataset.messageId);
     if (!item) return;
-    const attachment = event.target.closest("[data-message-attachment], [data-download-attachment]");
-    if (attachment) {
-      const {messageAttachment, downloadAttachment} = attachment.dataset;
-      openAttachment(item.attachments[Number(messageAttachment ?? downloadAttachment)], downloadAttachment !== undefined);
-      return;
-    }
     if (action === "edit") openCompose(item,true);
     if (action === "reply") openCompose({subject:t("message_reply_prefix") + (item.example ? translateUiString(item.subject) : item.subject), recipients:item.folder === "inbox" ? [item.from] : item.recipients, priority:item.priority});
     if (action === "forward") openCompose({subject:t("message_forward_prefix") + (item.example ? translateUiString(item.subject) : item.subject), body:item.example ? translateUiString(item.body || "") : item.body, attachments:item.attachments, priority:item.priority});
@@ -4440,8 +4439,6 @@ const I18N = (() => {
     localized_check_the_mix_of_hotel_stays_family_vi: ["Check the mix of hotel stays, family visits and other trips.", "تحقّق من توزيع الإقامات الفندقية والزيارات العائلية والرحلات الأخرى."],
     ranking_stable: ["{label} has the higher estimated yield per added seat under these assumptions. The same option stays ahead in the four lower-assumption trials. This does not establish a real-world best route.", "يحقّق {label} أعلى عائد تقديري لكل مقعد إضافي وفق هذه الافتراضات. ظل الخيار نفسه متقدمًا في اختبارات الخفض الأربعة، ولا تثبت النتيجة أنه أفضل مسار عمليًا."],
     ranking_reversal: ["{label} has the higher estimated yield per added seat under these assumptions. The preference reverses under: {trials}. Check those assumptions before choosing.", "يحقّق {label} أعلى عائد تقديري لكل مقعد إضافي وفق هذه الافتراضات. تتغيّر الأفضلية في الاختبارات الآتية: {trials}. راجع افتراضاتها قبل الاختيار."],
-    localized_count_extra_flights_each_week_would_re: ["{count} extra flights each week would reach at least {target} extra guest nights under the selected assumptions (about {value} nights). This is required capacity, not proof of passenger demand.", "تبلغ {count} رحلة إضافية أسبوعيًا هدفًا لا يقل عن {target} ليلة إضافية وفق الافتراضات المختارة، أي نحو {value} ليلة. هذه السعة المطلوبة ولا تثبت الطلب الفعلي."],
-    localized_the_target_is_not_reached_within_20_ex: ["The target is not reached within 20 extra flights per week. At that limit the estimate is {value} nights, leaving {shortfall} nights below the target.", "لا يمكن بلوغ الهدف ضمن حد 20 رحلة إضافية أسبوعيًا. يبلغ التقدير عند هذا الحد {value} ليلة، أي أقل من الهدف بمقدار {shortfall} ليلة."],
     localized_estimated_nationality_origins_connecte: ["Estimated nationality origins connected to Abu Dhabi; illustrative country-centroid arcs", "الجنسيات المقدّرة للزوار المرتبطة بأبوظبي بخطوط توضيحية من نقاط مرجعية للبلدان"],
     localized_country_share_country_reference_point: ["{country}: {share} · country reference point", "{country}: {share} · نقطة مرجعية للبلد"],
     localized_share_outside_the_5_largest_nationalit: ["Share outside the 5 largest nationality groups:", "الحصة خارج أكبر 5 فئات حسب الجنسية:"],
@@ -4521,7 +4518,6 @@ const I18N = (() => {
     localized_select_the_existing_route_to_compare_r: ["Select the existing route to compare. Read which assumptions are shared. Identical inputs can produce identical added-seat effects; that is expected.", "اختر المسار القائم للمقارنة وراجع الافتراضات المشتركة. قد تؤدي المدخلات المتطابقة إلى الأثر نفسه لكل مقعد إضافي."],
     localized_these_options_vary_the_number_of_weekl: ["These options vary the number of weekly flights. Cautious, standard and expanded describe capacity, not the likelihood of demand.", "تختلف الخيارات في عدد الرحلات الأسبوعية. وتصف الخيارات المتحفّظة والأساسية والموسّعة مستويات السعة."],
     localized_lower_flight_fullness_hotel_use_and_st: ["Lower flight fullness, hotel use and stay length to see how the estimate changes. These are hypothetical stress trials.", "خفّض نسبة إشغال الرحلات والإقامة في الفنادق ومدة الإقامة لترى تغيّر التقدير. هذه اختبارات افتراضية."],
-    localized_enter_a_hotel_night_target_to_see_the_: ["Enter a hotel-night target to see the capacity implied by your assumptions. It does not prove enough passengers will book.", "أدخل هدفًا لليالي الفندقية لعرض السعة المطلوبة وفق افتراضاتك. ولا تثبت النتيجة توافر حجوزات كافية."],
     localized_keep_the_estimated_impact_key_assumpti: ["Keep the estimated impact, key assumptions and next checks together. Review the note before sharing it with an airline, hotel or colleague.", "اجمع الأثر المقدّر والافتراضات الرئيسية وخطوات التحقق التالية. راجع المذكرة قبل مشاركتها مع شركة طيران أو فندق أو زميل."],
     localized_choose_a_check_to_see_what_needs_to_be: ["Choose a check to see what needs to be confirmed.", "اختر بند تحقق لمعرفة ما ينبغي تأكيده."],
     localized_use_add_task_on_the_check_you_want_to_: ["Use Add task on the check you want to follow up.", "اختر «إضافة مهمة» للبند الذي تريد متابعته."],
@@ -4707,11 +4703,7 @@ const I18N = (() => {
     show_the_numbers: ["Show the numbers", "عرض الأرقام"],
     what_if_fewer_visitors: ["What if fewer visitors stay in hotels?", "ماذا لو أقام عدد أقل من الزوار في الفنادق؟"],
     stress_trials_lower_flight: ["Stress trials lower flight fullness by 10 percentage points, hotel use by 5 points, and stay length by half a night, within the control limits. They are hypothetical tests, not confidence levels.", "تخفّض اختبارات الحساسية إشغال الرحلات 10 نقاط مئوية والإقامة الفندقية 5 نقاط ومدة الإقامة نصف ليلة ضمن حدود الإدخال. هذه اختبارات افتراضية وليست مستويات ثقة."],
-    work_backwards_from_a: ["Work backwards from a hotel-night target", "حساب السعة اللازمة لتحقيق هدف الليالي الفندقية"],
-    target_extra_guest_nights: ["Target extra guest nights in the selected month", "العدد المستهدف لليالي الإضافية في الشهر المختار"],
-    calculate_capacity: ["Calculate capacity", "حساب السعة"],
     apply_changes: ["Apply changes", "تطبيق التغييرات"],
-    assumes_every_extra_flight: ["Assumes every extra flight achieves the selected occupancy and visitor assumptions. This does not prove that enough passengers will book or that a route is financially viable.", "يفترض الحساب أن كل رحلة إضافية تحقق الإشغال وافتراضات الزوار المحددة. لا يؤكد ذلك وجود حجوزات كافية أو جدوى مالية للمسار."],
     decision_note: ["Decision note", "مذكرة القرار"],
     the_planning_decision: ["The planning decision", "قرار التخطيط"],
     save_as_pdf: ["Save as PDF", "حفظ بصيغة PDF"],
@@ -4990,8 +4982,6 @@ const I18N = (() => {
     check_this_assumption_first: ["Check this assumption first", "تحقّق من هذا الافتراض أولًا"],
     verify_before_acting: ["Verify before acting", "تحقّق قبل التنفيذ"],
     how_the_route_alternatives: ["How the route alternatives compare", "مقارنة المسارات البديلة"],
-    enter_a_target_between: ["Enter a target between 0 and 100,000,000 extra guest nights.", "أدخل هدفًا بين 0 و100,000,000 ليلة إضافية للنزلاء."],
-    choose_calculate_capacity_to: ["Choose Calculate capacity to update the result.", "اختر «حساب السعة» لتحديث النتيجة."],
     live_default_chain_weighted: ["Live default chain: weighted error", "الخطأ الموزون للحساب الافتراضي"],
     hybrid_comparison_weighted_error: ["Hybrid comparison: weighted error", "الخطأ الموزون للنموذج الهجين"],
     daily_hotel_guests_total: ["Daily hotel guests: total weighted error", "إجمالي الخطأ الموزون لعدد النزلاء يوميًا"],
@@ -5042,7 +5032,12 @@ const I18N = (() => {
     attachments: ["Attachments", "المرفقات"],
     attachment_storage_unavailable: ["Browser storage is unavailable. Changes last for this visit only.", "تخزين المتصفح غير متاح. ستبقى التغييرات لهذه الزيارة فقط."],
     attachment_hint: ["Images and PDFs up to 25 MB can be saved in this browser. Other files keep only their name and size.", "يمكن حفظ الصور وملفات PDF بحجم يصل إلى 25 ميغابايت في هذا المتصفح. وتُحفظ أسماء الملفات الأخرى وأحجامها فقط."],
-    attachment_unavailable: ["Preview not available for this file in the prototype — only the name and size are kept.", "معاينة هذا الملف غير متاحة في النموذج الأولي. يُحتفظ بالاسم والحجم فقط."],
+    attachment_unavailable: ["Only the name and size were saved. Attach the original file again to preview or download it.", "حُفظ الاسم والحجم فقط. أرفق الملف الأصلي مجددًا لمعاينته أو تنزيله."],
+    attachment_missing: ["This file is unavailable in this browser. Attach the original file again to preview or download it.", "هذا الملف غير متاح في هذا المتصفح. أرفق الملف الأصلي مجددًا لمعاينته أو تنزيله."],
+    attachment_loading: ["Preparing the file. Try Download again in a moment.", "يجري تجهيز الملف. حاول التنزيل مرة أخرى بعد لحظات."],
+    attachment_download_label: ["Download attachment", "تنزيل المرفق"],
+    attachment_unsupported: ["Only the name and size were saved. This file type or size is outside the preview limits.", "حُفظ الاسم والحجم فقط. نوع الملف أو حجمه يتجاوز حدود المعاينة."],
+    attachment_pdf_preview: ["Open the PDF in your browser’s PDF viewer, or download a copy.", "افتح ملف PDF في عارض المتصفح أو نزّل نسخة منه."],
     attachment_quota: ["File was too large to save in this browser — only the name was kept.", "حجم الملف أكبر مما يمكن حفظه في هذا المتصفح. احتُفظ بالاسم فقط."],
     attachment_save_error: ["Could not save the attachment in this browser. Only its name and size were kept.", "تعذّر حفظ المرفق في هذا المتصفح. احتُفظ باسمه وحجمه فقط."],
     attachment_close: ["Close attachment preview", "إغلاق معاينة المرفق"],
@@ -5179,8 +5174,6 @@ const I18N = (() => {
     what_you_should_check: ["What you should check", "ما ينبغي التحقق منه"],
     the_baseline_uses_the: ["The baseline uses the original visitor mix to calculate the weighted average stay. Editing your plan does not rewrite this baseline. Flight fullness is capped at 100% when a recorded ratio exceeds capacity.", "يستخدم التقدير المرجعي التوزيع الأصلي للزوار لحساب المتوسط الموزون للإقامة. لا تغيّر تعديلات الخطة هذا التقدير. ويُحَدّ إشغال الرحلة عند 100% إذا تجاوزت النسبة المسجّلة السعة."],
     the_matching_records_badge: ["The matching-records badge describes available flight history, not accuracy. The error scores in “Check past results” tested monthly totals, not this route, your changes, the visitor mix, or event effects.", "تشير شارة السجلات المطابقة إلى تاريخ الرحلات المتاح ولا تقيس الدقة. اختبرت درجات الخطأ الإجماليات الشهرية، دون اختبار هذا المسار أو تعديلاتك أو توزيع الزوار أو آثار الفعاليات."],
-    count_extra_flights_each: ["{count} extra flights each week would reach at least {target} extra guest nights under the selected assumptions (about {estimate} nights). This is required capacity, not proof of passenger demand.", "وفق الافتراضات المختارة، تحقق إضافة {count} رحلة أسبوعيًا ما لا يقل عن {target} ليلة إضافية للنزلاء (نحو {estimate} ليلة). هذه هي السعة المطلوبة ولا تؤكد وجود الطلب."],
-    the_target_is_not: ["The target is not reached within 20 extra flights per week. At that limit the estimate is {estimate} nights, leaving {shortfall} nights below the target.", "لا يتحقق الهدف ضمن حد 20 رحلة إضافية أسبوعيًا. يبلغ التقدير عند هذا الحد {estimate} ليلة، أي أقل من الهدف بـ{shortfall} ليلة."],
     the_live_default_calculation: ["The live default calculation had {value} weighted error across {count} checked months. This tested monthly totals, not individual routes or new-route scenarios.", "بلغ الخطأ الموزون للحساب الافتراضي {value} على مدى {count} أشهر اختبار. اختُبرت الإجماليات الشهرية دون المسارات الفردية أو سيناريوهات المسارات الجديدة."],
     add_positive_flight_capacity: ["Add positive flight capacity to compare hotel-night yield.", "أضف سعة رحلات لمقارنة العائد من الليالي الفندقية."],
     both_options_have_the: ["Both options have the same estimated yield per added seat. Identical passenger and hotel assumptions produce a tie; country names alone do not create demand.", "للخيارين العائد المقدّر نفسه لكل مقعد إضافي. تعطي افتراضات الركاب والفنادق المتطابقة نتيجة متساوية، ولا تكفي أسماء البلدان لتقدير الطلب."],
@@ -5314,70 +5307,6 @@ const I18N = (() => {
     count_definitions: ["{count} definitions", "عدد التعريفات: {count}"],
     no_matching_term_try: ["No matching term. Try a word such as flights, hotel or nights.", "لا يوجد مصطلح مطابق. جرّب كلمة مثل الرحلات أو الفندق أو الليالي."],
 
-    // Target view (work back from a hotel-night target).
-    tgt_tab: ["Target", "الهدف"],
-    tgt_view_description: ["Start from the hotel nights you want and work back to the flights needed.", "ابدأ بعدد الليالي الفندقية الذي تريده واحسب عكسيًا الرحلات اللازمة."],
-    tgt_title: ["What would it take to reach a hotel-night target?", "ما الذي يلزم لتحقيق هدف من الليالي الفندقية؟"],
-    tgt_intro: ["Enter the hotel nights you want for this country and month. Air2Stay runs your plan backwards to the passengers, seats and weekly flights needed, using the same assumptions as the rest of the plan.", "أدخل عدد الليالي الفندقية الذي تريده لهذا البلد والشهر. يحسب Air2Stay خطتك عكسيًا للوصول إلى الركاب والمقاعد والرحلات الأسبوعية اللازمة، باستخدام افتراضات الخطة نفسها."],
-    tgt_ask_label: ["Ask in your own words", "اسأل بأسلوبك"],
-    tgt_ask_placeholder: ["How many flights for 10,000 more nights from India in December?", "كم رحلة نحتاج لإضافة 10,000 ليلة من الهند في ديسمبر؟"],
-    tgt_ask_button: ["Ask", "اسأل"],
-    tgt_basis_label: ["I want hotel nights to", "أريد أن تكون الليالي الفندقية"],
-    tgt_basis_extra: ["increase by", "أعلى بمقدار"],
-    tgt_basis_total: ["reach a total of", "بإجمالي"],
-    tgt_nights_label: ["Hotel nights in the month", "الليالي الفندقية في الشهر"],
-    tgt_working_back: ["Working backwards", "الحساب العكسي"],
-    tgt_nights_to_flights: ["From hotel nights to flights", "من الليالي الفندقية إلى الرحلات"],
-    tgt_each_step: ["Each step undoes one assumption in your plan", "كل خطوة تعكس افتراضًا واحدًا من خطتك"],
-    tgt_other_ways: ["Other ways to get there", "طرق أخرى للوصول"],
-    tgt_same_target: ["The same target with no extra flights", "الهدف نفسه دون رحلات إضافية"],
-    tgt_one_assumption: ["Changes one assumption across all current travellers", "تغيير افتراض واحد لجميع المسافرين الحاليين"],
-    tgt_disclaimer: ["This assumes every extra flight fills like the plan says. In practice, extra flights often fill less well than existing ones. It does not prove passenger demand, airport slots, hotel rooms or route profitability.", "يفترض هذا أن كل رحلة إضافية تمتلئ كما تفترض الخطة. وفي الواقع، كثيرًا ما تمتلئ الرحلات الإضافية بدرجة أقل من الرحلات الحالية. ولا يثبت ذلك وجود طلب من الركاب أو فترات هبوط في المطار أو غرف فندقية أو ربحية المسار."],
-    tgt_enter_number: ["Enter a number of hotel nights between 0 and 100,000,000.", "أدخل عددًا من الليالي الفندقية بين 0 و100,000,000."],
-    tgt_context_extra: ["{route}, {month}. Without extra flights this plan gives about {estimate} hotel nights, so the target total is about {target}. Change the country or month in Adjust plan.", "{route}، {month}. دون رحلات إضافية تعطي هذه الخطة نحو {estimate} ليلة فندقية، لذا يبلغ إجمالي الهدف نحو {target}. يمكنك تغيير البلد أو الشهر من «تعديل الخطة»."],
-    tgt_context_total: ["{route}, {month}. Without extra flights this plan gives about {estimate} hotel nights, so the target needs {shortfall} more. Change the country or month in Adjust plan.", "{route}، {month}. دون رحلات إضافية تعطي هذه الخطة نحو {estimate} ليلة فندقية، لذا يحتاج الهدف إلى {shortfall} ليلة إضافية. يمكنك تغيير البلد أو الشهر من «تعديل الخطة»."],
-    tgt_no_flights_needed: ["No extra flights needed", "لا حاجة إلى رحلات إضافية"],
-    tgt_already_reaches: ["The plan already reaches this many nights with its usual flights.", "تصل الخطة بالفعل إلى هذا العدد من الليالي برحلاتها المعتادة."],
-    tgt_flights_a_week: ["{count} extra flights a week", "{count} رحلة إضافية أسبوعيًا"],
-    tgt_headline_detail: ["{value} before rounding up · about {count} more flights in {month} · each one adds about {estimate} hotel nights a month", "{value} قبل التقريب للأعلى · نحو {count} رحلة إضافية في {month} · تضيف كل رحلة أسبوعية نحو {estimate} ليلة فندقية شهريًا"],
-    tgt_use_flights: ["Use {count} flights in my plan", "استخدم {count} رحلة في خطتي"],
-    tgt_above_limit: ["Above the planner's limit of 20 extra flights a week, so it can't be applied as one route.", "يتجاوز الحد الأقصى في المخطِّط وهو 20 رحلة إضافية أسبوعيًا، لذلك لا يمكن تطبيقه كمسار واحد."],
-    tgt_already_uses: ["Your plan already uses this many extra flights.", "تستخدم خطتك هذا العدد من الرحلات الإضافية بالفعل."],
-    tgt_currently_has: ["Your plan currently has {value} a week.", "تتضمن خطتك حاليًا {value} أسبوعيًا."],
-    tgt_realism_none: ["No extra flights are needed under these assumptions.", "لا حاجة إلى رحلات إضافية وفق هذه الافتراضات."],
-    tgt_realism_new: ["This is a new route with no current flights to compare against. Ask an airline whether this schedule is realistic.", "هذا مسار جديد لا توجد له رحلات حالية للمقارنة. اسأل شركة الطيران عمّا إذا كان هذا الجدول واقعيًا."],
-    tgt_realism_small: ["A small addition: about {share} more than the roughly {count} flights a week this route usually has in this month.", "إضافة صغيرة: نحو {share} أكثر من قرابة {count} رحلة أسبوعيًا يشهدها هذا المسار عادةً في هذا الشهر."],
-    tgt_realism_moderate: ["A noticeable addition: about {share} more than the roughly {count} flights a week this route usually has. Check airline capacity and airport slots.", "إضافة ملحوظة: نحو {share} أكثر من قرابة {count} رحلة أسبوعيًا يشهدها هذا المسار عادةً. تحقّق من سعة شركات الطيران وفترات الهبوط المتاحة في المطار."],
-    tgt_realism_large: ["A large addition: about {share} more than the roughly {count} flights a week this route usually has. New flights may not fill as well as existing ones.", "إضافة كبيرة: نحو {share} أكثر من قرابة {count} رحلة أسبوعيًا يشهدها هذا المسار عادةً. قد لا تمتلئ الرحلات الجديدة بقدر الرحلات الحالية."],
-    tgt_realism_very_large: ["More than doubles the route: about {value} times the roughly {count} flights a week it usually has. Treat this as unlikely without strong airline evidence.", "أكثر من ضعف المسار: نحو {value} أضعاف قرابة {count} رحلة أسبوعيًا يشهدها عادةً. اعتبر ذلك غير مرجّح دون أدلة قوية من شركات الطيران."],
-    tgt_step_start: ["Start", "البداية"],
-    tgt_step_nights: ["Hotel nights needed", "الليالي الفندقية المطلوبة"],
-    tgt_step_visitors: ["Visitors ending their trip in Abu Dhabi", "الزوار الذين تنتهي رحلتهم في أبوظبي"],
-    tgt_step_seats: ["Seats in the month", "المقاعد خلال الشهر"],
-    tgt_op_stay: ["÷ {value} nights per stay", "÷ {value} ليلة لكل إقامة"],
-    tgt_op_hotel: ["÷ {share} who use a hotel", "÷ {share} يقيمون في فندق"],
-    tgt_op_hotel_event: ["÷ {share} who use a hotel and +{uplift} for an event or season", "÷ {share} يقيمون في فندق و+{uplift} لفعالية أو موسم"],
-    tgt_op_trip: ["÷ {share} whose trip ends here", "÷ {share} تنتهي رحلتهم هنا"],
-    tgt_op_seats: ["÷ {share} of seats filled", "÷ {share} من المقاعد مشغولة"],
-    tgt_op_flights: ["÷ {count} seats per flight ÷ {value} weeks", "÷ {count} مقعدًا لكل رحلة ÷ {value} أسابيع"],
-    tgt_nothing_to_work_back: ["Nothing to work back: the target is already met.", "لا حاجة إلى الحساب العكسي: الهدف متحقق بالفعل."],
-    tgt_lever_hotel: ["Share of visitors using a hotel", "نسبة الزوار المقيمين في الفنادق"],
-    tgt_lever_nights: ["{low} nights → {high} nights", "من {low} إلى {high} ليلة"],
-    tgt_lever_share: ["{low} → {high}", "من {low} إلى {high}"],
-    tgt_within_limits: ["Within the planner's limits.", "ضمن حدود المخطِّط."],
-    tgt_beyond_nights: ["Beyond the planner's limit of {value} nights, so not reachable this way alone.", "يتجاوز حد المخطِّط البالغ {value} ليلة، لذلك لا يمكن الوصول إليه بهذه الطريقة وحدها."],
-    tgt_beyond_share: ["Beyond the planner's limit of {value}, so not reachable this way alone.", "يتجاوز حد المخطِّط البالغ {value}، لذلك لا يمكن الوصول إليه بهذه الطريقة وحدها."],
-    tgt_not_needed: ["Not needed: the target is already met.", "غير مطلوب: الهدف متحقق بالفعل."],
-    tgt_no_current_flights: ["This route has no current flights, so only new flights can add hotel nights here.", "لا توجد رحلات حالية على هذا المسار، لذلك لا يمكن إضافة ليالٍ فندقية هنا إلا برحلات جديدة."],
-    tgt_cards_note: ["Each card changes one assumption for everyone already flying this route, with no extra flights. They suggest where campaigns could help, for example longer stays or more hotel bookings; they are not measured effects.", "تغيّر كل بطاقة افتراضًا واحدًا لجميع من يسافرون على هذا المسار حاليًا دون رحلات إضافية. وهي تشير إلى المجالات التي قد تفيد فيها الحملات، مثل إطالة الإقامة أو زيادة الحجوزات الفندقية، وليست آثارًا مقيسة."],
-    tgt_ask_not_found: ["I couldn't find a number of hotel nights. Try “How many flights for 10,000 more nights from India in December?”", "لم أجد عددًا من الليالي الفندقية. جرّب «كم رحلة نحتاج لإضافة 10,000 ليلة من الهند في ديسمبر؟»"],
-    tgt_answering_extra: ["Answering for {route}, {month}: add {target} hotel nights.", "الإجابة عن {route}، {month}: إضافة {target} ليلة فندقية."],
-    tgt_answering_total: ["Answering for {route}, {month}: reach a total of {target} hotel nights.", "الإجابة عن {route}، {month}: الوصول إلى إجمالي {target} ليلة فندقية."],
-    tgt_answering_percent: ["Answering for {route}, {month}: a {share} increase, about {target} more hotel nights.", "الإجابة عن {route}، {month}: زيادة بنسبة {share}، أي نحو {target} ليلة فندقية إضافية."],
-    tgt_switched_country: ["I switched the plan's country to match your question.", "غيّرت بلد الخطة ليتوافق مع سؤالك."],
-    tgt_switched_month: ["I switched the plan's month to match your question.", "غيّرت شهر الخطة ليتوافق مع سؤالك."],
-    tgt_switched_both: ["I switched the plan's country and month to match your question.", "غيّرت بلد الخطة وشهرها ليتوافقا مع سؤالك."],
-    tgt_applied: ["Your plan now has {count} extra flights a week. Open Focus to see the full result.", "أصبحت خطتك تتضمن {count} رحلة إضافية أسبوعيًا. افتح «ملخص» لعرض النتيجة كاملة."],
 
     // Ask Air2Stay assistant: window and its replies (one sentence per line).
     a2c_open: ["Open the Air2Stay assistant", "فتح مساعد Air2Stay"],
@@ -5394,11 +5323,9 @@ const I18N = (() => {
     a2c_suggested: ["Suggested questions", "أسئلة مقترحة"],
     a2c_message: ["Message the assistant", "رسالة إلى المساعد"],
     a2c_chip_explain: ["Explain the result", "اشرح النتيجة"],
-    a2c_chip_target: ["Reach a target", "تحقيق هدف"],
     a2c_chip_check: ["What to check", "ما الذي يجب التحقق منه"],
     a2c_chip_can_do: ["What can you do?", "ماذا يمكنك أن تفعل؟"],
     a2c_prompt_nights: ["How were hotel nights calculated?", "كيف حُسبت الليالي الفندقية؟"],
-    a2c_prompt_target: ["How many flights for 10,000 more nights?", "كم رحلة نحتاج لإضافة 10,000 ليلة؟"],
     a2c_prompt_check: ["What should I check next?", "ما الذي يجب أن أتحقق منه بعد ذلك؟"],
     a2c_note: ["Works offline on this computer. It changes your plan only when you ask directly, like “Set extra flights to 5”.", "يعمل دون إنترنت على هذا الجهاز، ولا يغيّر خطتك إلا عندما تطلب ذلك مباشرةً، مثل «اضبط الرحلات الإضافية على 5»."],
     a2c_context: ["About your plan: {route} · {month} · {value} flights a week", "عن خطتك: {route} · {month} · {value} رحلة أسبوعيًا"],
@@ -5406,14 +5333,12 @@ const I18N = (() => {
     a2c_context_invalid: ["Your plan has an input to fix", "في خطتك قيمة تحتاج إلى تصحيح"],
     a2c_greeting: ["Hi, I’m the Air2Stay assistant. I run on this computer, so no internet is needed.", "مرحبًا، أنا مساعد Air2Stay. أعمل على هذا الجهاز، لذلك لا حاجة إلى الإنترنت."],
     a2c_greeting_explain: ["Ask how a number was worked out.", "اسأل كيف حُسب أي رقم."],
-    a2c_greeting_target: ["Ask what it takes to reach a hotel-night target.", "اسأل عمّا يلزم لتحقيق هدف من الليالي الفندقية."],
     a2c_greeting_change: ["Tell me a change, like “Set extra flights to 5”.", "اطلب تغييرًا، مثل «اضبط الرحلات الإضافية على 5»."],
-    a2c_hello: ["Hello! I can explain your plan, work out what it takes to reach a hotel-night target, or change an assumption for you.", "أهلًا! يمكنني شرح خطتك، وحساب ما يلزم لتحقيق هدف من الليالي الفندقية، أو تغيير أحد الافتراضات لك."],
+    a2c_hello: ["Hello! I can explain your plan or change an assumption for you.", "أهلًا! يمكنني شرح خطتك أو تغيير أحد الافتراضات لك."],
     a2c_hello_try: ["Try “How were hotel nights calculated?” or tap one of the suggestions below.", "جرّب «كيف حُسبت الليالي الفندقية؟» أو اختر أحد الاقتراحات أدناه."],
     a2c_thanks: ["You’re welcome. Ask me anything else about this plan whenever you need.", "على الرحب والسعة. اسألني عن أي شيء آخر في هذه الخطة متى احتجت."],
     a2c_can_help: ["I can help with the plan you have open.", "يمكنني المساعدة في الخطة المفتوحة لديك."],
     a2c_can_explain: ["Explain: “How were hotel nights calculated?” or “Where does the baseline come from?”", "الشرح: «كيف حُسبت الليالي الفندقية؟» أو «من أين يأتي التقدير المرجعي؟»"],
-    a2c_can_target: ["Targets: “How many flights for 10,000 more nights from India in December?”", "الأهداف: «كم رحلة نحتاج لإضافة 10,000 ليلة من الهند في ديسمبر؟»"],
     a2c_can_change: ["Changes: “Set flight occupancy to 80%” or “Add 5 flights from France in December”.", "التغييرات: «اضبط نسبة إشغال الرحلات على 80%» أو «أضف 5 رحلات من فرنسا في ديسمبر»."],
     a2c_can_next: ["Next steps: “What should I check next?”", "الخطوات التالية: «ما الذي يجب أن أتحقق منه بعد ذلك؟»"],
     a2c_can_calculator: ["I work out numbers with the same calculator as the rest of the app, and I only change your plan when you ask directly.", "أحسب الأرقام بالحاسبة نفسها المستخدمة في بقية التطبيق، ولا أغيّر خطتك إلا عندما تطلب ذلك مباشرةً."],
@@ -5421,7 +5346,6 @@ const I18N = (() => {
     a2c_open_plan: ["Open Plan a route to see the updated result.", "افتح «تخطيط المسار» لعرض النتيجة المحدّثة."],
     a2c_cannot_answer: ["I can’t answer that one on this computer yet. Try one of these:", "لا يمكنني الإجابة عن ذلك على هذا الجهاز بعد. جرّب أحد هذه الأسئلة:"],
     a2c_try_nights: ["“How were hotel nights calculated?”", "«كيف حُسبت الليالي الفندقية؟»"],
-    a2c_try_target: ["“How many flights for 10,000 more nights?”", "«كم رحلة نحتاج لإضافة 10,000 ليلة؟»"],
     a2c_try_occupancy: ["“Set flight occupancy to 80%”", "«اضبط نسبة إشغال الرحلات على 80%»"],
     a2c_try_check: ["“What should I check next?”", "«ما الذي يجب أن أتحقق منه بعد ذلك؟»"],
     a2c_not_changed: ["The plan was not changed.", "لم تتغير الخطة."],
@@ -5437,17 +5361,6 @@ const I18N = (() => {
     a2c_applied_event: ["{share} extra event or seasonal demand", "{share} طلب إضافي لفعالية أو موسم"],
     a2c_applied_starting: ["the starting assumptions shown in the controls", "الافتراضات الأولية المعروضة في أدوات التحكم"],
     a2c_reset: ["I’ve reset the plan to India in December. You can change the country, month, and numbers on the left.", "أعدت ضبط الخطة إلى الهند في ديسمبر. يمكنك تغيير البلد والشهر والأرقام من لوحة «تعديل الخطة»."],
-    a2c_target_open_extra: ["To add {target} hotel nights from {route} in {month}, you would need about {count} extra flights a week ({value} before rounding up).", "لإضافة {target} ليلة فندقية من {route} في {month}، ستحتاج إلى نحو {count} رحلة إضافية أسبوعيًا ({value} قبل التقريب للأعلى)."],
-    a2c_target_open_total: ["To reach {target} hotel nights in total from {route} in {month}, you would need about {count} extra flights a week ({value} before rounding up).", "للوصول إلى إجمالي {target} ليلة فندقية من {route} في {month}، ستحتاج إلى نحو {count} رحلة إضافية أسبوعيًا ({value} قبل التقريب للأعلى)."],
-    a2c_target_met: ["{route} in {month} already reaches about {estimate} hotel nights without extra flights, so no extra flights are needed.", "تصل خطة {route} في {month} بالفعل إلى نحو {estimate} ليلة فندقية دون رحلات إضافية، لذلك لا حاجة إلى رحلات إضافية."],
-    a2c_target_working_back: ["Working back: {target} nights → {low} hotel check-ins → {high} visitors ending their trip here → {estimate} passengers → {value} seats in the month.", "بالحساب العكسي: {target} ليلة ← {low} تسجيلًا فندقيًا ← {high} زائرًا تنتهي رحلتهم هنا ← {estimate} راكبًا ← {value} مقعدًا خلال الشهر."],
-    a2c_target_or_stay: ["Or, with no extra flights: average stay {low} → {high} nights.", "أو دون رحلات إضافية: رفع متوسط الإقامة من {low} إلى {high} ليلة."],
-    a2c_target_or_hotel: ["Or, with no extra flights: hotel use {low} → {high}.", "أو دون رحلات إضافية: رفع نسبة الإقامة الفندقية من {low} إلى {high}."],
-    a2c_target_or_full: ["Or, with no extra flights: flights {low} → {high} full.", "أو دون رحلات إضافية: رفع نسبة إشغال الرحلات من {low} إلى {high}."],
-    a2c_target_above_limit: ["That is above the planner's limit of 20 extra flights a week, so it can't be applied to the plan as one route.", "هذا يتجاوز الحد الأقصى في المخطِّط وهو 20 رحلة إضافية أسبوعيًا، لذلك لا يمكن تطبيقه على الخطة كمسار واحد."],
-    a2c_target_try_switch: ["Your plan has not changed. To try it, switch to {route} in {month}, then say “Set extra flights to {count}”.", "لم تتغير خطتك. لتجربة ذلك، انتقل إلى {route} في {month} ثم اكتب «اضبط الرحلات الإضافية على {count}»."],
-    a2c_target_try: ["To try it, say “Set extra flights to {count}”, or open the Target tab.", "لتجربة ذلك، اكتب «اضبط الرحلات الإضافية على {count}» أو افتح تبويب «الهدف»."],
-    a2c_target_assumes: ["This assumes every extra flight fills like the plan says. It does not prove passenger demand or hotel capacity.", "يفترض هذا أن كل رحلة إضافية تمتلئ كما تفترض الخطة، ولا يثبت وجود طلب من الركاب أو سعة فندقية كافية."],
     a2c_nights_formula: ["Hotel nights are estimated hotel arrivals multiplied by average nights per stay.", "الليالي الفندقية = عدد الوافدين المقدّر إلى الفنادق × متوسط الليالي لكل إقامة."],
     a2c_nights_this_plan: ["This plan: about {count} hotel arrivals × {value} nights = {estimate} guest nights. Displayed values are rounded.", "في هذه الخطة: نحو {count} وافدًا إلى الفنادق × {value} ليلة = {estimate} من ليالي النزلاء. القيم المعروضة مقرّبة."],
     a2c_nights_compared: ["That is {value} guest nights compared with the baseline estimate based on past flight records.", "أي {value} من ليالي النزلاء مقارنةً بالتقدير المرجعي المبني على سجلات الرحلات السابقة."],
@@ -5489,12 +5402,7 @@ const I18N = (() => {
     a2c_what_if: ["Tell me the final value to try, such as “What if flight occupancy is 80%?”, and I will work it out without changing your plan.", "أخبرني بالقيمة النهائية التي تريد تجربتها، مثل «ماذا لو كان الإشغال 80%؟»، وسأحسبها دون تغيير خطتك."],
     a2c_one_route: ["Choose one departure country and one month for this change. Use Compare to examine alternatives. The plan has not changed.", "اختر بلد مغادرة واحدًا وشهرًا واحدًا لهذا التغيير، واستخدم «المقارنة» لدراسة البدائل. لم تتغير الخطة."],
     a2c_name_value: ["Please name the value to change. I can set the route, month, extra flights, seats, flight occupancy, trip-ending share, hotel use, average stay, or event uplift. Use the country picker to create a new route.", "يُرجى تحديد القيمة المراد تغييرها. يمكنني ضبط المسار أو الشهر أو الرحلات الإضافية أو المقاعد أو نسبة إشغال الرحلات أو نسبة من تنتهي رحلتهم هنا أو الإقامة الفندقية أو متوسط الإقامة أو زيادة الفعاليات. استخدم قائمة البلدان لإنشاء مسار جديد."],
-    // Percentage and other target replies.
-    a2c_decrease: ["I work out the extra flights needed to increase hotel nights. To test fewer flights, set a negative change, like “Set extra flights to -2”.", "أحسب الرحلات الإضافية اللازمة لزيادة الليالي الفندقية. لتجربة رحلات أقل، اضبط تغييرًا سالبًا، مثل «اضبط الرحلات الإضافية على -2»."],
-    a2c_too_large: ["That target is too large for this planner. Use fewer than 1,000,000,000 hotel nights, or an increase of up to 100,000%.", "هذا الهدف أكبر مما يستطيع المخطِّط حسابه. استخدم أقل من 1,000,000,000 ليلة فندقية، أو زيادة لا تتجاوز 100,000%."],
     a2c_too_long: ["That message is too long. Please ask one short question at a time.", "هذه الرسالة طويلة جدًا. يُرجى طرح سؤال قصير واحد في كل مرة."],
-    a2c_no_percent_base: ["{route} in {month} has no hotel nights without extra flights, so a percentage increase cannot be worked out. Give a number of nights instead, like “How many flights for 5,000 more nights?”", "لا توجد لـ{route} في {month} ليالٍ فندقية دون رحلات إضافية، لذلك لا يمكن حساب زيادة بنسبة مئوية. اذكر عددًا من الليالي بدلًا من ذلك، مثل «كم رحلة نحتاج لإضافة 5,000 ليلة؟»"],
-    a2c_percent_intro: ["A {share} increase on the {estimate} hotel nights this plan gives without extra flights ({route}, {month}) is about {target} more nights.", "زيادة بنسبة {share} على {estimate} ليلة فندقية تعطيها هذه الخطة دون رحلات إضافية ({route}، {month}) تعني نحو {target} ليلة إضافية."],
 
     // Result summary.
     a2c_sum_title: ["Here is your current result for {route} in {month}.", "هذه نتيجتك الحالية لـ{route} في {month}."],
@@ -5534,19 +5442,12 @@ const I18N = (() => {
     a2c_gd_focus_cards: ["Four result cards: extra hotel check-ins, extra guest nights, total guest nights and the possible range.", "أربع بطاقات للنتائج: التسجيلات الفندقية الإضافية، وليالي النزلاء الإضافية، وإجمالي ليالي النزلاء، والنطاق المحتمل."],
     a2c_gd_focus_chart: ["A chart of how your plan flows from seats to guest nights.", "رسم بياني يوضح انتقال خطتك من المقاعد إلى ليالي النزلاء."],
     a2c_gd_focus_next: ["Next steps to check before relying on the result.", "الخطوات التالية التي يجب التحقق منها قبل الاعتماد على النتيجة."],
-    // Target.
-    a2c_gd_target_1: ["Target works backwards from the hotel nights you want.", "يحسب «الهدف» عكسيًا انطلاقًا من عدد الليالي الفندقية الذي تريده."],
-    a2c_gd_target_enter: ["Enter nights to add, or a total to reach, or ask in your own words.", "أدخل عدد الليالي المراد إضافتها، أو الإجمالي المراد الوصول إليه، أو اسأل بأسلوبك."],
-    a2c_gd_target_shows: ["It shows the extra weekly flights needed, each step from nights back to seats, and whether that is realistic for the route.", "يعرض الرحلات الأسبوعية الإضافية اللازمة، وكل خطوة من الليالي وصولًا إلى المقاعد، ومدى واقعية ذلك للمسار."],
-    a2c_gd_target_other: ["It also shows how the same target could be reached with no extra flights.", "كما يعرض كيف يمكن تحقيق الهدف نفسه دون رحلات إضافية."],
-    a2c_gd_target_button: ["A button there puts the flights into your plan.", "ويضيف زر هناك هذه الرحلات إلى خطتك."],
     // Compare.
     a2c_gd_compare_1: ["Compare helps you decide which route option to investigate. Each option is compared with zero extra flights under the same assumptions.", "تساعدك «المقارنة» على اختيار خيار المسار الذي تدرسه. ويُقارن كل خيار بعدم إضافة رحلات وفق الافتراضات نفسها."],
     a2c_gd_compare_route: ["Current proposal versus an existing route.", "المقترح الحالي مقابل مسار قائم."],
     a2c_gd_compare_launch: ["Three launch sizes: cautious, standard and expanded.", "ثلاثة أحجام للإطلاق: حذر وقياسي وموسّع."],
     a2c_gd_compare_months: ["Compare months: the same plan across the year.", "مقارنة الأشهر: الخطة نفسها على مدار العام."],
     a2c_gd_compare_stress: ["What if fewer visitors stay in hotels? Tests with lower assumptions.", "ماذا لو أقام عدد أقل من الزوار في الفنادق؟ اختبارات بافتراضات أدنى."],
-    a2c_gd_compare_target: ["Work backwards from a hotel-night target.", "الحساب العكسي من هدف للّيالي الفندقية."],
     a2c_gd_compare_note: ["The planning decision: a note you can save as a PDF or download as text.", "قرار التخطيط: مذكرة يمكنك حفظها بصيغة PDF أو تنزيلها كنص."],
     a2c_gd_compare_limit: ["These are planning comparisons, not airline profitability or booking forecasts.", "هذه مقارنات تخطيطية، وليست توقعات لربحية شركات الطيران أو للحجوزات."],
     // Details.
@@ -5751,9 +5652,7 @@ const I18N = (() => {
     exp_dn_limit_trials: ["Lower-assumption trials are illustrative tests, not statistical probabilities or commercial break-even tests.", "اختبارات الافتراضات الأدنى اختبارات توضيحية، وليست احتمالات إحصائية ولا اختبارات لنقطة التعادل التجارية."],
     exp_dn_peer_heading: ["Comparison-country starting weights", "الأوزان الأولية للبلدان المقارنة"],
     exp_dn_peer_note: ["Geographic assumptions only; not measured route demand.", "افتراضات جغرافية فقط؛ وليست طلبًا مقاسًا على المسار."],
-    exp_dn_capacity_check: ["Capacity target check", "فحص هدف السعة"],
     // Remaining interface text found by the audit.
-    ui_reach_target_label: ["Reach a hotel-night target", "تحقيق هدف الليالي الفندقية"],
     ui_search_help: ["Search help", "البحث في المساعدة"],
     ui_next_action: ["Next action", "الإجراء التالي"],
     ui_chart_guest_nights: ["Guest nights.", "ليالي النزلاء."],
@@ -5841,7 +5740,6 @@ const I18N = (() => {
     aud_63: ["Choose an alternative route", "اختر مسارًا بديلًا"],
     aud_64: ["Compare launch sizes", "قارن أحجام الإطلاق"],
     aud_65: ["Test a weaker outcome", "اختبر نتيجة أضعف"],
-    aud_66: ["Work backwards from a target", "احسب عكسيًا من هدف"],
     aud_67: ["Review and export the note", "راجع المذكرة وصدّرها"],
     aud_68: ["Follow up a proposal", "تابع مقترحًا"],
     aud_69: ["Record checks, evidence, discussion and stakeholder drafts.", "سجّل عمليات التحقق والأدلة والنقاش ومسودات أصحاب المصلحة."],
@@ -6529,7 +6427,6 @@ function keepHostPageInPlace() {
      $("#aircraftControls").open = window.matchMedia("(min-width: 1051px)").matches;
      setupControls();
      setupDecisionTools();
-     setupTargetWorkspace();
      setupHelpChat();
      setupExportLanguage();
      setupNextSteps();

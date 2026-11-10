@@ -76,7 +76,6 @@
            <button type="button" id="adjustControls" class="adjust-controls" aria-expanded="false" aria-controls="planControls"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16M13 9l3 3-3 3"/></svg><span id="adjustControlsLabel" data-i18n="adjust_plan">Adjust plan</span></button>
            <div class="view-mode-switch" role="group" aria-label="Planning view" data-i18n-aria-label="planning_view">
              <button type="button" class="view-mode active" data-mode="focus" aria-pressed="true" aria-controls="scenarioResults" data-i18n="focus">Focus</button>
-             <button type="button" class="view-mode" data-mode="target" aria-pressed="false" aria-controls="targetWorkspace">Target</button>
              <button type="button" class="view-mode" data-mode="decisions" aria-pressed="false" aria-controls="decisionWorkspace" data-i18n="compare">Compare</button>
              <button type="button" class="view-mode" data-mode="details" aria-pressed="false" aria-controls="scenarioResults" data-i18n="details">Details</button>
              <button type="button" class="view-mode" data-mode="chat" aria-pressed="false" aria-controls="assistantPanel" hidden disabled data-i18n="chat">Chat</button>
@@ -124,24 +123,7 @@
            <details class="content-block" open><summary data-i18n="three_launch_sizes">Three launch sizes</summary><p class="planning-note" data-i18n="cautious_standard_and_expanded">Cautious, standard and expanded refer to the number of flights only. They are not probabilities of demand.</p><div id="launchOptions" class="launch-grid"></div></details>
            <details class="content-block"><summary data-i18n="compare_months">Compare months</summary><label class="planning-check"><input type="checkbox" id="refreshMonthAssumptions" checked><span data-i18n="use_each_month_s">Use each month’s market starting estimates</span></label><p id="monthComparisonNote" class="planning-note"></p><div id="monthChart" dir="ltr"></div><details class="chart-numbers"><summary data-i18n="show_the_numbers">Show the numbers</summary><div id="monthOptions" class="table-scroll"></div></details></details>
            <details class="content-block"><summary data-i18n="what_if_fewer_visitors">What if fewer visitors stay in hotels?</summary><p class="planning-note" data-i18n="stress_trials_scope">These hypothetical trials use lower assumptions within the control limits.</p><div id="stressChart" dir="ltr"></div><details class="chart-numbers"><summary data-i18n="show_the_numbers">Show the numbers</summary><div id="stressOptions" class="table-scroll"></div></details></details>
-           <details class="content-block"><summary data-i18n="work_backwards_from_a">Work backwards from a hotel-night target</summary><div class="target-controls"><label class="planning-field"><span data-i18n="target_extra_guest_nights">Target extra guest nights in the selected month</span><input id="targetGuestNights" type="number" min="0" max="100000000" step="100" value="5000" lang="en" dir="ltr"></label><button id="calculateTarget" type="button" data-i18n="calculate_capacity">Calculate capacity</button></div><p id="targetResult" role="status" class="planning-callout"></p><button id="applyTarget" type="button" hidden data-i18n="apply_changes">Apply changes</button><p class="planning-note" data-i18n="assumes_every_extra_flight">Assumes every extra flight achieves the selected occupancy and visitor assumptions. This does not prove that enough passengers will book or that a route is financially viable.</p></details>
            <section class="content-block" id="planningDecision"><div class="section-heading"><div><p data-i18n="decision_note">Decision note</p><h2 id="planningDecisionTitle" tabindex="-1" data-i18n="the_planning_decision">The planning decision</h2></div><div class="decision-note-actions"><button type="button" id="printDecisionNote" data-i18n="save_as_pdf">Save as PDF</button><button type="button" id="exportDecisionNote" class="text-action" data-i18n="or_download_as_text">or download as text</button></div></div><div id="decisionNote" aria-live="polite"></div></section>
-         </section>
-         <section id="targetWorkspace" class="decision-workspace target-workspace" hidden aria-label="Reach a hotel-night target">
-           <div class="decision-intro"><h2>What would it take to reach a hotel-night target?</h2><p>Enter the hotel nights you want for this country and month. Air2Stay runs your plan backwards to the passengers, seats and weekly flights needed, using the same assumptions as the rest of the plan.</p></div>
-           <section class="content-block target-input-block">
-             <form id="targetAskForm" class="target-ask" novalidate><label class="planning-field">Ask in your own words<input id="targetAsk" type="text" autocomplete="off" placeholder="How many flights for 10,000 more nights from India in December?"></label><button type="submit">Ask</button></form>
-             <p id="targetAskStatus" class="planning-note" role="status"></p>
-             <div class="target-controls">
-               <label class="planning-field">I want hotel nights to<select id="targetBasis"><option value="extra">increase by</option><option value="total">reach a total of</option></select></label>
-               <label class="planning-field">Hotel nights in the month<input id="targetNights" type="number" min="0" max="100000000" step="500" value="10000"></label>
-             </div>
-             <p id="targetContext" class="planning-note"></p>
-           </section>
-           <section class="content-block target-answer" aria-live="polite"><div id="targetAnswer"></div></section>
-           <section class="content-block"><div class="section-heading"><div><p>Working backwards</p><h2>From hotel nights to flights</h2></div><small>Each step undoes one assumption in your plan</small></div><ol id="targetSteps" class="target-chain"></ol></section>
-           <section class="content-block"><div class="section-heading"><div><p>Other ways to get there</p><h2>The same target with no extra flights</h2></div><small>Changes one assumption across all current travellers</small></div><div id="targetAlternatives"></div></section>
-           <p class="planning-note">This assumes every extra flight fills like the plan says. In practice, extra flights often fill less well than existing ones. It does not prove passenger demand, airport slots, hotel rooms or route profitability.</p>
          </section>
          <div id="scenarioResults" style="display:contents">
          <section id="kpis" class="kpi-grid"></section>
@@ -326,7 +308,6 @@
      <div id="helpChatLog" class="help-chat-log" data-i18n-ignore role="log" aria-live="polite" aria-label="Conversation with the assistant"></div>
      <div class="help-chat-starters" aria-label="Suggested questions">
        <button type="button" data-help-prompt="Explain the result">Explain the result</button>
-       <button type="button" data-help-prompt="How many flights for 10,000 more nights?">Reach a target</button>
        <button type="button" data-help-prompt="What should I check next?">What to check</button>
        <button type="button" data-help-prompt="What can you do?">What can you do?</button>
      </div>

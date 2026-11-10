@@ -1213,9 +1213,7 @@ body.decisions-mode #scenarioResults { display:none !important; }
 .launch-card p { color:#bdd4dd; font-size:12px; line-height:1.6; margin:10px 0 0; }
 .launch-card small { color:#e8b281; display:block; line-height:1.5; margin-top:12px; }
 .decision-workspace details > summary { cursor:pointer; color:#dceff1; font-weight:700; font-size:15px; line-height:1.6; }
-.target-controls { display:flex; gap:16px; flex-wrap:wrap; align-items:end; margin-top:16px; }
-.target-controls .planning-field { flex:1 1 220px; }
-.target-controls button, #applyTarget, #applyPurpose, #applySeasonalConversion { background:#164653; color:#d8f9ee; border:1px solid #3f796f; padding:10px 14px; border-radius:7px; cursor:pointer; font-weight:600; margin:8px 0 12px; }
+#applyPurpose, #applySeasonalConversion { background:#164653; color:#d8f9ee; border:1px solid #3f796f; padding:10px 14px; border-radius:7px; cursor:pointer; font-weight:600; margin:8px 0 12px; }
 #decisionNote p, #decisionNote li { font-size:13px; color:#c0d7df; line-height:1.7; }
 #decisionNote li { margin:12px 0; }
 #planningDecision { scroll-margin-top:calc(var(--header-height) + 18px); }
@@ -1276,7 +1274,7 @@ input[type='range'],.planning-check input { accent-color:#c9a84c; }
 .workspace-toolbar .view-mode { color:#ded5c5; }
 .workspace-toolbar .view-mode.active { background:var(--desert-gradient); color:#0b1020; box-shadow:none; }
 .view-mode:focus-visible,.text-action:focus-visible,.assistant-link:focus-visible,summary:focus-visible,.season-column:focus-visible { outline-color:#f2d58a; }
-.adjust-controls,.scenario-actions button,.export-menu summary,.inline-actions button,.glossary-tools button,.target-controls button,#applyTarget,#applyPurpose,#applySeasonalConversion { background:#1c2545; color:#f5efe3; border-color:rgba(201,168,76,.45); }
+.adjust-controls,.scenario-actions button,.export-menu summary,.inline-actions button,.glossary-tools button,#applyPurpose,#applySeasonalConversion { background:#1c2545; color:#f5efe3; border-color:rgba(201,168,76,.45); }
 .export-menu > div { background:#141b33; border-color:var(--line); }
 .heading-pill { background:rgba(201,168,76,.16); color:#f2d58a; }
 .confidence,.confidence.medium { background:#332b1a; border-color:#806a31; color:#f2d58a; }
@@ -1796,6 +1794,7 @@ body:has(.team-rail) > main { margin-inline-end: var(--team-rail-width); }
 #messageList > p { margin: 8px; }
 #messagesView .message-preview {
   display: grid;
+  width: 100%;
   gap: 4px;
   min-width: 0;
   text-align: start;
@@ -1815,6 +1814,14 @@ body:has(.team-rail) > main { margin-inline-end: var(--team-rail-width); }
 .mailbox-reader h2 { margin: 12px 0 6px; font-size: clamp(1.2rem, 1.7vw, 1.55rem); line-height: 1.25; }
 .message-parties { margin: 0; color: var(--mail-muted); font-size: .81rem; }
 .message-body { margin: 16px 0; white-space: pre-wrap; line-height: 1.6; font-size: .91rem; }
+.message-list-row { min-width: 0; }
+.message-list-files { padding: 0 10px; }
+.message-list-files summary { cursor: pointer; color: #bac8df; font-size: .75rem; }
+.message-list-files .message-attachments { margin-block: 6px; }
+.message-attachment-status { margin: 0 0 10px; color: #f2d58a; font-size: .8rem; }
+#attachmentList { list-style: none; padding-inline-start: 0; }
+#composeDialog .message-attachment-chip { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 6px; max-width: 100%; }
+#composeDialog .message-attachment-chip svg, #composeDialog .message-attachment-link svg { width: 16px; height: 16px; }
 .message-attachments { display: flex; flex-wrap: wrap; gap: 5px; list-style: none; padding: 0; margin: 0 0 14px; }
 #messagesView .message-attachment-chip, .message-attachment-link {
   display: flex;
@@ -1830,9 +1837,11 @@ body:has(.team-rail) > main { margin-inline-end: var(--team-rail-width); }
   font-size: .76rem;
 }
 .message-attachments li { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; min-width: 0; max-width: 100%; }
-#messagesView .message-file-download { border-color: #9c8450; color: #f2d58a; padding: 4px 8px; }
-#messagesView .message-file-download:hover,
-#messagesView .message-file-download:focus-visible { border-color: #f2d58a; background: #3b3450; }
+.message-file-download { display: inline-block; border: 1px solid #9c8450; border-radius: 7px; color: #f2d58a; padding: 4px 8px; font-size: .76rem; }
+.message-file-download[aria-disabled="true"] { opacity: .65; cursor: wait; }
+.message-file-download[data-attachment-state="missing"] { cursor: not-allowed; }
+.message-file-download:hover,
+.message-file-download:focus-visible { border-color: #f2d58a; background: #3b3450; }
 #messagesView .message-attachment-chip:hover,
 #messagesView .message-attachment-chip:focus-visible { border-color: #f2d58a; }
 .attachment-kind { color: #f2d58a; }
@@ -2272,38 +2281,6 @@ body.help-chat-open .help-chat-bubble { display:none; }
 @media (max-width:560px) {
   .help-chat-bubble { inset-inline-end:calc(var(--team-rail-width, 38px) + 10px); bottom:14px; width:54px; height:54px; }
   .help-chat { inset-inline:8px; bottom:8px; width:calc(100vw - 16px); height:min(78dvh, calc(100dvh - 24px)); }
-}
-
-/* Target view: work back from a hotel-night target to the flights needed. */
-body.target-mode #scenarioResults { display:none !important; }
-.target-ask { display:flex; gap:12px; align-items:end; flex-wrap:wrap; }
-.target-ask .planning-field { flex:1 1 320px; max-width:none; margin-bottom:0; }
-.target-ask button { background:#1c2545; color:#f5efe3; border:1px solid rgba(201,168,76,.45); padding:10px 18px; border-radius:7px; cursor:pointer; font-weight:600; }
-#targetAskStatus:empty { display:none; }
-.target-workspace .target-controls { margin-top:4px; }
-.target-headline { display:flex; justify-content:space-between; gap:16px; align-items:center; flex-wrap:wrap; }
-.target-big { display:block; font-size:30px; line-height:1.15; color:#f2d58a; }
-.target-headline p { color:#bdd4dd; font-size:13px; line-height:1.6; margin:6px 0 0; }
-.target-actions { display:grid; gap:6px; justify-items:end; text-align:right; }
-.target-actions small { color:#aac3cc; font-size:12px; max-width:260px; line-height:1.5; }
-#targetWorkspace button.feature-primary { background:#f2d58a; border:1px solid #f2d58a; color:#15182b; font-weight:750; padding:10px 16px; border-radius:7px; cursor:pointer; }
-.target-realism { margin:16px 0 0; padding:10px 14px; border-left:3px solid #8fb3ff; background:#12313c; color:#d6e9ec; font-size:13px; line-height:1.6; }
-.target-realism.target-small { border-left-color:#46d4b8; }
-.target-realism.target-moderate { border-left-color:#e8b281; }
-.target-realism.target-large, .target-realism.target-very-large { border-left-color:#ef8a7a; }
-.target-chain { list-style:none; margin:14px 0 0; padding:0; }
-.target-step { display:grid; grid-template-columns:minmax(0,1.3fr) minmax(0,1.3fr) auto; gap:12px; align-items:baseline; padding:11px 14px; border-left:2px solid #34586a; }
-.target-step + .target-step { border-top:1px solid #23404f; }
-.target-op { color:#e8b281; font-size:12px; }
-.target-label { color:#d2e7ec; font-size:13px; }
-.target-step strong { color:#f0f9fa; font-size:16px; font-variant-numeric:tabular-nums; text-align:right; }
-.target-step-final { background:#12313c; border-left-color:#f2d58a; }
-.target-step-final strong { color:#f2d58a; font-size:20px; }
-@media (max-width:760px) {
-  .target-step { grid-template-columns:1fr auto; }
-  .target-op { grid-column:1 / -1; }
-  .target-actions { justify-items:start; text-align:left; }
-  .target-workspace .launch-grid { grid-template-columns:1fr; }
 }
 
 /* Export language picker (export menu, decision note, Term guide print). */
