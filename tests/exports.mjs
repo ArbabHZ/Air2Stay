@@ -93,4 +93,39 @@ assert.ok(!/undefined|NaN|GEMINI_API_KEY|assistantToken/.test(decisionText));
 
 nodes.get('#inputError').hidden=false;exported=null;
 nodes.get('#exportDecisionNote').handlers.click();assert.equal(exported,null);
-console.log('PASS: model-ready CSV rows match the simulator across all months; decision-note exports preserve both alternatives, and peer weights; invalid plans block export.');
+
+// Embedded-frame downloads must preserve arbitrary binary bytes when converting
+// a frame-owned Blob URL into the host-compatible data URL fallback.
+const clicked=[];let readerDone,readerCalls=0,readerFails=false;
+context.window={parent:{}};
+context.FileReader=class {
+  constructor(){this.handlers=new Map();}
+  addEventListener(type,handler){this.handlers.set(type,handler);}
+  readAsDataURL(blob){
+    readerCalls++;
+    readerDone=blob.arrayBuffer().then(buffer=>{
+      if(readerFails){this.handlers.get('error')();return;}
+      this.result=`data:${blob.type};base64,${Buffer.from(buffer).toString('base64')}`;
+      this.handlers.get('load')();
+    });
+  }
+};
+context.document.createElement=tag=>({click(){clicked.push({href:this.href,filename:this.download});},setAttribute(){},append(){}});
+const binary=Uint8Array.of(0,255,128,1,13,10,37,80,68,70,0,254);
+context.downloadBlob=new Blob([binary],{type:'application/pdf'});
+context.downloadName='Air2Stay-تقرير.pdf';
+vm.runInContext('downloadPlan(downloadBlob,downloadName)',context);await readerDone;
+assert.equal(readerCalls,1);
+assert.equal(clicked.length,1);
+assert.equal(clicked[0].filename,'Air2Stay-تقرير.pdf');
+assert.match(clicked[0].href,/^data:application\/pdf;base64,/);
+assert.deepEqual(new Uint8Array(Buffer.from(clicked[0].href.split(',')[1],'base64')),binary);
+readerFails=true;
+vm.runInContext('downloadPlan(downloadBlob,downloadName)',context);await readerDone;
+assert.equal(clicked.at(-1).href,'blob:test','Failed FileReader falls back to the still-valid Blob URL');
+const priorReads=readerCalls;
+context.window.parent=context.window;
+vm.runInContext('downloadPlan(downloadBlob,downloadName)',context);
+assert.equal(readerCalls,priorReads,'Top-level browser downloads do not convert binary files to data URLs');
+assert.equal(clicked.at(-1).href,'blob:test');
+console.log('PASS: model-ready CSV rows match the simulator; decision-note alternatives and peer weights are exact; invalid plans block export; embedded downloads preserve binary bytes and fall back safely.');

@@ -11,6 +11,10 @@ const context = vm.createContext({locations,document:{querySelector(selector){re
 vm.runInContext(source+'\ncountryLocationLookup=buildCountryLocationLookup(locations); state={month:12}; applyOverlayScale=()=>{}; animateMapViewBox=()=>{};',context);
 const close = (actual,expected,label) => assert.ok(Math.abs(actual-expected)<1e-7,label);
 
+// Natural Earth includes the legacy alias IS for Israel; flag rendering must use IL.
+assert.equal(vm.runInContext('countryFlag(countryLocationLookup[normalizeCountryName("Israel")])',context),'🇮🇱');
+assert.equal(vm.runInContext('countryFlag(countryLocationLookup[normalizeCountryName("Iceland")])',context),'🇮🇸');
+
 // Reconstruct the basemap's own rendered coordinates from its viewBox.
 // The native paths were created for latitude75N..60S, rather than90N..90S.
 const viewBox = svg.match(/viewBox="([^"]+)"/)[1].split(/\s+/).map(Number);

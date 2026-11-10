@@ -1,5 +1,10 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import vm from 'node:vm';
+import * as engine from '../prototype/engine.mjs';
+import * as decisions from '../prototype/decision_tools.mjs';
+import * as routes from '../prototype/route_planning.mjs';
+import * as eventForecast from '../prototype/event_forecast.mjs';
 import { NEWS_EVENTS } from '../prototype/news_events.mjs';
 import { EVENT_EVIDENCE } from '../prototype/event_evidence.mjs';
 import { EV_MIN_EDITIONS, EV_MAX_UPLIFT, evEventSummary, evForecast, evLeaveOneOut, evNormalPerNight, evNewsList, evUnseenCount, evChatData,
@@ -231,4 +236,67 @@ for (const text of ['ما الفعاليات القادمة؟', 'ما توقع �
   assert.ok(ask(ar(text)), text);
 }
 
-console.log('news and events tests passed');
+// 12. Exercise the actual News click handler. Applying an event changes only its
+// month/uplift; edited assumptions, visitor mix and imported provenance survive.
+const locations = JSON.parse(fs.readFileSync(new URL('../prototype/data/country_locations.json', import.meta.url)));
+const appSource = fs.readFileSync(new URL('../prototype/app.mjs', import.meta.url), 'utf8')
+  .replace(/^\s*import[^;]+;/gm, '').replace(/\binit\(\);\s*$/, '');
+const nodes = new Map();
+function testNode() {
+  let value = '';
+  return { get value() { return value; }, set value(next) { value = String(next); },
+    hidden: true, checked: false, dataset: {}, textContent: '', innerHTML: '', handlers: new Map(),
+    addEventListener(type, handler) { this.handlers.set(type, handler); }, querySelectorAll() { return []; },
+    querySelector() { return null; }, click() {},
+  };
+}
+const ctx = vm.createContext({ ...engine, ...decisions, ...routes, ...eventForecast, NEWS_EVENTS, EVENT_EVIDENCE,
+  inputData: data, inputLocations: locations, setTimeout: () => 0, clearTimeout() {},
+  localStorage: { getItem() { return null; }, setItem() {} },
+  document: { addEventListener() {}, querySelector(selector) { if (!nodes.has(selector)) nodes.set(selector, testNode()); return nodes.get(selector); } },
+});
+vm.runInContext(appSource + '\ndata=inputData;countryLocationLookup=buildCountryLocationLookup(inputLocations);newsToday=()=>"2026-11-11";renderAll=()=>{};setupNewsEvents();', ctx);
+const applyClick = () => nodes.get('#newsView').handlers.get('click')({ target: { closest: selector => selector === '[data-news-apply]' ? { dataset: { newsApply: 'f1-2026' } } : null } });
+const readState = () => JSON.parse(vm.runInContext('JSON.stringify(state)', ctx));
+const preservedKeys = ['originKey', 'extraFlights', 'seatsPerFlight', 'loadFactor', 'p2pShare', 'conversionRate', 'averageStay', 'routePurpose', 'purposeAssumptionsApplied', 'seasonalConversion', 'importedSource', 'bridgeOverride'];
+for (const origin of ['INDIA', 'GREECE']) {
+  ctx.origin = origin;
+  vm.runInContext('state=defaultState(origin,6,origin==="GREECE"?"__PEERS__":"");Object.assign(state,{extraFlights:8,seatsPerFlight:321.123456789,loadFactor:.8123456789,p2pShare:.42,conversionRate:.333333333,averageStay:6.4321,routePurpose:"holiday",purposeAssumptionsApplied:true,seasonalConversion:true,importedSource:{filename:"reviewed-plan.xlsx",location:"Assumptions, row 4"}});bridgeOverride=(state.peerProfile?.bridge||getBridge(data,state.originKey,6)).map((row,index)=>({...row,weight:index===0?1:0}));state.bridgeOverride=bridgeOverride;confirmedNewMarketKey=origin==="GREECE"?origin:"";', ctx);
+  const before = readState();
+  applyClick();
+  const applied = readState();
+  assert.equal(applied.month, 12, origin);
+  assert.equal(applied.eventUplift, Math.round(summaries.f1.forecast.uplift * 100) / 100);
+  for (const key of preservedKeys) assert.deepEqual(applied[key], before[key], `${origin}: preserve ${key}`);
+  assert.equal(nodes.get('#month').value, '12');
+  assert.equal(nodes.get('#extraFlights').value, '8');
+  assert.equal(nodes.get('#seatsPerFlight').dataset.exact, '321.123456789');
+  if (origin === 'GREECE') {
+    assert.equal(applied.peerProfile.month, 12, 'Refresh month-specific comparison references without replacing user inputs');
+    assert.equal(applied.proxyOriginKey, applied.peerProfile.primaryPeerOriginKey);
+  }
+  assert.equal(applied.eventSource.editionId, 'f1-2026');
+  assert.equal(applied.eventSource.source, summaries.f1.upcoming.source);
+  assert.deepEqual(applied.eventSource.years, ['2022', '2023', '2024']);
+  const reportNotes = vm.runInContext('buildPlanReport(state,"","").notes.join("\\n")', ctx);
+  assert.match(reportNotes, /reviewed-plan\.xlsx/);
+  assert.match(reportNotes, /Event assumption: Formula 1 Abu Dhabi Grand Prix/);
+  assert.ok(reportNotes.includes(summaries.f1.upcoming.source));
+  assert.ok(!vm.runInContext('buildPlanReport({...state,eventUplift:.1},"","").notes.join("\\n")', ctx).includes('Event assumption:'), 'Changed event assumptions must not claim the old evidence');
+  applyClick();
+  assert.deepEqual(readState(), applied, 'Reapplying the same event preserves the plan');
+}
+const unchanged = vm.runInContext('JSON.stringify(state)', ctx);
+nodes.get('#inputError').hidden = false;
+applyClick();
+assert.equal(vm.runInContext('JSON.stringify(state)', ctx), unchanged, 'A highlighted invalid input blocks the News action');
+nodes.get('#inputError').hidden = true;
+ctx.invalidSummary = { ...summaries.f1, forecast: { ...summaries.f1.forecast, planMonth: 13 } };
+assert.throws(() => vm.runInContext('applyNewsEventPlan(invalidSummary)', ctx));
+assert.equal(vm.runInContext('JSON.stringify(state)', ctx), unchanged, 'An invalid forecast cannot partially replace the plan');
+
+// Explicit chat month changes intentionally keep their original default-reset behavior.
+vm.runInContext('state=defaultState("INDIA",6);state.extraFlights=8;state.averageStay=6.4321;bridgeOverride=null;applyAssistantPlan({inputs:{...state,month:1},changes:{month:1},understood:true});', ctx);
+assert.equal(readState().extraFlights, vm.runInContext('defaultState("INDIA",1).extraFlights', ctx));
+assert.equal(readState().averageStay, vm.runInContext('defaultState("INDIA",1).averageStay', ctx));
+console.log('news and events tests passed: forecast evidence, bilingual replies, News application preserves reviewed inputs and provenance, and chat month behavior is unchanged');

@@ -1,0 +1,38 @@
+.import-dialog { color:var(--theme-text,#f5efe3); background:var(--theme-card,#141b31); border:1px solid var(--line,#6b7280); border-radius:20px; width:min(960px,calc(100vw - 32px)); max-height:90dvh; padding:26px; overflow:auto; box-shadow:0 22px 80px #0008; }
+.model-import-tools {display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin:14px 0;color:var(--theme-muted,#b3bccd);font-size:.85rem}
+.model-import-tools button {border:1px solid currentColor;border-radius:8px;padding:9px 14px;color:var(--theme-text,#f5efe3);background:transparent;font:inherit;font-weight:700;cursor:pointer;flex-shrink:0}
+.model-import-tools button:focus-visible {outline:3px solid var(--accent,#f5cd7f);outline-offset:3px}
+[data-theme=light] .model-import-tools {color:#46556e}
+[data-theme=light] .model-import-tools button {color:#172036;background:#fff}
+.import-dialog::backdrop {background:#050912b3;backdrop-filter:blur(3px)}
+.import-heading {display:flex;justify-content:space-between;gap:24px;align-items:center;margin-bottom:12px}
+.import-heading h2 {font-size:1.5rem;margin:0}
+.import-dialog button,.import-dialog input,.import-dialog select {font:inherit;color:inherit;background:var(--theme-raised,#20283f);border:1px solid var(--line,#667085);border-radius:8px;padding:10px 12px;}
+.import-dialog button {cursor:pointer;font-weight:700;}
+.import-dialog button:hover,.import-dialog button:focus-visible {outline:2px solid var(--accent,#f5cd7f);outline-offset:2px}
+.import-dialog button:disabled{cursor:not-allowed;opacity:.5}
+.import-dialog label {display:grid;gap:7px;font-size:.9rem;font-weight:600;min-width:0}
+.import-dialog p {line-height:1.5}
+.import-file-controls {display:flex;align-items:end;gap:18px;flex-wrap:wrap;margin:20px 0 10px}
+.import-file-controls label {flex:1}
+.import-dialog input[type=file] {width:100%;box-sizing:border-box}
+.import-help,.import-dialog small {color:var(--theme-muted,#b3bccd);font-weight:400;line-height:1.45}
+.import-fields {display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px;margin:24px 0}
+.import-fields input {width:100%;box-sizing:border-box}
+.import-dialog select {max-width:100%}
+.import-dialog details {border:1px solid var(--line,#667085);border-radius:10px;padding:12px;margin:15px 0}
+.import-dialog summary{cursor:pointer;font-weight:700}
+.import-dialog pre {white-space:pre-wrap;overflow:auto;max-height:220px;font:13px/1.5 ui-monospace,monospace;direction:ltr;text-align:left}
+.import-error {color:var(--danger,#ffabb3);font-weight:700}
+.import-impact {background:var(--theme-raised,#20283f);padding:18px;border-radius:12px;margin:18px 0}
+.import-metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin-top:14px}
+.import-metrics div{display:grid;gap:6px}.import-metrics strong{font-size:1.7rem;font-variant-numeric:tabular-nums}
+.import-dialog .import-apply{background:var(--accent,#f5cd7f);color:#172036;padding:13px 20px}
+[data-theme=light] .import-dialog {color:#172036;background:#fff;border-color:#aab5c7}
+[data-theme=light] .import-dialog :is(input,select,button,.import-impact){background:#f0f3f9;color:#172036;border-color:#aab5c7}
+[data-theme=light] .import-dialog :is(.import-help,small){color:#46556e}
+[data-theme=light] .import-dialog .import-error{color:#a61d39}
+[data-theme=light] .import-dialog .import-apply{background:#172d58;color:#fff}
+@media(max-width:700px){.import-fields{grid-template-columns:repeat(2,minmax(0,1fr))}.import-dialog{padding:18px}.import-metrics{grid-template-columns:1fr}}
+@media(max-width:440px){.import-fields{grid-template-columns:1fr}}
+@media print {.import-dialog{display:none!important}}

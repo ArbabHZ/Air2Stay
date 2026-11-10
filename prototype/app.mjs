@@ -8,6 +8,9 @@ import { planningChatReply, arabicPromptToEnglish, pcMessagesQuery, pcMessagesRe
 import { NEWS_EVENTS } from "./news_events.mjs";
 import { EVENT_EVIDENCE } from "./event_evidence.mjs";
 import { EV_MIN_EDITIONS, evIsoDay, evEventSummary, evNewsList, evUnseenCount, evDate, evDateRange, evSignedNumber, evSignedPercent, evAbout, evChatData } from "./event_forecast.mjs";
+import { initTheme, bindChartInteractions } from "./theme.mjs";
+import { createImportWorkspace } from "./import_workspace.mjs";
+import { buildPowerPointReport, buildPdfReport } from "./report_exports.mjs";
   
  const chatEnabled = globalThis.__AIR2STAY_CHAT_ENABLED__ === true;
  const $ = (selector) => document.querySelector(selector);
@@ -1050,7 +1053,8 @@ function changeVisitorShare(event) {
 }
 
 function countryFlag(location) {
-  const code = location?.aliases?.find((alias) => /^[A-Z]{2}$/.test(alias)) || ({ France: "FR", Norway: "NO" })[location?.name];
+  // IS is a legacy Israel alias in the location data, but the flag code is IL.
+  const code = ({ Israel: "IL", France: "FR", Norway: "NO" })[location?.name] || location?.aliases?.find((alias) => /^[A-Z]{2}$/.test(alias));
   return code ? [...code].map((letter) => String.fromCodePoint(127397 + letter.charCodeAt(0))).join("") : "";
 }
 
@@ -1985,6 +1989,8 @@ function setupDecisionTools() {
 
  function renderAll() {
    $("#exportReady").hidden = true;
+   const importNote=$("#importedSourceNote");
+   if(importNote)importNote.textContent=state?.importedSource ? `Inputs reviewed from ${state.importedSource.filename}. Later edits remain scenario assumptions.` : '';
    const pendingCountry = $("#origin").value === "__NEW_ROUTE__" && !confirmedNewMarketKey;
    const invalid = pendingCountry || $$("#scenarioForm input[type=number], #scenarioForm input[type=range]").filter((field) => !field.closest("#purposeAssumptions")).find((field) => !field.value.trim() || !Number.isFinite(Number(field.value)) || Number(field.value) < Number(field.min) || Number(field.value) > Number(field.max));
    $("#inputError").hidden = !invalid;
@@ -2701,11 +2707,17 @@ function buildPlanReport(inputs, preparedBy, date) {
     "Travel purpose changes the model only when its assumptions are applied. The scenario does not predict bookings.",
     "Launch and lower-assumption trials illustrate what could happen under chosen inputs. Check demand and capacity before committing.",
   ];
+  if(inputs.importedSource) notes.push(`Imported scenario inputs: ${inputs.importedSource.filename}; ${inputs.importedSource.location}. Reviewed before application. Historical calibration is unchanged.`);
+  const eventSource = inputs.eventSource;
+  if (eventSource && eventSource.month === inputs.month && eventSource.uplift === inputs.eventUplift) {
+    notes.push(`Event assumption: ${eventSource.name}, ${eventSource.start} to ${eventSource.end}; ${formatPercent(eventSource.uplift, 0)} applied to ${month}. Based on measured editions ${eventSource.years.join(", ")}. Date source: ${eventSource.source}. Other selected assumptions were retained; this is a planning assumption, not a route-specific demand measurement.`);
+  }
   return {
     title: "Air2Stay plan: " + route.origin + " → Abu Dhabi, " + month,
     filename: "Air2Stay-" + (route.origin + "-" + month).replace(/[^\p{L}\p{N}-]+/gu, "-") + "-report",
     subtitle: [schedule, preparedBy && "Prepared by " + preparedBy, date].filter(Boolean).join(" · "),
     country: route.origin, month, schedule, source, purpose, preparedBy, date, plain, result, steps, assumptions, annual, visitors,
+    inputs:Object.fromEntries(['originKey','month','extraFlights','seatsPerFlight','loadFactor','p2pShare','conversionRate','averageStay','eventUplift'].map(key=>[key,inputs[key]])),
     launch: launchOptions(data, inputs), trials, comparedMonths, notes,
     monthMode: $("#refreshMonthAssumptions").checked ? "Monthly starting assumptions refreshed as in Compare." : "Selected assumptions held fixed as in Compare.",
   };
@@ -3149,23 +3161,34 @@ function setupPlanActions() {
     if ($("#origin").value === "__NEW_ROUTE__" && !confirmedNewMarketKey) { $("#planActionStatus").textContent = "Confirm a new departure country first."; return false; }
     readForm(); return true;
   };
-  const exportReport = (action) => {
+  const exportReport = async (action) => {
     if (!ready()) return;
     const date = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "long", year: "numeric" }).format(new Date());
     const status = $("#planActionStatus");
-    try { action(buildPlanReport(state, "", date)); }
+    const exportButtons=$$(".export-choices > button");
+    exportButtons.forEach(button=>button.disabled=true);
+    status.textContent="Preparing your report…";
+    try { await action(buildPlanReport(state, "", date)); }
     catch (error) {
       status.textContent = "The report could not be prepared. Check the plan and try again.";
       console.error(error);
     }
+    finally { exportButtons.forEach(button=>button.disabled=false); }
   };
   $("#exportWorkbook").addEventListener("click", () => exportReport(report => {
     downloadPlan(buildPlanWorkbook(report, exportLanguage), exportFileName(report.filename + ".xlsx", exportLanguage));
     $("#planActionStatus").textContent = "Excel report ready.";
   }));
-  $("#exportReportPdf").addEventListener("click", () => exportReport(report => {
-    printPlanReport(report, exportLanguage);
-    $("#planActionStatus").textContent = "Choose Save as PDF in the print window.";
+  $("#exportPowerPoint").addEventListener("click", () => exportReport(report => {
+    const lang=exportLanguage;
+    downloadPlan(buildPowerPointReport(report,{lang,translate:text=>lang==='ar'?withLanguage('ar',()=>translateUiString(String(text))):String(text)}),exportFileName(report.filename+'.pptx',lang));
+    $("#planActionStatus").textContent = "PowerPoint slides ready. Text and charts can be edited.";
+  }));
+  $("#exportReportPdf").addEventListener("click", () => exportReport(async report => {
+    const lang=exportLanguage;
+    const pdf=await buildPdfReport(report,{lang,translate:text=>lang==='ar'?withLanguage('ar',()=>translateUiString(String(text))):String(text)});
+    downloadPlan(pdf,exportFileName(report.filename+'.pdf',lang));
+    $("#planActionStatus").textContent = "PDF report ready to download.";
   }));
   $("#exportCsv").addEventListener("click", () => {
     if (!ready()) return;
@@ -3176,7 +3199,8 @@ function setupPlanActions() {
 }
 
 function downloadPlan(blob, name) {
-  if (lastExportUrl) URL.revokeObjectURL(lastExportUrl);
+  // Retain earlier URLs briefly so a second export cannot interrupt a download.
+  if (lastExportUrl) { const previous=lastExportUrl; if(typeof setTimeout==='function')setTimeout(()=>URL.revokeObjectURL(previous),300000); }
   lastExportUrl = URL.createObjectURL(blob);
   const link = document.createElement("a"); link.href = lastExportUrl; link.download = name; link.className = "export-ready-link";
   // "Download" is translated; the file name is kept exactly as saved.
@@ -3192,7 +3216,47 @@ function downloadPlan(blob, name) {
   }
   const ready = $("#exportReady"); ready.hidden = false;
   ready.replaceChildren(document.createTextNode("Your file is ready. If the download did not begin, choose: "),link);
-  link.click();
+  // Some embedded browsers cannot resolve a frame-owned blob URL when saving.
+  // A data URL keeps the actual bytes available to the host's download handler.
+  if(typeof window!=='undefined' && window.parent!==window && typeof FileReader!=='undefined' && blob.size<=20*1024*1024) {
+    const reader=new FileReader();
+    reader.addEventListener('load',()=>{link.href=String(reader.result);link.click();},{once:true});
+    reader.addEventListener('error',()=>link.click(),{once:true});
+    reader.readAsDataURL(blob);
+  } else link.click();
+}
+
+function setupModelImport() {
+  const syncLabels=()=>{
+    const ar=document.documentElement.lang==='ar';
+    $('#openModelImport').textContent=ar?'استيراد مدخلات النموذج':'Import model inputs';
+    const button=$('#exportPowerPoint');
+    button.querySelector('strong').textContent=ar?'عرض PowerPoint (.pptx)':'PowerPoint (.pptx)';
+    button.querySelector('small').textContent=ar?'شرائح قابلة للتعديل بنتائج الخطة وافتراضاتها':"Editable slides with this plan's results and assumptions";
+  };
+  syncLabels();document.addEventListener('click',event=>{if(event.target.closest('button[data-lang]'))setTimeout(syncLabels,0);});
+  const entries=Object.values(countryLocationLookup);
+  const countries=[...new Map(entries.map(c=>[c.name,{name:c.name,key:c.name.toUpperCase(),aliases:c.aliases||[]}])).values()];
+  for(const route of knownOrigins()) {
+    const match=countries.find(c=>normalizeCountryName(c.name)===normalizeCountryName(route.name)||c.aliases.some(a=>normalizeCountryName(a)===normalizeCountryName(route.name)));
+    if(match)match.key=route.key;else countries.push({name:route.name,key:route.key,aliases:[]});
+  }
+  createImportWorkspace({getCurrent:()=>({...state}),countries,
+    makeStartingPlan:(country,month)=>defaultState(country,month,knownOrigins().some(c=>c.key===country)?country:'__PEERS__'),
+    previewPlan:inputs=>runScenario(data,inputs),download:downloadPlan,
+    applyPlan:(values,source)=>{
+      const starting=defaultState(values.originKey,values.month,knownOrigins().some(c=>c.key===values.originKey)?values.originKey:'__PEERS__');
+      const next={...starting,...values,importedSource:source};
+      const invalid=validateScenarioInputs(next);if(invalid)throw new Error(invalid);
+      runScenario(data,next);
+      state=next;bridgeOverride=null;bridgeEditing=false;
+      confirmedNewMarketKey=knownOrigins().some(c=>c.key===state.originKey)?'':state.originKey;
+      setFormFromState();
+      $('.nav-tab[data-view="scenarioView"]').click();$('.view-mode[data-mode="focus"]').click();
+      renderAll();
+      $('#planActionStatus').textContent='Reviewed document inputs applied. The results have been recalculated.';
+    }
+  });
 }
 
 function refreshGlossaryLetters() {
@@ -3511,6 +3575,31 @@ function newsPastTable(summary) {
     <tbody>${rows}</tbody></table></div>`;
 }
 
+function applyNewsEventPlan(summary) {
+  const forecast = summary?.forecast;
+  const percent = forecast?.uplift == null ? 0 : Math.round(forecast.uplift * 100);
+  if (!summary?.upcoming || !Number.isFinite(percent) || percent < 1 || percent > 50) {
+    throw new RangeError("This event has no applicable forecast.");
+  }
+  const changes = { month: forecast.planMonth, eventUplift: percent / 100 };
+  // News adds an event assumption to the user's plan. Changing its month must
+  // not reload starting inputs as an explicit chat route/month change does.
+  const candidate = { ...planInputsForMonth(state, changes.month), ...changes, bridgeOverride,
+    eventSource: {
+      eventId: summary.event.id, editionId: summary.upcoming.id, name: summary.event.name,
+      start: summary.upcoming.start, end: summary.upcoming.end, source: summary.upcoming.source,
+      years: [...(summary.effect?.years || [])], month: changes.month, uplift: changes.eventUplift,
+    },
+  };
+  if (candidate.peerProfile) candidate.proxyOriginKey = candidate.peerProfile.primaryPeerOriginKey;
+  const error = validateScenarioInputs(candidate);
+  if (error) throw new RangeError(error);
+  runScenario(data, candidate); // Verify before replacing the current valid plan.
+  state = candidate;
+  setFormFromState();
+  return appliedPlanConfirmation(data, state, changes);
+}
+
 function setupNewsEvents() {
   const page = $("#newsView");
   if (!page) return;
@@ -3568,9 +3657,8 @@ function setupNewsEvents() {
     const percent = forecast?.uplift == null ? 0 : Math.round(forecast.uplift * 100);
     if (percent < 1) return;
     if (!$("#inputError").hidden) { toast("Correct the highlighted plan input before applying an event."); return; }
-    const changes = { month: forecast.planMonth, eventUplift: percent / 100 };
     try {
-      const text = applyAssistantPlan({ inputs: { ...state, ...changes }, changes, understood: true });
+      const text = applyNewsEventPlan(summary);
       renderAll();
       $('.nav-tab[data-view="scenarioView"]')?.click();
       // The same line-by-line translation the assistant uses for this confirmation.
@@ -7094,6 +7182,8 @@ function keepHostPageInPlace() {
    try {
      keepHostPageInPlace();
      setupLanguage();
+     initTheme();
+     bindChartInteractions();
      await loadData();
      state = defaultState();
      setupTabs();
@@ -7110,6 +7200,7 @@ function keepHostPageInPlace() {
        catch (error) { $("#planActionStatus").textContent = "Could not open the shared plan: " + error.message; }
      }
      setupPlanActions();
+     setupModelImport();
      setupProposalTools();
      renderValidation();
      renderGlossary();

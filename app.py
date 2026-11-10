@@ -279,6 +279,14 @@ def load_prototype_html(asset_signature: tuple) -> str:
         "news and events": PROTOTYPE_DIR / "news_events.mjs",
         "event evidence": PROTOTYPE_DIR / "event_evidence.mjs",
         "event forecasts": PROTOTYPE_DIR / "event_forecast.mjs",
+        "themes": PROTOTYPE_DIR / "theme.mjs",
+        "report downloads": PROTOTYPE_DIR / "report_exports.mjs",
+        "document reader": PROTOTYPE_DIR / "document_import.mjs",
+        "import workspace": PROTOTYPE_DIR / "import_workspace.mjs",
+        "import styles": PROTOTYPE_DIR / "import_workspace.css",
+        "Office document reader": PROTOTYPE_DIR / "vendor" / "jszip.min.js",
+        "PDF reader": PROTOTYPE_DIR / "vendor" / "pdf.min.mjs",
+        "PDF reader worker": PROTOTYPE_DIR / "vendor" / "pdf.worker.min.mjs",
     }
     missing = [f"{label}: {path}" for label, path in required_files.items() if not path.is_file()]
     if missing:
@@ -289,7 +297,7 @@ def load_prototype_html(asset_signature: tuple) -> str:
     # -------------------------------------------------------------
     # Inline CSS
     # -------------------------------------------------------------
-    for css_name in ("styles.css", "proposal_workspace.css", "guided_help.css"):
+    for css_name in ("styles.css", "proposal_workspace.css", "guided_help.css", "import_workspace.css"):
         css_path = PROTOTYPE_DIR / css_name
         css = css_path.read_text(encoding="utf-8")
 
@@ -306,6 +314,15 @@ def load_prototype_html(asset_signature: tuple) -> str:
     # -------------------------------------------------------------
     json_path = PROTOTYPE_DIR / "data" / "scenario_data.json"
     country_locations_path = PROTOTYPE_DIR / "data" / "country_locations.json"
+
+    # Keep file extraction local in both the standalone app and Streamlit's srcdoc frame.
+    def import_asset_uri(name: str) -> str:
+        encoded = base64.b64encode((PROTOTYPE_DIR / "vendor" / name).read_bytes()).decode("ascii")
+        return "data:text/javascript;base64," + encoded
+
+    import_assets = {"pdf": import_asset_uri("pdf.min.mjs"), "worker": import_asset_uri("pdf.worker.min.mjs")}
+    html = html.replace('src="./vendor/jszip.min.js"', 'src="' + import_asset_uri("jszip.min.js") + '"')
+    html = html.replace("<head>", "<head><script>window.__AIR2STAY_IMPORT_ASSETS__=" + json.dumps(import_assets) + ";</script>", 1)
 
     if json_path.exists() and country_locations_path.exists():
         json_text = json_path.read_text(encoding="utf-8")
@@ -404,7 +421,7 @@ def load_prototype_html(asset_signature: tuple) -> str:
         )
 
         helper_sources = []
-        for helper_name in ("route_planning.mjs", "decision_tools.mjs", "conversion_evidence.mjs", "proposal_workspace.mjs", "guided_help.mjs", "planning_chat.mjs", "news_events.mjs", "event_evidence.mjs", "event_forecast.mjs"):
+        for helper_name in ("route_planning.mjs", "decision_tools.mjs", "conversion_evidence.mjs", "proposal_workspace.mjs", "guided_help.mjs", "planning_chat.mjs", "news_events.mjs", "event_evidence.mjs", "event_forecast.mjs", "theme.mjs", "document_import.mjs", "import_workspace.mjs", "report_exports.mjs"):
             helper_src = (PROTOTYPE_DIR / helper_name).read_text(encoding="utf-8")
             helper_src = re.sub(r'import\s*\{[^}]+\}\s*from\s*["\']\./[^"\']+["\'];?\s*', "", helper_src)
             helper_sources.append(re.sub(r"(?m)^(\s*)export\s+", r"\1", helper_src))
@@ -466,7 +483,7 @@ def load_prototype_html(asset_signature: tuple) -> str:
 # Render prototype
 # -------------------------------------------------------------
 try:
-    asset_signature = tuple((str(path.relative_to(PROTOTYPE_DIR)), path.stat().st_mtime_ns) for path in sorted(PROTOTYPE_DIR.rglob("*")) if path.is_file() and path.suffix.lower() in {".html", ".css", ".mjs", ".json", ".svg", ".png", ".jpg", ".jpeg", ".webp"})
+    asset_signature = tuple((str(path.relative_to(PROTOTYPE_DIR)), path.stat().st_mtime_ns) for path in sorted(PROTOTYPE_DIR.rglob("*")) if path.is_file() and path.suffix.lower() in {".html", ".css", ".js", ".mjs", ".json", ".svg", ".png", ".jpg", ".jpeg", ".webp"})
     audit_path = ROOT / "Air2Stay_Calculation_Audit_v2.0.xlsx"
     if audit_path.is_file():
         asset_signature += ((audit_path.name, audit_path.stat().st_mtime_ns),)

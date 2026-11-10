@@ -7,6 +7,8 @@
    <link rel="stylesheet" href="./styles.css?v=20260922-dark-dashboard">
    <link rel="stylesheet" href="./proposal_workspace.css">
    <link rel="stylesheet" href="./guided_help.css">
+   <link rel="stylesheet" href="./import_workspace.css">
+   <script src="./vendor/jszip.min.js"></script>
  </head>
  <body>
    <div class="ambient ambient-one"></div>
@@ -27,6 +29,7 @@
      </nav>
      <div class="header-tools">
        <span id="headerScenario" dir="ltr" class="header-scenario"></span>
+       <button type="button" class="theme-toggle" data-theme-toggle><span data-theme-icon aria-hidden="true"></span><span data-theme-label></span></button>
        <div class="language-switch" role="group" aria-label="Language" dir="ltr" data-i18n-aria-label="language">
            <button type="button" data-lang="en" lang="en" aria-label="English" aria-pressed="true">EN</button>
            <button type="button" data-lang="ar" lang="ar" aria-label="العربية" aria-pressed="false">عربي</button>
@@ -120,10 +123,12 @@
          <p id="viewModeDescription" class="view-description" data-i18n="the_outcome_the_main">The outcome, the main drivers, and what to check next.</p>
          <div class="scenario-actions" aria-label="Plan actions" data-i18n-aria-label="plan_actions"><details class="export-menu"><summary data-i18n="export">Export</summary><div class="export-choices">
            <button type="button" id="exportWorkbook"><strong data-i18n="excel_report_xlsx">Excel report (.xlsx)</strong><small data-i18n="excel_report_contents">Dashboard, results, visitors, months and scenarios</small></button>
+           <button type="button" id="exportPowerPoint"><strong data-i18n-ignore>PowerPoint (.pptx)</strong><small data-i18n-ignore>Editable slides with this plan's results and assumptions</small></button>
            <button type="button" id="exportReportPdf"><strong data-i18n="pdf_report_with_charts">PDF report with charts</strong><small data-i18n="ready_to_print_or_share">Ready to print or share</small></button>
            <button type="button" id="exportCsv"><strong data-i18n="model_ready_csv">Model-ready CSV (.csv)</strong><small data-i18n="simulated_training_csv_description">Inputs and simulated targets for this route across 12 months</small></button>
          </div></details><span id="planActionStatus" role="status"></span></div>
          <p id="exportReady" class="export-ready" role="status" hidden></p>
+         <div class="model-import-tools"><button type="button" id="openModelImport" class="secondary-button">Import model inputs</button><span id="importedSourceNote" role="status"></span></div>
          <section id="proposalWorkspace" class="proposal-workspace" aria-label="Proposal actions and history" hidden data-i18n-aria-label="proposal_actions_and_history"></section>
          <section class="chat-workspace" id="assistantPanel" aria-label="Chat and scenario results" hidden inert>
            <section class="smart-box">

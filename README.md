@@ -28,11 +28,13 @@ Air2Stay predicts how changes in flight capacity and routing impact hotel demand
 
 **Option 1: Streamlit app (recommended)**
 ```bash
-python -m pip install -r requirements.txt
+python run_local.py --setup
 python run_local.py --check
 python run_local.py
 ```
 Then open http://localhost:8765 in your browser.
+
+`--setup` creates an isolated `.venv` and installs the pinned dependencies. It preserves an existing environment. On Windows, use `py run_local.py --setup` if Python is available through the `py` launcher. With Node installed, `npm run setup`, `npm run check`, and `npm start` find the project Python environment automatically. Paths containing spaces are supported. A different port can be selected with `--port 8768`.
 
 On Windows, you can run `run_prototype.ps1` instead. If you use npm, the same app can be started with `npm start` or `npm run dev`.
 
@@ -48,7 +50,27 @@ The package command includes required local changes even before a Git commit. Fo
 
 Run `python tests/startup.py` to test package contents, a fresh copy without `.venv`, and clear errors for missing assets/imported helpers. This verifies the copy using the installed Python packages; it does not download or test a clean package installation.
 
-Export a spreadsheet CSV or the complete JSON plan from the Export menu. The menu closes when you choose a format, click elsewhere, move focus outside it, or press Escape.
+The Export menu downloads an Excel report, editable PowerPoint slides, a PDF report, or model-ready CSV. Reports use the current plan's full-precision inputs. PowerPoint text and chart shapes are editable; editing a slide does not recalculate the model. PDF downloads directly, with high-resolution page images to preserve Arabic shaping. It does not depend on a print dialog. CSV targets are explicitly simulated outcomes, not observed training labels. If an automatic download is blocked, use the visible Download link. The separate decision-note/term-guide print options still use the browser print dialog.
+
+**Import model inputs**
+
+Choose **Import model inputs** below Export. CSV/XLSX/JSON files, selectable-text PDFs, and PPTX text/tables are read locally in the browser. Choose a source row or page, review the values and their source locations, then select **Apply reviewed inputs to the model**. The result preview is calculated with the same live scenario engine. Missing values are visibly labelled as starting assumptions. Invalid source rows cannot be applied. No document is uploaded to an AI service.
+
+The downloadable CSV template contains: Departure country, Month, Extra flights per week, Seats per flight, Flight fullness (%), Passengers ending their trip here (%), Share checking into a hotel (%), Average hotel stay (nights), Event uplift (%). CSV/XLSX tables use these column headers; text-based PDFs/PPTX slides can use `Label: value` lines. Percentage-labelled columns use percentage points (85 means 85%); fraction columns and numeric model keys support fractions (0.85). Use a template to remove ambiguity. Spreadsheet formulas are not executed: save recalculated cell values before import. Scanned PDFs and screenshots require OCR outside this prototype.
+
+Imports update scenario assumptions and recalculate outputs. They do not replace the DCT training dataset, retrain the historical model, or validate a new forecast. The baseline and reported historical error remain unchanged. Files are limited to 20 MB, PDFs to 40 pages, and tables to 2,000 rows. Imported assumptions are identified in the interface and exported report notes. Air2Stay's new PDF/PPTX exports include numerical scenario metadata for reviewed reimport; edits to slide text do not update that metadata, and nationality edits are not imported.
+
+**Themes and chart values**
+
+The header's Light mode / Dark mode button saves the theme preference on this browser. Both palettes use separate readable text, surface, chart and status colors. Point at a chart value to highlight it and show its label; keyboard users can Tab into a chart and use arrow keys to move between values. Report exports keep their own print-friendly colors.
+
+Regression checks: `node tests/document_import.mjs`, `node tests/report_exports.mjs`, `node tests/theme.mjs`, and `python tests/startup.py`. Browser verification covers real CSV/PPTX/PDF downloads and reviewed CSV/XLSX/PDF/PPTX input extraction.
+
+**News and events**
+
+The newspaper shortcut opens Upcoming events, News, and Past events. News is a team-maintained list of dated articles with publisher links, not an automatic live news feed. Event cards compare measured past editions with nearby normal weekdays and show the evidence, limitations and range of earlier results. That range is not a confidence interval. Applying an event changes the plan month and event uplift while retaining the flight, hotel and visitor assumptions you already selected; review those assumptions for the selected month. The imported-input source remains recorded. Both themes, English/Arabic, exports, imports and interactive charts remain available.
+
+The demo ZIP includes the event modules, all seven pictures and their credits. Run `node tests/news_events.mjs` and `python tests/event_evidence.py` for event checks. Source reproduction additionally requires the confidential DCT workbooks; they are not included in the demo ZIP.
 
 **Route planning workflow**
 
@@ -78,7 +100,7 @@ Run `python3 src/build_conversion_evidence.py` to reproduce calibration from the
 
 **Proposal workflow:** The new **Actions** view keeps versions, comments, decisions, assigned follow-ups and stakeholder drafts together for each country/month. Red means overdue, amber means missing/pending/stale evidence, and green means a user recorded evidence for the exact current assumptions. Green is not approval or a forecast-accuracy claim. Changing assumptions makes earlier evidence require review. Save a version to retain a milestone and load it later.
 
-The labelled **Actions** button opens a drawer from the right, with separate **Priority actions** and **Communications** tabs. Its badge counts pending checks; overdue checks give the badge a red accent. The drawer closes with its close button, Escape or a click outside it, preserving unfinished work. **Review** opens the selected check in **Follow-ups**, where it can become a task or discussion. **Stakeholder update** prepares a draft for that check using the current numbers and evidence status. Internal discussion is a local record, not a live shared channel.
+The **Actions** shortcut opens the unified **Follow-ups** checklist. Its badge counts checks needing attention. **Start** opens a check, including its owner, due date, notes and history. Evidence remains associated with the selected plan. Tasks, Messages and Statistics have their own shortcuts. Internal discussion and message drafts are local records, not a live shared channel.
 
 All proposal records stay in this browser; they are not a shared team database. Owner labels do not notify anyone, and overdue checks are evaluated while the app is used. Drafts can be edited, copied or downloaded; nothing is sent. Download local history to retain a record. Browser storage limits or failures are reported visibly. Demonstration test records, if present, are labelled as tests and are not verified airline or hotel evidence.
 
@@ -86,7 +108,7 @@ All proposal records stay in this browser; they are not a shared team database. 
 
 Run `node tests/planning_chat.mjs`, `node tests/proposal_workspace.mjs`, and `node tests/guided_help.mjs` for the workflow regression checks. Local browser storage is suitable for a demonstration; workplace team use would need a shared backend, sign-in, permissions, backups and approved data-handling policies.
 
-**Chat is paused for this demo.** The implementation is retained for later review.
+The floating assistant works offline for supported scenario commands and explanations. Open-ended Gemini chat is disabled; optional Gemini drafting needs a configured local bridge and key.
 
 **Standalone prototype (without the Streamlit wrapper)**
 ```bash

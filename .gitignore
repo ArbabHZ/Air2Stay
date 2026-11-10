@@ -133,6 +133,8 @@ test_credentials.*
 .stylelintcache
 *.log
 *.prof
+/tmp/
+/.audit/
 
 # Docker (if added later)
 # ============================================================================
