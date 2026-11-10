@@ -2435,14 +2435,12 @@ function setupFeaturePack() {
   ];
   const requestStates = {waiting:"Waiting",approved:"Approved",changes:"Changes requested",rejected:"Rejected"};
   const team = {
-    profile:null,
     requests:[{id:"example-review",title:"Review the seasonal flight proposal",recipient:"Review team",priority:"Normal",note:"Example request to demonstrate the review flow.",status:"waiting",example:true}],
     messages:[{id:"example-message",folder:"inbox",from:directory[0].email,recipients:[],subject:"Welcome to the planning workspace",body:"Use this example to try a reply or make a follow-up task.",priority:"Normal",tone:"Professional",attachments:[],unread:true,example:true}],
     notifications:[{id:"example-notification",text:"Example · A sample plan is waiting for review.",unread:true}],
   };
   try {
     const stored = JSON.parse(localStorage.getItem(storageKey));
-    if (stored?.profile?.name && typeof stored.profile.name === "string") team.profile = stored.profile;
     for (const key of ["requests","messages","notifications"]) {
       if (Array.isArray(stored?.[key])) team[key] = stored[key].filter((item)=>item && typeof item.id === "string");
     }
@@ -2484,8 +2482,6 @@ function setupFeaturePack() {
   });
   const teamDrawer = $("#teamDrawer");
   const drawerBody = $("#teamDrawerBody");
-  const profileDialog = $("#profileDialog");
-  const profileForm = $("#profileForm");
   const compose = $("#composeDialog");
   const messageForm = $("#messageForm");
   let teamTab = "tasks";
@@ -2541,46 +2537,6 @@ function setupFeaturePack() {
     $("#railNotificationCount").parentElement.setAttribute("aria-label", notificationLabel);
     $("#railTaskCount").parentElement.setAttribute("aria-label", waiting ? `Tasks (${waiting} waiting)` : "Tasks");
   }
-
-  function renderProfile() {
-    const name = team.profile?.name || "";
-    $("#profileAvatar").textContent = name[0]?.toUpperCase() || "";
-    $("#profileWelcome").textContent = name ? "Welcome, " + name.split(/\s+/)[0] : "Sign in";
-    const menu = $(".profile-menu summary");
-    menu.title = name ? name + " · " + team.profile.role : "Sign in";
-    menu.setAttribute("aria-label", name ? "Welcome, " + name.split(/\s+/)[0] + " · Profile menu" : "Sign in");
-  }
-
-  function openProfile() {
-    $(".profile-menu").open = false;
-    profileForm.reset();
-    if (!profileDialog.open) profileDialog.showModal();
-    $("#profileName").focus();
-  }
-
-  $("#profileName").addEventListener("input", (event)=>event.target.setCustomValidity(""));
-  profileForm.addEventListener("submit", (event)=>{
-    event.preventDefault();
-    const fields = new FormData(profileForm);
-    const name = fields.get("name").trim();
-    if (!name) {
-      $("#profileName").setCustomValidity("Enter your name.");
-      $("#profileName").reportValidity();
-      return;
-    }
-    team.profile = {name,role:fields.get("role")};
-    renderProfile();
-    profileDialog.close();
-    persist("Welcome, " + name.split(/\s+/)[0] + ".");
-  });
-  profileDialog.addEventListener("cancel", (event)=>{ if (!team.profile) event.preventDefault(); });
-  $("#switchProfile").addEventListener("click", openProfile);
-  $("#signOutProfile").addEventListener("click", ()=>{
-    team.profile = null;
-    renderProfile();
-    persist();
-    openProfile();
-  });
 
   function renderTeamDrawer() {
     $$(".team-tabs [data-team-tab]").forEach((button)=>button.setAttribute("aria-pressed", String(button.dataset.teamTab === teamTab)));
@@ -2754,7 +2710,7 @@ function setupFeaturePack() {
     const greeting = tone === "Friendly" ? "Hi team!" : tone === "Direct" ? "Team," : "Hello team,";
     const ask = tone === "Friendly" ? "Could you share your thoughts when you get a chance?" : tone === "Direct" ? "Please review the assumptions and flag any changes." : "Please review the plan assumptions and share any feedback.";
     const summary = context ? `The current proposal covers ${context.result.route.origin} in ${data.months[context.inputs.month-1]}. Compared with the baseline, it estimates ${formatSigned(context.result.delta.hotelCheckins)} hotel check-ins and ${formatSigned(context.result.delta.guestNights)} guest nights.` : "The plan results can be added once its inputs are valid.";
-    const draft = greeting + "\n\n" + subject + "\n\n" + summary + "\n\n" + ask + (tone === "Direct" ? "" : "\n\nThanks,\n" + (team.profile?.name || "Air2Stay planning team"));
+    const draft = greeting + "\n\n" + subject + "\n\n" + summary + "\n\n" + ask + (tone === "Direct" ? "" : "\n\nThanks,\nAir2Stay planning team");
     const body = field("body");
     body.value = (body.value.trim() ? body.value.trim() + "\n\n" + draft : draft).slice(0,4000);
     $("#composeStatus").textContent = "Draft text added. Review it before sending.";
@@ -2922,10 +2878,8 @@ function setupFeaturePack() {
     renderBadges();
     if (teamDrawer.open && teamTab === "notifications") renderTeamDrawer();
   }).observe($("#toggleProposalPanel"), {childList:true, subtree:true, attributes:true, attributeFilter:["disabled", "aria-label"]});
-  renderProfile();
   renderBadges();
   refreshFeaturePack();
-  if (!team.profile) openProfile();
 }
 
  async function init() {

@@ -1850,13 +1850,6 @@ body.controls-open .adjust-controls svg path { transform:translateX(29px) scaleX
 #appSearchResults button[aria-selected="true"], #appSearchResults button:hover { background:#2a3a5b; }
 #appSearchResults small { color:#c6bfae; font-size:10px; flex:none; }
 #appSearchResults p { padding:6px 10px; }
-.profile-menu { position:relative; color:#f5efe3; font-size:11px; }
-.profile-menu summary { display:flex; align-items:center; gap:6px; min-height:34px; cursor:pointer; list-style:none; }
-.profile-menu summary::-webkit-details-marker { display:none; }
-#profileAvatar { display:grid; place-items:center; width:29px; height:29px; border:1px solid #806a31; border-radius:50%; color:#f2d58a; background:#2f2831; font-weight:800; }
-#profileWelcome { display:block; max-width:90px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.profile-menu > div { position:absolute; z-index:45; top:calc(100% + 6px); right:0; min-width:125px; padding:5px; border:1px solid #58678d; border-radius:8px; background:#141d34; }
-.profile-menu > div button { width:100%; text-align:left; }
 .team-count { display:inline-grid; min-width:17px; height:17px; place-items:center; padding-inline:3px; border-radius:100px; color:#1f120b; background:#ffc494; font-size:10px; font-weight:800; }
 .team-count[hidden] { display:none; }
 .team-icon-button .team-count { position:absolute; top:-3px; right:-5px; }
@@ -1907,7 +1900,6 @@ body.controls-open .adjust-controls svg path { transform:translateX(29px) scaleX
 }
 @media(min-width:1241px) and (max-width:1380px) {
   .topbar { gap:16px; padding-inline:20px; }
-  #profileWelcome { display:none; }
   #appSearch { width:112px; }
 }
 @media(max-width:1240px) {
@@ -1924,7 +1916,6 @@ body.controls-open .adjust-controls svg path { transform:translateX(29px) scaleX
   .header-tools { gap:6px; }
   #appSearch { width:76px; padding-inline:7px; }
   #openGuide.guide-icon-button, .team-icon-button { min-width:32px; width:32px; height:32px; }
-  #profileWelcome { display:none; }
   #appSearchResults { right:-85px; }
 }
 @media(prefers-reduced-motion:no-preference) {
@@ -1938,7 +1929,6 @@ body.controls-open .adjust-controls svg path { transform:translateX(29px) scaleX
 }
 .feature-dialog { box-sizing:border-box; width:min(620px,calc(100% - 24px)); max-height:calc(100dvh - 24px); overflow:auto; padding:20px; border:1px solid #56698d; border-radius:14px; background:#141d34; color:#f5efe3; box-shadow:0 24px 70px #000a; }
 .feature-dialog::backdrop { background:#070b16b8; }
-.profile-dialog { width:min(420px,calc(100% - 24px)); }
 .feature-dialog :is(h1,h2,h3,h4,p) { margin:0; }
 .feature-dialog-header { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:14px; }
 .feature-dialog-header h2 { font-size:19px; }
@@ -1947,7 +1937,7 @@ body.controls-open .adjust-controls svg path { transform:translateX(29px) scaleX
 .team-tabs, .feature-button-row { display:flex; flex-wrap:wrap; gap:6px; }
 .team-tabs { padding-bottom:12px; margin-bottom:14px; border-bottom:1px solid #405275; }
 .team-tabs [aria-pressed="true"], #messagesView .message-toolbar [aria-pressed="true"] { color:#11182c; background:#f2d58a; border-color:#f2d58a; }
-.feature-dialog button, #messagesView button, #appSearchResults button, .profile-menu button, #printDecisionNote { border:1px solid #536483; border-radius:7px; padding:7px 10px; color:#f5efe3; background:#22304d; font:inherit; font-size:12px; cursor:pointer; }
+.feature-dialog button, #messagesView button, #appSearchResults button, #printDecisionNote { border:1px solid #536483; border-radius:7px; padding:7px 10px; color:#f5efe3; background:#22304d; font:inherit; font-size:12px; cursor:pointer; }
 .feature-dialog button:disabled { opacity:.45; cursor:default; }
 :is(.feature-dialog,#messagesView,#decisionWorkspace) button.feature-primary { background:#f2d58a; border-color:#f2d58a; color:#15182b; font-weight:750; }
 :is(.feature-dialog,#messagesView) :is(input:not([type=checkbox]),select,textarea) { box-sizing:border-box; display:block; width:100%; min-width:0; padding:8px; border:1px solid #536483; border-radius:7px; color:#f5efe3; background:#121a30; font:inherit; }
