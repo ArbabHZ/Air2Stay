@@ -1820,7 +1820,8 @@ function printDecisionNote() {
   if (!$("#inputError").hidden) return;
   const sheet = document.createElement("section");
   sheet.id = "decisionPrintSheet";
-  sheet.setAttribute("data-i18n-ignore", "");
+  if (typeof sheet.setAttribute === "function") sheet.setAttribute("data-i18n-ignore", "");
+  else if (sheet.dataset) sheet.dataset.i18nIgnore = "";
   sheet.lang = exportLanguage;
   sheet.dir = exportLanguage === "ar" ? "rtl" : "ltr";
   const body = document.createElement("pre");
@@ -2772,6 +2773,10 @@ function buildPlanWorkbookContent(report, lang) {
     name: "Notes", widths: [40, 31, 30, 29], freeze: 2, merges: Array.from({length: notes.length + 2}, (_, i) => "A" + (i + 1) + ":D" + (i + 1)),
     rows: [...start("Notes and limits", "Created by Air2Stay on " + report.date), ...notes.map(note => row([note], "plain", 31))],
   }];
+  return reportWorkbook(sheets, lang);
+}
+
+function reportWorkbook(sheets, lang) {
   const typesNs = "http://schemas.openxmlformats.org/package/2006/content-types";
   const packageNs = "http://schemas.openxmlformats.org/package/2006/relationships";
   const parts = sheets.map((sheet, i) => ["xl/worksheets/sheet" + (i + 1) + ".xml", reportWorksheet({ ...sheet, rtl: lang === "ar" })]);
@@ -2879,7 +2884,8 @@ function printPlanReport(report, lang = exportLanguage) {
   holder.innerHTML = planReportMarkup(report);
   if (lang === "ar") withLanguage("ar", () => localizeUi(holder));
   // The page translator must not change the report after it is built.
-  sheet.setAttribute("data-i18n-ignore", "");
+  if (typeof sheet.setAttribute === "function") sheet.setAttribute("data-i18n-ignore", "");
+  else if (sheet.dataset) sheet.dataset.i18nIgnore = "";
   sheet.lang = lang;
   sheet.dir = lang === "ar" ? "rtl" : "ltr";
   sheet.replaceChildren(...holder.childNodes);
@@ -2918,8 +2924,13 @@ function setupExportLanguage() {
   const picker = () => {
     const group = document.createElement("div");
     group.className = "export-language";
-    group.setAttribute("role", "group");
-    group.setAttribute("aria-label", "Export language");
+    if (typeof group.setAttribute === "function") {
+      group.setAttribute("role", "group");
+      group.setAttribute("aria-label", "Export language");
+    } else {
+      group.role = "group";
+      group.ariaLabel = "Export language";
+    }
     group.innerHTML = '<span class="export-language-label">Export language</span>' +
       '<span class="export-language-options">' +
       '<button type="button" data-export-lang="en" lang="en" dir="ltr" data-i18n-ignore>English</button>' +
@@ -2929,7 +2940,11 @@ function setupExportLanguage() {
   $(".export-menu .export-choices")?.prepend(picker());
   $("#planningDecision .decision-note-actions")?.prepend(picker());
   $("#printGuide")?.before(picker());
-  const sync = () => $$("[data-export-lang]").forEach((button) => button.setAttribute("aria-pressed", String(button.dataset.exportLang === exportLanguage)));
+  const sync = () => $$("[data-export-lang]").forEach((button) => {
+    const pressed = String(button.dataset.exportLang === exportLanguage);
+    if (typeof button.setAttribute === "function") button.setAttribute("aria-pressed", pressed);
+    else button.ariaPressed = pressed;
+  });
   document.addEventListener("click", (event) => {
     const choice = event.target.closest("[data-export-lang]");
     if (choice) { exportLanguage = choice.dataset.exportLang === "ar" ? "ar" : "en"; sync(); return; }
@@ -3034,8 +3049,16 @@ function downloadPlan(blob, name) {
   lastExportUrl = URL.createObjectURL(blob);
   const link = document.createElement("a"); link.href = lastExportUrl; link.download = name; link.className = "export-ready-link";
   // "Download" is translated; the file name is kept exactly as saved.
-  const fileName = document.createElement("span"); fileName.setAttribute("data-i18n-ignore", ""); fileName.dir = "ltr"; fileName.textContent = name;
-  link.append("Download", " ", fileName);
+  if (typeof link.append === "function") {
+    const fileName = document.createElement("span");
+    if (typeof fileName.setAttribute === "function") fileName.setAttribute("data-i18n-ignore", "");
+    else if (fileName.dataset) fileName.dataset.i18nIgnore = "";
+    fileName.dir = "ltr";
+    fileName.textContent = name;
+    link.append("Download", " ", fileName);
+  } else {
+    link.textContent = "Download " + name;
+  }
   const ready = $("#exportReady"); ready.hidden = false;
   ready.replaceChildren(document.createTextNode("Your file is ready. If the download did not begin, choose: "),link);
   link.click();
@@ -3388,6 +3411,23 @@ function setupPackSearch({getMessages, getRequests, openMessage, openRequest}) {
 
 
 
+function roomBlocksExample() {
+  const title = t("room_blocks_title");
+  const note = t("room_blocks_sample");
+  const headings = ["room_blocks_hotel", "room_blocks_checkin", "room_blocks_checkout", "room_blocks_rooms", "room_blocks_notes"].map(key => t(key));
+  const blank = headings.map(() => "");
+  const rows = [
+    {values:[title], style:"title", height:32},
+    {values:[note], style:"plain", height:28},
+    {values:headings, style:"header", height:24},
+    {values:blank, style:"plain", height:24},
+  ];
+  return {
+    preview: `<section class="attachment-workbook"><p>${planningEscape(note)}</p><div class="table-scroll">${planningTable(headings, [blank])}</div></section>`,
+    blob: reportWorkbook([{name:title, rows, widths:[28,22,22,24,36], merges:["A1:E1","A2:E2"]}], uiLanguage),
+  };
+}
+
 function setupFeaturePack() {
   const storageKey = "air2stay:team-workspace:v2";
   const senderName = "Planning team";
@@ -3405,10 +3445,11 @@ function setupFeaturePack() {
   const previousAccuracyExample = "Hello,\n\nThe live calculation was about 6.6% away from recorded hotel arrivals, measured as weighted error across Jan–Jul 2025. That check covers monthly totals across markets.";
   const accuracyExample = "The validation page has the measured error, test months and monthly arrival totals for this model.";
   const capacityReviewNote = "Review the room-capacity estimate before replying to Hotel partnerships.";
+  const sampleWorkbook = {name:"december-room-blocks.xlsx", exampleWorkbook:true};
   const examples = [
     {id:"example-mail-hotel", from:directory[1].email, subject:"December room availability: we need your forecast",
       body:"Hello,\n\nSeveral hotels are planning December room blocks this week. Could you share the expected extra guest nights for the proposed India flights?\n\nA rough range is enough for now.\n\nThank you,\nHotel partnerships",
-      priority:"High", createdAt:minutesAgo(53), attachments:[{name:"december-room-blocks.xlsx",size:47000}]},
+      priority:"High", createdAt:minutesAgo(53), attachments:[sampleWorkbook]},
     {id:"example-mail-airline", from:directory[2].email, subject:"Load factor for the new frequencies",
       body:"Hi,\n\nCould you confirm how full you expect the new flights to be and share any early booking data? We'll use it to review the flight occupancy assumption.",
       priority:"Normal", createdAt:minutesAgo(300)},
@@ -3445,6 +3486,9 @@ function setupFeaturePack() {
     if (!stored || stored.seedVersion !== team.seedVersion) localStorage.setItem(storageKey, JSON.stringify(team));
   } catch { /* Unavailable or unreadable browser storage. */ }
   for (const item of team.messages) {
+    if (item.example && item.id === "example-mail-hotel" && item.attachments) {
+      item.attachments = item.attachments.map(file => file.name === sampleWorkbook.name && !file.fileId && !file.dataUrl ? sampleWorkbook : file);
+    }
     if (item.example && item.id === "example-mail-data" && item.body === previousAccuracyExample) item.body = accuracyExample;
   }
   for (const item of team.requests) {
@@ -3464,6 +3508,22 @@ function setupFeaturePack() {
   let selectedMessageId = "";
   let draftId = "";
   let attachments = [];
+  const selectedFiles = new WeakMap();
+  const attachmentLimit = 25_000_000;
+  let attachmentDatabase;
+  let savingMessage = false;
+  let openingAttachment = false;
+  const attachmentTypes = new Map([
+    ["png","image/png"], ["jpg","image/jpeg"], ["jpeg","image/jpeg"], ["gif","image/gif"], ["webp","image/webp"], ["pdf","application/pdf"],
+  ]);
+  const fileType = (file) => {
+    const extension = typeof file?.name === "string" && /\.([a-z]+)$/i.exec(file.name);
+    return extension ? attachmentTypes.get(extension[1].toLowerCase()) : undefined;
+  };
+  const attachmentKind = (file) => {
+    const type = fileType(file);
+    return type === "application/pdf" ? "pdf" : type ? "image" : "file";
+  };
   let toastTimer;
   const selectPage = (view) => $$(".nav-tab").find((button)=>button.dataset.view === view)?.click();
   const selectPlanMode = (mode) => {
@@ -3482,12 +3542,27 @@ function setupFeaturePack() {
     clearTimeout(toastTimer);
     toastTimer = setTimeout(() => { element.hidden = true; }, 4500);
   };
-  const persist = (notice) => {
+  const persist = (notice, message, priorDraft) => {
     let saved = true;
     try { localStorage.setItem(storageKey, JSON.stringify(team)); }
-    catch { saved = false; }
+    catch (error) {
+      saved = false;
+      const isNewFile = (file) => (file.dataUrl || file.fileId) && !priorDraft?.attachments?.includes(file);
+      if (error?.name === "QuotaExceededError" && message?.attachments.some(isNewFile)) {
+        message.attachments = message.attachments.map(file =>
+          isNewFile(file) ? {name:file.name, size:file.size, type:file.type} : file
+        );
+        notice = "File was too large to save in this browser — only the name was kept.";
+        try {
+          localStorage.setItem(storageKey, JSON.stringify(team));
+          saved = true;
+        } catch { /* The smaller record still works for this visit. */ }
+      }
+    }
     renderBadges();
-    if (notice || !saved) toast((notice || "") + (saved ? "" : " Browser storage is unavailable. Changes last for this visit only."));
+    const storageNotice = saved ? "" : t("attachment_storage_unavailable");
+    if (notice || !saved) toast([translateUiString(notice || ""), storageNotice].filter(Boolean).join(" "));
+    return saved;
   };
   const addNotification = (text) => {
     team.notifications.unshift({id:makeId(),text,unread:true});
@@ -3711,8 +3786,14 @@ function setupFeaturePack() {
       <p class="message-parties"><bdi>${esc(from)}</bdi><span class="i18n-arrow" aria-hidden="true">→</span><bdi>${esc(to)}</bdi>${Number.isFinite(timestamp) ? " · " + esc(fullDate.format(timestamp)) : ""}</p>
       <p class="message-body" ${item.example ? "" : "data-i18n-ignore"} dir="auto">${esc(item.body || "")}</p>
       ${item.example && item.id === "example-mail-data" ? '<button type="button" class="text-action" data-evidence="validation">Open historical validation results →</button>' : ""}
-      ${item.attachments?.length ? `<ul class="message-attachments" aria-label="Attachments">${item.attachments.map((file) =>
-        `<li>${paperclipIcon}<span data-i18n-ignore dir="auto">${esc(file.url || file.name)}</span>${file.url ? "" : `<small>${esc(attachmentSize(file.size))}</small>`}</li>`).join("")}</ul>` : ""}
+      ${item.attachments?.length ? `<ul class="message-attachments" aria-label="Attachments">${item.attachments.map((file,index) => {
+        if (file.url) return `<li class="message-attachment-link">${paperclipIcon}<span data-i18n-ignore dir="auto">${esc(file.url)}</span></li>`;
+        const kind = attachmentKind(file);
+        return `<li><button class="message-attachment-chip" type="button" data-message-attachment="${index}">
+          ${attachmentIcon(kind)}<span class="attachment-kind">${file.exampleWorkbook ? "Excel" : {image:"Image",pdf:"PDF",file:"File"}[kind]}</span>
+          <span data-i18n-ignore dir="auto">${esc(file.name)}</span><small>${file.exampleWorkbook ? "Example template" : esc(attachmentSize(file.size))}</small>
+        </button>${file.exampleWorkbook || file.fileId || file.dataUrl ? `<button class="message-file-download" type="button" data-download-attachment="${index}" aria-label="Download ${esc(file.name)}">Download</button>` : ""}</li>`;
+      }).join("")}</ul>` : ""}
       <div class="feature-button-row">
         ${item.folder === "drafts" ? '<button class="feature-primary" type="button" data-message-action="edit">Edit draft</button>'
         : '<button class="feature-primary" type="button" data-message-action="reply">Reply</button><button type="button" data-message-action="forward">Forward</button><button type="button" data-message-action="task">Make it a task</button>'}
@@ -3731,12 +3812,149 @@ function setupFeaturePack() {
   const field = (name) => messageForm.elements.namedItem(name);
   const recipients = () => [...messageForm.querySelectorAll('[name="recipient"]:checked')].map((input)=>input.value);
   const attachmentSize = (bytes) => bytes < 1000 ? bytes + " B" : formatNumber(bytes / 1000) + " KB";
-  const attachmentLabel = (attachment) => attachment.url || (attachment.name + " · " + attachmentSize(attachment.size));
+  const attachmentLabel = (attachment) => attachment.url || (attachment.name + " · " +
+    (attachment.exampleWorkbook ? t("room_blocks_example_badge") : attachmentSize(attachment.size)));
+  function attachmentIcon(kind) {
+    const paths = {
+      image:'<rect x="2.5" y="4" width="19" height="16" rx="2"/><circle cx="8" cy="9" r="1.4"/><path d="m4 17 5-5 3 3 3-4 5 6"/>',
+      pdf:'<path d="M6 2.5h8l4 4v15H6zM14 2.5V7h4M9 11h6m-6 4h6m-6 3h4"/>',
+    };
+    return kind === "file" ? paperclipIcon : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">${paths[kind]}</svg>`;
+  }
+
+  function attachmentFiles(mode, operation) {
+    attachmentDatabase ??= new Promise((resolve, reject) => {
+      const request = indexedDB.open("air2stay-message-attachments", 1);
+      request.onupgradeneeded = () => request.result.createObjectStore("files");
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => {
+        const database = request.result;
+        database.onversionchange = () => {
+          database.close();
+          attachmentDatabase = undefined;
+        };
+        resolve(database);
+      };
+    }).catch(error => {
+      attachmentDatabase = undefined;
+      throw error;
+    });
+
+    return attachmentDatabase.then(database => new Promise((resolve, reject) => {
+      const transaction = database.transaction("files", mode);
+      let request;
+      transaction.oncomplete = () => resolve(request?.result);
+      transaction.onabort = () => reject(transaction.error);
+      try { request = operation(transaction.objectStore("files")); }
+      catch (error) { transaction.abort(); reject(error); }
+    }));
+  }
+
+  function discardAttachmentFiles(files) {
+    const ids = new Set((files || []).map(file => file.fileId).filter(Boolean));
+    if (!ids.size) return;
+    try {
+      const saved = JSON.parse(localStorage.getItem(storageKey));
+      for (const message of saved?.messages || []) {
+        for (const file of message.attachments || []) ids.delete(file.fileId);
+      }
+      // A forwarded message may still be open even if its source has been deleted.
+      if (compose.open) attachments.forEach(file => ids.delete(file.fileId));
+    } catch { return; }
+    if (!ids.size) return;
+    return attachmentFiles("readwrite", store => {
+      for (const id of ids) store.delete(id);
+    }).catch(() => { /* The message was already saved or removed. */ });
+  }
+
+  async function loadAttachment(file) {
+    const type = fileType(file);
+    if (!type || !(file.size > 0 && file.size <= attachmentLimit)) return null;
+    if (file.fileId) {
+      const blob = await attachmentFiles("readonly", store => store.get(file.fileId));
+      return blob instanceof Blob && blob.type === type && blob.size === file.size ? blob : null;
+    }
+    // Keep previews and downloads for messages saved before the file store was added.
+    const prefix = `data:${type};base64,`;
+    if (typeof file.dataUrl !== "string" || !file.dataUrl.startsWith(prefix)) return null;
+    const encoded = file.dataUrl.slice(prefix.length);
+    if (encoded.length !== Math.ceil(file.size / 3) * 4) return null;
+    const bytes = Uint8Array.from(atob(encoded), character => character.charCodeAt(0));
+    return bytes.length === file.size ? new Blob([bytes], {type}) : null;
+  }
+
+  function downloadAttachment(url, name, link = document.createElement("a")) {
+    link.href = url;
+    if (typeof link.setAttribute === "function") link.setAttribute("download", name);
+    else link.download = name;
+    return link;
+  }
+
+  async function openAttachment(file, downloadOnly = false) {
+    if (openingAttachment || $(".attachment-preview[open]")) return;
+    const unavailable = () => toast(t("attachment_unavailable"));
+    let blob;
+    let workbook;
+    openingAttachment = true;
+    try {
+      if (file.exampleWorkbook && file.name === sampleWorkbook.name) workbook = roomBlocksExample();
+      blob = workbook ? workbook.blob : await loadAttachment(file);
+    }
+    catch { /* Storage can be unavailable. */ }
+    finally { openingAttachment = false; }
+    if (!blob) { unavailable(); return; }
+
+    // Object URLs let browsers open PDFs natively and download with the original filename.
+    const url = URL.createObjectURL(blob);
+    const release = () => setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    if (downloadOnly) {
+      const link = downloadAttachment(url, file.name);
+      document.body.append(link);
+      link.click();
+      link.remove();
+      release();
+      return;
+    }
+
+    const preview = document.createElement("dialog");
+    preview.className = "feature-dialog attachment-preview";
+    if (typeof preview.setAttribute === "function") preview.setAttribute("aria-labelledby", "attachmentPreviewTitle");
+    else preview.ariaLabelledBy = "attachmentPreviewTitle";
+    const pdf = blob.type === "application/pdf";
+    preview.innerHTML = `<header class="feature-dialog-header">
+      <h2 id="attachmentPreviewTitle" data-i18n-ignore dir="auto">${esc(file.name)}</h2>
+      <form method="dialog"><button aria-label="Close attachment preview">×</button></form>
+    </header>
+    ${workbook ? workbook.preview : pdf ? "" : '<img alt="">'}
+    <div class="attachment-preview-actions">
+      ${pdf ? '<a class="attachment-open-pdf" target="_blank" rel="noopener">Open PDF in new tab</a>' : ""}
+      <a class="attachment-download export-ready-link"><span>Download</span></a>
+    </div>`;
+    downloadAttachment(url, file.name, preview.querySelector(".attachment-download"));
+    const openPdf = preview.querySelector(".attachment-open-pdf");
+    if (openPdf) openPdf.href = url;
+    const image = preview.querySelector("img");
+    if (image) {
+      image.src = url;
+      image.alt = file.name;
+      image.addEventListener("error", () => { preview.close(); unavailable(); }, {once:true});
+    }
+    preview.addEventListener("close", () => {
+      preview.remove();
+      // Let a newly opened tab or a download finish consuming the URL.
+      release();
+    }, {once:true});
+    document.body.append(preview);
+    preview.showModal();
+    openPdf?.click();
+  }
+
   function renderAttachments() {
     $("#attachmentList").innerHTML = attachments.map((file,index)=>`<li>${esc(attachmentLabel(file))} <button type="button" data-attachment-index="${index}" aria-label="Remove ${esc(attachmentLabel(file))}">Remove</button></li>`).join("");
   }
 
   function openCompose(item = {}, edit = false) {
+    if (savingMessage) return;
     draftId = edit ? item.id : "";
     messageForm.reset();
     field("subject").value = item.subject || "";
@@ -3752,7 +3970,8 @@ function setupFeaturePack() {
     (edit ? field("body") : field("subject")).focus();
   }
 
-  function saveMessage(destination) {
+  async function saveMessage(destination) {
+    if (savingMessage) return;
     const subject = field("subject").value.trim();
     const to = recipients();
     if (destination === "sent" && (!subject || !to.length)) {
@@ -3763,10 +3982,45 @@ function setupFeaturePack() {
     const item = {id:draftId || makeId(), folder:destination, subject:subject || "Untitled draft", recipients:to,
       from:senderName, createdAt:(destination === "drafts" && priorDraft?.createdAt) || new Date().toISOString(),
       priority:field("priority").value, tone:field("tone").value, body:field("body").value.trim(), attachments, unread:false};
-    team.messages = [item,...team.messages.filter((row)=>row.id !== item.id)];
-    if (destination === "sent") addNotification("Message saved in Sent · " + item.subject);
-    persist(destination === "sent" ? "Message saved in Sent on this browser." : "Draft saved.");
-    compose.close();
+    let notice = destination === "sent" ? "Message saved in Sent on this browser." : "Draft saved.";
+    const newFiles = item.attachments.flatMap(file => {
+      const blob = selectedFiles.get(file);
+      return blob ? [{file, blob, fileId:makeId()}] : [];
+    });
+    let written = [];
+    savingMessage = true;
+    messageForm.inert = true;
+    try {
+      if (newFiles.length) {
+        try {
+          await attachmentFiles("readwrite", store => {
+            for (const {blob, fileId} of newFiles) store.put(blob, fileId);
+          });
+          const savedFiles = new Map(newFiles.map(({file, fileId}) => [file, {...file, fileId}]));
+          written = [...savedFiles.values()];
+          item.attachments = item.attachments.map(file => savedFiles.get(file) ?? file);
+        } catch (error) {
+          notice = error?.name === "QuotaExceededError" ? I18N.en.attachment_quota : I18N.en.attachment_save_error;
+        }
+      }
+      team.messages = [item,...team.messages.filter((row)=>row.id !== item.id)];
+      if (destination === "sent") addNotification("Message saved in Sent · " + item.subject);
+      const saved = persist(notice, item, priorDraft);
+      if (!saved) {
+        const writtenIds = new Set(written.map(file => file.fileId));
+        item.attachments = item.attachments.map(file =>
+          writtenIds.has(file.fileId) ? {name:file.name, size:file.size, type:file.type} : file
+        );
+      }
+      compose.close();
+      if (saved) discardAttachmentFiles([...written, ...(priorDraft?.attachments || [])]);
+      else if (written.length) attachmentFiles("readwrite", store => {
+        for (const file of written) store.delete(file.fileId);
+      }).catch(() => { /* No saved message references these new files. */ });
+    } finally {
+      savingMessage = false;
+      messageForm.inert = false;
+    }
     folder = destination;
     selectedMessageId = item.id;
     priorityFilter = "";
@@ -3858,11 +4112,20 @@ function setupFeaturePack() {
   }
 
   function addFiles(files) {
-    const additions = [...files].map((file)=>({name:file.name.slice(0,200),size:file.size}));
-    if (attachments.length + additions.length > 20) $("#composeStatus").textContent = "A message can include up to 20 attachments.";
-    attachments = [...attachments,...additions].slice(0,20);
+    const room = 20 - attachments.length;
+    if (files.length > room) $("#composeStatus").textContent = "A message can include up to 20 attachments.";
+    for (const file of [...files].slice(0,room)) {
+      const attachment = {name:file.name, size:file.size, type:file.type};
+      attachments.push(attachment);
+      const type = fileType(attachment);
+      if (!type || !(file.size > 0 && file.size <= attachmentLimit)) continue;
+      attachment.type = type;
+      selectedFiles.set(attachment, file.slice(0, file.size, type));
+    }
     renderAttachments();
   }
+  const attachmentHint = $("#attachmentDrop small");
+  attachmentHint.textContent = I18N.en.attachment_hint;
   $("#attachmentFiles").addEventListener("change",(event)=>{addFiles(event.target.files);event.target.value="";});
   const dropZone = $("#attachmentDrop");
   dropZone.addEventListener("dragover", (event) => {
@@ -3909,13 +4172,19 @@ function setupFeaturePack() {
   $("#messageReader").addEventListener("click",(event)=>{
     const action = event.target.closest("[data-message-action]")?.dataset.messageAction;
     const item = team.messages.find((row)=>row.id === event.target.closest("[data-message-id]")?.dataset.messageId);
-    if (!action || !item) return;
+    if (!item) return;
+    const attachment = event.target.closest("[data-message-attachment], [data-download-attachment]");
+    if (attachment) {
+      const {messageAttachment, downloadAttachment} = attachment.dataset;
+      openAttachment(item.attachments[Number(messageAttachment ?? downloadAttachment)], downloadAttachment !== undefined);
+      return;
+    }
     if (action === "edit") openCompose(item,true);
     if (action === "reply") openCompose({subject:t("message_reply_prefix") + (item.example ? translateUiString(item.subject) : item.subject), recipients:item.folder === "inbox" ? [item.from] : item.recipients, priority:item.priority});
     if (action === "forward") openCompose({subject:t("message_forward_prefix") + (item.example ? translateUiString(item.subject) : item.subject), body:item.example ? translateUiString(item.body || "") : item.body, attachments:item.attachments, priority:item.priority});
     if (action === "delete") {
       team.messages = team.messages.filter((row)=>row.id !== item.id);
-      persist("Message deleted.");
+      if (persist("Message deleted.")) discardAttachmentFiles(item.attachments);
       renderMessages();
     }
     if (action === "task") {
@@ -4771,6 +5040,23 @@ const I18N = (() => {
     low_priority: ["Low priority", "أولوية منخفضة"],
     has_attachments: ["Has attachments", "تتضمّن مرفقات"],
     attachments: ["Attachments", "المرفقات"],
+    attachment_storage_unavailable: ["Browser storage is unavailable. Changes last for this visit only.", "تخزين المتصفح غير متاح. ستبقى التغييرات لهذه الزيارة فقط."],
+    attachment_hint: ["Images and PDFs up to 25 MB can be saved in this browser. Other files keep only their name and size.", "يمكن حفظ الصور وملفات PDF بحجم يصل إلى 25 ميغابايت في هذا المتصفح. وتُحفظ أسماء الملفات الأخرى وأحجامها فقط."],
+    attachment_unavailable: ["Preview not available for this file in the prototype — only the name and size are kept.", "معاينة هذا الملف غير متاحة في النموذج الأولي. يُحتفظ بالاسم والحجم فقط."],
+    attachment_quota: ["File was too large to save in this browser — only the name was kept.", "حجم الملف أكبر مما يمكن حفظه في هذا المتصفح. احتُفظ بالاسم فقط."],
+    attachment_save_error: ["Could not save the attachment in this browser. Only its name and size were kept.", "تعذّر حفظ المرفق في هذا المتصفح. احتُفظ باسمه وحجمه فقط."],
+    attachment_close: ["Close attachment preview", "إغلاق معاينة المرفق"],
+    room_blocks_example_badge: ["Example template", "قالب تجريبي"],
+    room_blocks_title: ["December room blocks", "حجوزات الغرف لشهر ديسمبر"],
+    room_blocks_sample: ["Blank planning template. Enter confirmed availability from each hotel.", "قالب تخطيط فارغ. أدخل توافر الغرف المؤكد من كل فندق."],
+    room_blocks_hotel: ["Hotel", "الفندق"],
+    room_blocks_checkin: ["Check-in date", "تاريخ الوصول"],
+    room_blocks_checkout: ["Check-out date", "تاريخ المغادرة"],
+    room_blocks_rooms: ["Rooms available", "الغرف المتاحة"],
+    room_blocks_notes: ["Notes", "ملاحظات"],
+    attachment_open_pdf: ["Open PDF in new tab", "فتح ملف PDF في علامة تبويب جديدة"],
+    attachment_image: ["Image", "صورة"],
+    attachment_file: ["File", "ملف"],
     reply: ["Reply", "رد"],
     forward: ["Forward", "إعادة توجيه"],
     make_it_a_task: ["Make it a task", "تحويل إلى مهمة"],

@@ -1816,7 +1816,7 @@ body:has(.team-rail) > main { margin-inline-end: var(--team-rail-width); }
 .message-parties { margin: 0; color: var(--mail-muted); font-size: .81rem; }
 .message-body { margin: 16px 0; white-space: pre-wrap; line-height: 1.6; font-size: .91rem; }
 .message-attachments { display: flex; flex-wrap: wrap; gap: 5px; list-style: none; padding: 0; margin: 0 0 14px; }
-.message-attachments li {
+#messagesView .message-attachment-chip, .message-attachment-link {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -1829,6 +1829,22 @@ body:has(.team-rail) > main { margin-inline-end: var(--team-rail-width); }
   background: #283652;
   font-size: .76rem;
 }
+.message-attachments li { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; min-width: 0; max-width: 100%; }
+#messagesView .message-file-download { border-color: #9c8450; color: #f2d58a; padding: 4px 8px; }
+#messagesView .message-file-download:hover,
+#messagesView .message-file-download:focus-visible { border-color: #f2d58a; background: #3b3450; }
+#messagesView .message-attachment-chip:hover,
+#messagesView .message-attachment-chip:focus-visible { border-color: #f2d58a; }
+.attachment-kind { color: #f2d58a; }
+.attachment-preview { width: min(840px, calc(100% - 24px)); }
+.attachment-preview h2 { overflow-wrap: anywhere; }
+.attachment-workbook p { margin-block-end: 12px; color: #bac8df; }
+.attachment-workbook table { width: 100%; }
+.attachment-workbook td { height: 30px; }
+.attachment-preview img { display: block; max-width: 100%; max-height: 68dvh; object-fit: contain; margin: 0 auto; }
+.attachment-preview-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.attachment-preview-actions a { padding: 7px 12px; border: 1px solid #536483; border-radius: 7px; color: #f5efe3; }
+.attachment-preview-actions .attachment-download { background: #f2d58a; border-color: #f2d58a; color: #15182b; font-weight: 750; }
 .message-attachments small { color: var(--mail-muted); }
 #messagesView [data-message-action="delete"] { background: none; color: var(--mail-muted); border-color: transparent; text-decoration: underline; }
 
