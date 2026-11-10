@@ -475,13 +475,13 @@ const PC_CHARTS = Object.freeze({
     'The small line in the first three cards shows that measure for every month of the year.',
     'The possible range card shows the lower and higher guides as a bar.',
     'From seats to guest nights: each bar is one step, from flight seats to passengers, passengers ending their trip in Abu Dhabi, hotel check-ins and guest nights.',
-    'In that chart, gray shows the usual month, the coloured cap marks your plan and the badge shows the change.',
+    'In that chart, gold shows the usual month, the rose cap marks your plan and the badge shows the change.',
   ],
   compare: [
     'Three launch sizes: cards for cautious, standard and expanded weekly flights, with the extra check-ins and guest nights each would add.',
     'Compare months: the extra guest nights from the same flights in each month of the year.',
     'What if fewer visitors stay in hotels?: how much the extra guest nights fall under each lower-assumption trial, compared with your plan.',
-    'Show the numbers under each chart opens the table behind it.',
+    'Explore monthly metrics to compare exact values. The stress chart still has a Show the numbers table.',
   ],
   details: [
     'Estimated hotel nights by nationality: the estimated change in hotel nights for each visitor group.',
@@ -614,9 +614,9 @@ export function pcMessagesReply(query, team) {
   }
   if (query.count || query.unread || !query.terms.length) {
     if (query.folder && !query.count && !query.unread) {
-      return [`${folderName[query.folder]} is in Messages at the top (messages: ${counts[query.folder]}).`, 'Open Messages at the top to see them.'].join('\n');
+      return [`${folderName[query.folder]} is in Messages in the side shortcuts (messages: ${counts[query.folder]}).`, 'Open Messages in the side shortcuts to see them.'].join('\n');
     }
-    return [summary, 'Open Messages at the top to see them.'].join('\n');
+    return [summary, 'Open Messages in the side shortcuts to see them.'].join('\n');
   }
   const pool = messages.filter((message) => !query.folder || message.folder === query.folder);
   const scored = pool.map((message) => ({ message, score: pcMatchScore(query.terms,
@@ -625,7 +625,7 @@ export function pcMessagesReply(query, team) {
   if (best === 0) return ['I couldn’t find a message that matches those words.', summary, 'Try a word from the subject or the sender’s name.'].join('\n');
   const found = scored.filter((row) => row.score === best).map((row) => row.message);
   if (found.length > 1) {
-    return ['I found these messages:', ...found.slice(0, 5).map((message) => `- “${message.subject}” · ${folderName[message.folder] || message.folder}`), 'Open Messages at the top, choose the folder, then select the message.'].join('\n');
+    return ['I found these messages:', ...found.slice(0, 5).map((message) => `- “${message.subject}” · ${folderName[message.folder] || message.folder}`), 'Open Messages in the side shortcuts, choose the folder, then select the message.'].join('\n');
   }
   const [message] = found;
   const place = folderName[message.folder] || message.folder;
@@ -633,7 +633,7 @@ export function pcMessagesReply(query, team) {
     : message.folder === 'sent' ? `The message “${message.subject}” to ${message.to} is in ${place}.`
     : `The message “${message.subject}” from ${message.from} is in ${place}.`];
   if (message.folder === 'inbox' && message.unread) lines.push('It is unread.');
-  lines.push(`Open Messages at the top, choose ${place}, then select it.`);
+  lines.push(`Open Messages in the side shortcuts, choose ${place}, then select it.`);
   return lines.join('\n');
 }
 

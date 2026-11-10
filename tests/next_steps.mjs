@@ -172,16 +172,16 @@ const team = {
   requests: [{ title: 'Sign off the hotel capacity check for December', titleAr: 'اعتماد التحقق من السعة الفندقية لشهر ديسمبر', from: 'Hotel partnerships', fromAr: 'شراكات الفنادق', recipient: 'Tourism strategy lead', status: 'Waiting' }],
 };
 const findMessage = (text) => { const query = pcMessagesQuery(text); assert.ok(query, text); return pcMessagesReply(query, team); };
-assert.equal(findMessage('Where is the message about room availability?'), 'The message “December room availability: we need your forecast” from Hotel partnerships is in Inbox.\nIt is unread.\nOpen Messages at the top, choose Inbox, then select it.');
+assert.equal(findMessage('Where is the message about room availability?'), 'The message “December room availability: we need your forecast” from Hotel partnerships is in Inbox.\nIt is unread.\nOpen Messages in the side shortcuts, choose Inbox, then select it.');
 assert.ok(findMessage('where is the email from Airline route planning').startsWith('The message “Load factor for the new frequencies” from Airline route planning is in Inbox.'));
 assert.ok(findMessage('where is the message I sent about the forecast for hotels').startsWith('The message “Forecast for hotels” to Hotel partnerships is in Sent.'));
 assert.ok(findMessage('find my draft notes for the airline').startsWith('Your draft “Untitled draft” is in Drafts.'));
-assert.ok(findMessage('where are my drafts?').startsWith('Drafts is in Messages at the top (messages: 1).\nOpen Messages at the top to see them.'));
+assert.ok(findMessage('where are my drafts?').startsWith('Drafts is in Messages in the side shortcuts (messages: 1).\nOpen Messages in the side shortcuts to see them.'));
 assert.ok(findMessage('how many unread messages do I have?').startsWith('Messages: Inbox 2 (1 unread), Sent 1, Drafts 1.'));
 assert.equal(findMessage('how many requests are waiting?'), 'Approval requests are in Tasks, in the shortcuts on the right edge.\nRequests: 1, waiting: 1.');
-assert.ok(findMessage('أين المسودات؟').startsWith('Drafts is in Messages at the top (messages: 1).'));
-assert.ok(findMessage('أين الرسائل المرسلة؟').startsWith('Sent is in Messages at the top (messages: 1).'));
-assert.ok(findMessage('أين صندوق الوارد؟').startsWith('Inbox is in Messages at the top (messages: 2).'));
+assert.ok(findMessage('أين المسودات؟').startsWith('Drafts is in Messages in the side shortcuts (messages: 1).'));
+assert.ok(findMessage('أين الرسائل المرسلة؟').startsWith('Sent is in Messages in the side shortcuts (messages: 1).'));
+assert.ok(findMessage('أين صندوق الوارد؟').startsWith('Inbox is in Messages in the side shortcuts (messages: 2).'));
 assert.equal(findMessage('كم عدد الطلبات قيد الانتظار؟'), 'Approval requests are in Tasks, in the shortcuts on the right edge.\nRequests: 1, waiting: 1.');
 assert.ok(findMessage('where is the message about camels?').startsWith('I couldn’t find a message that matches those words.'));
 assert.ok(findMessage('where is the approval request about hotel capacity?').startsWith('The request “Sign off the hotel capacity check for December” from Hotel partnerships is in Tasks, marked Waiting.'));

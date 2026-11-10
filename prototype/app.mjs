@@ -183,7 +183,30 @@ function populatePurposeInputs() {
  }
   
  function updateRangeLabels() {
-   $("#extraFlightsValue").textContent = `${Number($("#extraFlights").value) >= 0 ? "+" : ""}${$("#extraFlights").value}`;
+   const weeklyFlights = $("#extraFlights");
+   const flights = Number(weeklyFlights.value);
+   const flightControl = $("#weeklyFlightControl");
+   if (flightControl) {
+     flightControl.dataset.direction = flights < 0 ? "fewer" : flights > 0 ? "more" : "same";
+     const min = Number(weeklyFlights.min);
+     const max = Number(weeklyFlights.max);
+     flightControl.style?.setProperty("--flight-position", `${(flights - min) / (max - min) * 100}%`);
+   }
+   $("#extraFlightsValue").textContent = flights ? formatSigned(flights) : "0";
+   const amount = Math.abs(flights);
+   const unit = amount === 1 ? "flight" : "flights";
+   const change = flights > 0 ? "more" : "fewer";
+   $("#weeklyFlightSummary").textContent = flights
+     ? `${amount} ${change} ${unit} per week than usual`
+     : "No change to the weekly schedule";
+   for (const button of $("#scenarioForm").querySelectorAll?.("[data-flight-step]") ?? []) {
+     const field = $(`#${button.dataset.flightControl}`);
+     const value = field.valueAsNumber;
+     const min = Number(field.min);
+     const max = Number(field.max);
+     button.disabled = !Number.isFinite(value) || value < min || value > max
+       || (Number(button.dataset.flightStep) < 0 ? value <= min : value >= max);
+   }
    $("#loadFactorValue").textContent = `${Number($("#loadFactor").value).toFixed(1)}%`;
    $("#p2pShareValue").textContent = `${Number($("#p2pShare").value).toFixed(1)}%`;
    $("#conversionRateValue").textContent = `${Number($("#conversionRate").value).toFixed(1)}%`;
@@ -435,7 +458,7 @@ function renderSideBySideComparison(result, previousResult) {
   const month = planningEscape(data.months[state.month - 1]);
   const context = isNewRoute
     ? `The proposed ${planningEscape(route.origin)} route has no historical baseline. Comparison countries supply starting assumptions only. The headline changes above compare the proposed route with zero. Use Compare to assess adding the same capacity to an existing route.`
-    : `Gray shows the baseline estimate for ${month}. The colored cap marks your plan level. The cards above give the hotel totals and changes.`;
+    : `Gold shows the baseline estimate for ${month}. The rose cap marks your plan level. The cards above give the hotel totals and changes.`;
   const steps = [
     ["seats", "Seats", state.extraFlights ? `${formatSigned(state.extraFlights)} flights a week` : "usual schedule"],
     ["passengers", "Passengers", `${formatPercent(state.loadFactor)} filled`],
@@ -501,9 +524,9 @@ function renderSideBySideComparison(result, previousResult) {
     </div>
     <p class="comparison-context">${context}</p>
     <div role="img" aria-label="${planningEscape(chartLabel + " Guest nights measure nights spent in hotels.")}">
-      <div class="comparison-steps" dir="ltr" aria-hidden="true">${columns}</div>
+      <div class="comparison-steps${isNewRoute ? " new-route" : ""}" dir="ltr" aria-hidden="true">${columns}</div>
     </div>
-    <div class="comparison-step-legend">
+    <div class="comparison-step-legend${isNewRoute ? " new-route" : ""}">
       <span><i aria-hidden="true"></i>${isNewRoute ? "Your new route" : `Usual ${month}`}</span>
       <span><i aria-hidden="true"></i>${isNewRoute ? "Added by your plan" : "Change from usual"}</span>
       ${isNewRoute ? "" : '<span class="comparison-plan-key"><i aria-hidden="true"></i>Plan level</span>'}
@@ -618,8 +641,8 @@ function renderSideBySideComparison(result, previousResult) {
        <svg class="route-map-svg" viewBox="${previousViewBox}" role="img" aria-label="${routeLabel}">
        <defs>
          <linearGradient id="routeGlow" x1="0" x2="1">
-           <stop offset="0" stop-color="#ff7a3d"/>
-           <stop offset="1" stop-color="#ff7a3d"/>
+           <stop offset="0" stop-color="var(--theme-rose)"/>
+           <stop offset="1" stop-color="var(--theme-rose)"/>
          </linearGradient>
          <filter id="glow"><feGaussianBlur stdDeviation="5" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
        </defs>
@@ -841,6 +864,27 @@ function renderSideBySideComparison(result, previousResult) {
    requestAnimationFrame(step);
  }
   
+ function renderDetailOverview(result) {
+   const plan = result.scenario;
+   const steps = [
+     ["Seats", plan.seats, "", "After flight changes"],
+     ["Passengers", plan.passengers, formatPercent(state.loadFactor, 1), "Flights full"],
+     ["End trip here", plan.p2p, formatPercent(state.p2pShare, 1), "Of passengers"],
+     ["Hotel check-ins", plan.hotelCheckins, formatPercent(state.conversionRate, 1), "Hotel use"],
+     ["Guest nights", plan.guestNights, state.averageStay.toFixed(2), "Nights / stay"],
+   ];
+   $("#detailFlow").innerHTML = `<ol class="detail-flow" aria-label="Steps in the plan calculation">${steps.map(([label, value, factor, note], index) => `
+     <li class="detail-flow-step${index === steps.length - 1 ? " detail-flow-result" : ""}">
+       <div class="detail-flow-name"><span aria-hidden="true">${index + 1}</span><h3>${label}</h3></div>
+       <strong><bdi>${formatNumber(value)}</bdi></strong>
+       <div class="detail-flow-factor">${factor ? `<bdi>× ${factor}</bdi>` : ""}<span>${note}</span></div>
+       ${index === 3 && result.eventUplift ? `<div class="detail-flow-factor"><bdi>× ${(1 + result.eventUplift).toFixed(2)}</bdi><span>Event adjustment</span></div>` : ""}
+     </li>`).join("")}</ol>`;
+   const change = Math.round(result.delta.guestNights);
+   const tone = change > 0 ? "positive" : change < 0 ? "negative" : "";
+   $("#detailDelta").innerHTML = `<span>Guest nights vs. baseline</span> <strong class="${tone}"><bdi>${change ? formatSigned(result.delta.guestNights) : "0"}</bdi></strong>`;
+ }
+
  function renderCalculationExplanation(result) {
    const exact = (value) => String(Number(value));
    const equation = (label, expression, value) => `<li><strong>${label}</strong><span>${expression} = ${exact(value)}</span></li>`;
@@ -933,10 +977,10 @@ function renderSideBySideComparison(result, previousResult) {
    const changes = {"Average nights per hotel stay":"±0.5 nights", "Share checking into a hotel":"±5 percentage points", "Passengers ending in Abu Dhabi":"±5 percentage points", "How full flights are":"±5 percentage points", "Extra flights each week":"±1 flight/week", "Seats on each flight":"±30 seats", "Extra hotel demand for an event or season":"±10 percentage points"};
    const max = Math.max(...rows.map((row) => row.span), 1);
    $("#sensitivityBars").innerHTML = rows.map((row) => {
-     const width = Math.max(4, row.span / max * 100);
+     const width = row.span / max * 100;
      return `<div class="sensitivity-row">
        <span>${row.label}<small>${changes[row.label] || "Change one assumption"}, within control limits</small></span>
-       <div class="sensitivity-track"><div style="width:${width}%"></div></div>
+       <div class="sensitivity-track" aria-hidden="true"><div style="width:${width}%"></div></div>
        <b>${formatNumber(row.span)}</b>
      </div>`;
    }).join("");
@@ -1051,7 +1095,7 @@ function visitorOriginMap(rows, colors) {
    const otherShare = remaining.reduce((sum, row) => sum + row.weight, 0);
    const nightsByNationality = new Map(result.contributions.map((row) => [row.nationality, row.scenarioGuestNights]));
    const otherNights = remaining.reduce((sum, row) => sum + (nightsByNationality.get(row.nationality) || 0), 0);
-   const palette = ["#e5c365", "#e0757e", "#79a5ed", "#a891d5", "#76b8d1", "#91b897", "#e1b78b", "#91a4c4", "#b3bd7e", "#bc91ab"];
+   const palette = ["var(--theme-gold-light)", "var(--theme-rose)", "var(--theme-rose-light)", "var(--theme-gold)", "var(--theme-rose-light)", "var(--theme-gold-light)", "var(--theme-rose)", "var(--theme-gold)", "var(--theme-rose-light)", "var(--theme-gold-light)"];
    const counts = (share, nights) => `<div class="vm-card-counts">
      <div><strong>${formatNumber(result.scenario.hotelCheckins * share)}</strong><span>Hotel check-ins</span></div>
      <div><strong>${formatNumber(nights)}</strong><span>Guest nights</span></div>
@@ -1083,7 +1127,7 @@ function visitorOriginMap(rows, colors) {
      ? "These percentages estimate which nationalities may make up hotel guests on this route. They are based on past patterns, not a list of confirmed guests."
      : `There are no past flight records for ${result.route.origin}. The visitor estimate starts from ${state.peerProfile ? "the weighted comparison-country blend" : result.route.proxyOriginKey || "overall past patterns"}, so use it as a rough guide.`;
    $("#visitorNationalityCards").innerHTML = rows.map((row, index) => ({ row, index }))
-     .sort((a, b) => b.row.weight - a.row.weight).map(card).join("") + `<article class="vm-nationality-card vm-other-card" style="--nationality-color:#61708b">
+     .sort((a, b) => b.row.weight - a.row.weight).map(card).join("") + `<article class="vm-nationality-card vm-other-card" style="--nationality-color:var(--theme-muted)">
        <div class="vm-card-country"><h3>Other nationalities</h3><small>${remaining.length} groups combined</small></div>
        <div class="vm-card-share"><span class="vm-share-value" data-bridge-other>${formatPercent(otherShare, 1)}</span></div>
        ${counts(otherShare, otherNights)}
@@ -1142,7 +1186,7 @@ function visitorOriginMap(rows, colors) {
        <path d="${path("actual")}" class="actual-line"/>
        <path d="${path("transparent")}" class="transparent-line"/>
        <path d="${path("predicted")}" class="predicted-line"/>
-       ${data.validation.map((row, index) => `<circle cx="${x(index)}" cy="${y(row.transparent)}" r="5" tabindex="0" fill="#c9a84c"><title>${row.month}: recorded ${formatNumber(row.actual)}, live default estimate ${formatNumber(row.transparent)}, comparison ${formatNumber(row.predicted)}</title></circle><text x="${x(index)}" y="${height - 22}" text-anchor="middle">${row.month}</text>`).join("")}
+       ${data.validation.map((row, index) => `<circle cx="${x(index)}" cy="${y(row.transparent)}" r="5" tabindex="0" fill="var(--theme-rose)"><title>${row.month}: recorded ${formatNumber(row.actual)}, live default estimate ${formatNumber(row.transparent)}, comparison ${formatNumber(row.predicted)}</title></circle><text x="${x(index)}" y="${height - 22}" text-anchor="middle">${row.month}</text>`).join("")}
      </svg></div><p class="validation-band-caption"><span aria-hidden="true"></span>Shaded band: ±${formatPercent(liveError, 2)} around the live default estimate. A visual guide based on overall weighted error, not a guaranteed range.</p>`;
 
    const errorCell = (row, field) => {
@@ -1237,6 +1281,45 @@ function renderMonthComparisonChart(monthly) {
         }).join("")}
       </div>
     </div>`;
+}
+
+function renderMonthlyMetrics(monthly) {
+  const metrics = {
+    yield: [(row) => row.per1000AddedSeats, formatNumber],
+    nights: [(row) => row.incremental.guestNights, formatNumber],
+    fullness: [(row) => row.inputs.loadFactor, (value) => formatPercent(value, 1), 1],
+    hotel: [(row) => row.inputs.conversionRate, (value) => formatPercent(value, 1), 1],
+    stay: [(row) => row.inputs.averageStay, (value) => value.toFixed(2)],
+  };
+  const [read, format, scaleMax] = metrics[$("#monthMetric").value];
+  const values = monthly.map(read);
+  const available = values.filter(Number.isFinite);
+  const host = $("#monthOptions");
+  if (!available.length) {
+    host.innerHTML = '<p class="monthly-metric-empty">Add flights to see guest nights per 1,000 added seats.</p>';
+    return;
+  }
+  const peak = Math.max(...available);
+  const floor = Math.min(0, ...available);
+  const span = (scaleMax ?? Math.max(0, peak)) - floor || 1;
+  const zero = -floor / span * 100;
+  const hasLeader = new Set(available.map(format)).size > 1;
+  host.innerHTML = `<ol class="monthly-metric-grid" aria-label="Monthly values" style="--metric-zero:${zero}%">
+    ${monthly.map((row, index) => {
+      const value = values[index];
+      const current = row.month === state.month;
+      const highest = hasLeader && value === peak;
+      const width = Math.abs(value) / span * 100;
+      return `<li class="monthly-metric-card${current ? " selected" : ""}${highest ? " highest" : ""}"${current ? ' aria-current="true"' : ""}>
+        <div class="monthly-metric-heading">
+          <span>${planningEscape(row.monthName)}</span>
+          <div class="monthly-metric-badges">${current ? '<small>Current</small>' : ""}${highest ? '<small>Highest</small>' : ""}</div>
+          <strong><bdi>${Number.isFinite(value) ? planningEscape(format(value)) : "—"}</bdi></strong>
+        </div>
+        <div class="monthly-metric-track" dir="ltr" aria-hidden="true"><span class="${value < 0 ? "negative" : ""}" style="--metric-size:${Number.isFinite(value) ? width : 0}%"></span></div>
+      </li>`;
+    }).join("")}
+  </ol>`;
 }
 
 function renderStressComparisonChart(stress) {
@@ -1335,21 +1418,47 @@ function renderDecisionWorkspace() {
     ? "Each month refreshes market flight fullness, trip-ending share and starting stay estimates; flight count and aircraft seats stay fixed. Hotel use stays at your chosen rate unless you applied the training-season option. Any visitor-purpose stay assumption is retained. These are seasonal planning estimates, not future bookings."
     : "All selected flight and hotel assumptions stay fixed. Differences mainly reflect days in each month, not a learned seasonal demand effect.";
   renderMonthComparisonChart(monthly);
-  $("#monthOptions").innerHTML = planningTable(["Month","Extra guest nights","Nights / 1,000 added seats","Flights full","Hotel use","Nights / stay"],monthly.map((row)=>[row.monthName,formatNumber(row.incremental.guestNights),row.per1000AddedSeats == null ? "—" : formatNumber(row.per1000AddedSeats),formatPercent(row.inputs.loadFactor,1),formatPercent(row.inputs.conversionRate,1),row.inputs.averageStay.toFixed(2)]));
+  renderMonthlyMetrics(monthly);
+  $("#monthMetric").onchange = () => renderMonthlyMetrics(monthly);
   const stress = stressTest(data,state);
   renderStressComparisonChart(stress);
   $("#stressOptions").innerHTML = planningTable(["Trial","Extra guest nights","Change from selected assumptions"],[["Selected assumptions",formatNumber(stress.base.incremental.guestNights),"—"],...stress.trials.map((row)=>[row.label,formatNumber(row.incremental.guestNights),formatSigned(row.differenceFromPlan)])]);
-  const note = decisionNote(data,state,options);
-  const ending = note.workplaceDecision;
-  $("#decisionNote").innerHTML = `<p class="decision-question">${planningEscape(ending.question)}</p>
-    <div class="decision-answers"><article><h3>Hotel nights to plan for</h3><button type="button" class="text-action" data-evidence="routes">See the route comparison →</button></article>
-    <article><h3>Check this assumption first</h3><div id="firstCheckText" class="first-check"></div><button type="button" class="text-action" data-evidence="stress">See the lower-assumption trials →</button></article></div>
-    <details><summary>Questions for airlines and hotels</summary>
+  const note = decisionNote(data, state, options);
+  renderPlanningDecision(note.workplaceDecision, note.metrics.result.route);
+}
+
+function renderPlanningDecision(ending, route) {
+  const questionsOpen = $("#decisionNote .decision-questions")?.open;
+  const scale = Math.max(1, Math.abs(ending.hotelNights), Math.abs(ending.lowerTrialHotelNights));
+  const resultBar = (value, label, variant) => `<div class="decision-impact-row ${variant}">
+    <div><span>${label}</span><strong><bdi>${Math.round(value) ? formatSigned(value) : "0"}</bdi></strong></div>
+    <span class="decision-impact-track" aria-hidden="true"><i style="--impact-width:${Math.abs(value) / scale * 100}%"></i></span>
+  </div>`;
+
+  $("#decisionNote").innerHTML = `<div class="decision-answers">
+    <article class="decision-impact">
+      <h3><span class="decision-step" aria-hidden="true">01</span><span>Guest-night impact</span></h3>
+      <p class="decision-context">${planningEscape(route.origin)} · ${planningEscape(data.months[state.month - 1])}</p>
+      ${resultBar(ending.hotelNights, "With selected assumptions", "selected")}
+      ${resultBar(ending.lowerTrialHotelNights, "With all three assumptions lower", "trial")}
+      <p class="decision-impact-note">Both estimates compare the flight change with zero extra flights.</p>
+      <button type="button" class="text-action" data-evidence="routes">See the route comparison →</button>
+    </article>
+    <article class="decision-check">
+      <h3><span class="decision-step" aria-hidden="true">02</span><span>Check this assumption first</span></h3>
+      <div id="firstCheckText" class="first-check"></div>
+      <button type="button" class="text-action" data-evidence="stress">See the lower-assumption trials →</button>
+    </article>
+  </div>
+  <div class="decision-followup">
+    <details class="decision-questions"${questionsOpen ? " open" : ""}>
+      <summary>Questions for airlines and hotels</summary>
       <ul><li>Ask the airline how many of the arrivals will be residents returning home.</li>
       <li>Ask hotels about guests per occupied room before using guest nights to plan rooms or staffing.</li>
       <li>${planningEscape(ending.verification[1])}</li></ul>
     </details>
-    <button type="button" class="text-action" data-evidence="followups">Open follow-ups →</button>`;
+    <button type="button" class="text-action" data-evidence="followups">Open follow-ups →</button>
+  </div>`;
   fillFirstCheck();
 }
 
@@ -1726,9 +1835,15 @@ function fillFirstCheck() {
   const target = $("#firstCheckText");
   if (!target) return;
   const first = latestNextSteps?.steps[0];
-  const lines = !latestNextSteps ? [] : first ? [first.title, first.overdue, first.why, first.impact, first.ask].filter(Boolean)
-    : ["All checks have recorded evidence for these exact assumptions."];
-  target.innerHTML = lines.map((line, index) => index === 0 && first ? `<p><strong>${planningEscape(line)}</strong></p>` : `<p>${planningEscape(line)}</p>`).join("");
+  if (!first) {
+    target.textContent = latestNextSteps ? "All checks have recorded evidence for these exact assumptions." : "";
+    return;
+  }
+  target.innerHTML = `<p class="decision-check-title">${planningEscape(first.title)}</p>
+    ${first.overdue ? `<p class="decision-check-overdue">${planningEscape(first.overdue)}</p>` : ""}
+    <p>${planningEscape(first.why)}</p>
+    ${first.impact ? `<p class="decision-check-impact">${planningEscape(first.impact)}</p>` : ""}
+    <p>${planningEscape(first.ask)}</p>`;
 }
 
 function setupNextSteps() {
@@ -1878,6 +1993,7 @@ function setupDecisionTools() {
    readForm();
    const result = runScenario(data, state);
    renderKpis(result);
+   renderDetailOverview(result);
    renderCalculationExplanation(result);
    renderSideBySideComparison(result, currentProposalContext?.result);
    renderRouteMap(result);
@@ -1898,6 +2014,7 @@ function setupDecisionTools() {
    if (result.eventUplift) {
      $("#dataNote").textContent += ` Includes your chosen +${Math.round(result.eventUplift * 100)}% increase for an event or season; this is not based on measured event results.`;
    }
+   $("#detailBaselineNote").textContent = $("#dataNote").textContent;
    const contextInputs = JSON.parse(JSON.stringify({...state,bridgeOverride}));
    recordPlanHistory(state);
    const starting = nextStepStarting(state, result.route);
@@ -1945,7 +2062,10 @@ function setupProposalTools() {
     if (mode) $(`.view-mode[data-mode="${mode}"]`)?.click();
     if (controls && !document.body.classList.contains("controls-open") && getComputedStyle($("#adjustControls")).display !== "none") $("#adjustControls").click();
   }});
-  proposalWorkspace = createProposalWorkspace({mount:$("#proposalWorkspace"),chatEnabled,rail:$("#proposalRail"),launcher:$("#toggleProposalPanel"),onOpenWorkspace:()=>{ if ($("#proposalWorkspace").hidden) $(".view-mode[data-mode='proposal']").click(); },getContext:()=>currentProposalContext,track:name=>{guidedHelp.track(name);if(String(name).startsWith("proposal_"))renderNextSteps();},onRecommendation:(element,{context,recommended,fingerprint})=>{
+  proposalWorkspace = createProposalWorkspace({mount:$("#proposalWorkspace"),chatEnabled,rail:$("#proposalRail"),launcher:$("#toggleProposalPanel"),onOpenWorkspace:()=>{
+    if (!$("#scenarioView").classList.contains("active")) $('.nav-tab[data-view="scenarioView"]').click();
+    if ($("#proposalWorkspace").hidden) $(".view-mode[data-mode='proposal']").click();
+  },getContext:()=>currentProposalContext,track:name=>{guidedHelp.track(name);if(String(name).startsWith("proposal_"))renderNextSteps();},onRecommendation:(element,{context,recommended,fingerprint})=>{
     const identity = `${fingerprint}|${recommended?.id}|${recommended?.status}`;
     const feedbackKey = [...identity].reduce((hash,letter)=>Math.imul(hash ^ letter.charCodeAt(0),16777619)>>>0,2166136261).toString(36);
     if (recommended) guidedHelp.addFeedback({element,id:`recommendation-${feedbackKey}`,label:`Next action · ${context.result.route.origin} · ${data.months[context.inputs.month-1]}`});
@@ -2034,6 +2154,16 @@ function openPlanControl(groupId, field) {
    $("#month").innerHTML = data.months.map((month, index) => `<option value="${index + 1}">${month}</option>`).join("");
    setFormFromState();
   
+   for (const button of $$("#scenarioForm [data-flight-step]")) {
+     button.addEventListener("click", () => {
+       const field = $(`#${button.dataset.flightControl}`);
+       const steps = Number(button.dataset.flightStep);
+       if (steps < 0) field.stepDown(-steps);
+       else field.stepUp(steps);
+       field.dispatchEvent(new Event("input", { bubbles: true }));
+     });
+   }
+
    $$("#scenarioForm input, #scenarioForm select").forEach((input) => input.addEventListener("input", () => {
      // An explicit edit owns this value, even if it equals the rounded display.
      // Untouched controls continue to retain their full-precision source value.
@@ -2333,6 +2463,8 @@ function setControlsOpen(open) {
      $("#assistantPanel").hidden = !chat;
      $("#decisionWorkspace").hidden = !decisions;
      $("#proposalWorkspace").hidden = !proposal;
+     if (proposal) setControlsOpen(false);
+     $("#adjustControls").hidden = proposal;
      // Keep one set of results synchronized across all three views.
      if (chat) $("#chatResults").append($("#kpis"));
      else $("#scenarioResults").prepend($("#kpis"));
@@ -2408,7 +2540,7 @@ function setControlsOpen(open) {
 function updateStartingMarkers() {
   const starting = { ...defaultState(state.originKey, state.month, state.referenceMode === "peers" ? "__PEERS__" : state.proxyOriginKey), extraFlights: 0 };
   for (const field of $$('#scenarioForm input[type="range"], #seatsPerFlight, #averageStay')) {
-    const label = field.closest("label");
+    const label = field.closest("label, .flight-control");
     if (!label) continue;
     const isPercent = ["loadFactor", "p2pShare", "conversionRate", "eventUplift"].includes(field.id);
     const startingValue = starting[field.id] * (isPercent ? 100 : 1);
@@ -3280,7 +3412,7 @@ function setupPackSearch({getMessages, getRequests, openMessage, openRequest}) {
       label, keywords, type: "Compare tool", open: () => { planView("decisions"); reveal($(selector)); }
     }));
     const details = $$(".detail-tier").map(section => ({
-      label: section.querySelector("summary").textContent.trim(), type: "Details", open: () => { planView("details"); reveal(section); }
+      label: section.querySelector(".detail-tier-title").textContent.trim(), type: "Details", open: () => { planView("details"); reveal(section); }
     }));
     const fields = controls.map(([label, group, selector, keywords]) => ({
       label, keywords, type: "Control", open: () => {
@@ -3566,7 +3698,6 @@ function setupFeaturePack() {
   function renderBadges() {
     const unread = team.messages.filter((row) => row.folder === "inbox" && row.unread).length;
     const counts = {
-      messageUnread:unread,
       inboxUnread:unread,
       notificationCount:team.notifications.filter((row) => row.unread).length,
     };
@@ -4471,7 +4602,7 @@ const I18N = (() => {
     report_no_added_nights: ["No added guest nights are estimated because this plan adds no flight capacity.", "لا تُقدّر ليالٍ إضافية للنزلاء لأن الخطة لا تضيف سعة للرحلات."],
     report_lower_trial: ["The combined lower-assumption trial gives {value} guest nights from the flight change. This is an illustrative check, not a probability bound.", "يعطي اختبار الخفض المجمّع {value} ليلة للنزلاء نتيجة تعديل الرحلات. هذا اختبار توضيحي ولا يحدّد نطاقًا احتماليًا."],
     report_nights_caution: ["Guest nights count nights spent by people, not rooms. Confirm passenger demand and hotel capacity before committing to the proposal.", "تقيس ليالي النزلاء الليالي التي يقضيها الأشخاص. تحقّق من الطلب على الرحلات وسعة الفنادق قبل اعتماد المقترح."],
-    localized_gray_shows_the_baseline_estimate_for_m: ["Gray shows the baseline estimate for {month}. The colored cap marks your plan level. The cards above give the hotel totals and changes.", "يمثّل الرمادي التقدير المرجعي لشهر {month}. ويبيّن الجزء الملوّن مستوى خطتك. وتعرض البطاقات أعلاه الإجماليات الفندقية والتغيّرات."],
+    localized_gray_shows_the_baseline_estimate_for_m: ["Gold shows the baseline estimate for {month}. The rose cap marks your plan level. The cards above give the hotel totals and changes.", "يمثّل الذهبي التقدير المرجعي لشهر {month}، ويبيّن الجزء الوردي مستوى خطتك. وتعرض البطاقات أعلاه الإجماليات الفندقية والتغيّرات."],
     localized_start_by_checking_label_it_had_the_lar: ["Start by checking {label}. It had the largest effect in these trials.", "ابدأ بالتحقق من {label}، فقد كان له الأثر الأكبر في هذه الاختبارات."],
     localized_check_ins: ["check-ins", "التسجيلات الفندقية"],
     localized_flight_fullness: ["flight fullness", "إشغال الرحلة"],
@@ -4740,6 +4871,20 @@ const I18N = (() => {
     starting_assumptions: ["Starting assumptions", "الافتراضات الأولية"],
     month: ["Month", "الشهر"],
     flights: ["Flights", "الرحلات الجوية"],
+    weekly_flight_change: ["Weekly flight change", "التغيير في الرحلات الأسبوعية"],
+    weekly_flights_more_one: ["1 more flight per week than usual", "رحلة إضافية واحدة أسبوعيًا"],
+    weekly_flights_fewer_one: ["1 fewer flight per week than usual", "رحلة واحدة أقل أسبوعيًا"],
+    weekly_flights_more: ["{count} more flights per week than usual", "رحلات إضافية أسبوعيًا: {count}"],
+    weekly_flights_fewer: ["{count} fewer flights per week than usual", "رحلات أقل أسبوعيًا: {count}"],
+    weekly_flights_same: ["No change to the weekly schedule", "لا تغيير في الجدول الأسبوعي"],
+    weekly_flights_minus: ["Remove one weekly flight", "احذف رحلة أسبوعية واحدة"],
+    weekly_flights_plus: ["Add one weekly flight", "أضف رحلة أسبوعية واحدة"],
+    seats_minus: ["Remove one seat per flight", "احذف مقعدًا واحدًا لكل رحلة"],
+    seats_plus: ["Add one seat per flight", "أضف مقعدًا واحدًا لكل رحلة"],
+    seats_capacity: ["Enter the aircraft’s passenger capacity.", "أدخل عدد مقاعد الركاب في الطائرة."],
+    stay_minus: ["Decrease average stay by 0.1 night", "خفّض متوسط الإقامة بمقدار 0.1 ليلة"],
+    stay_plus: ["Increase average stay by 0.1 night", "زد متوسط الإقامة بمقدار 0.1 ليلة"],
+    stay_step_help: ["Adjust by 0.1 nights or type a value.", "عدّل بمقدار 0.1 ليلة أو اكتب القيمة."],
     extra_flights_each_week: ["Extra flights each week", "الرحلات الإضافية أسبوعيًا"],
     add_or_remove_flights: ["Add or remove flights from the usual weekly schedule.", "أضف رحلات إلى الجدول الأسبوعي المعتاد أو احذفها منه."],
     seats_on_each_flight: ["Seats on each flight", "المقاعد لكل رحلة"],
@@ -4816,6 +4961,10 @@ const I18N = (() => {
     compare_months: ["Compare months", "مقارنة الأشهر"],
     use_each_month_s: ["Use each month’s market starting estimates", "استخدم التقديرات الأولية للسوق لكل شهر"],
     show_the_numbers: ["Show the numbers", "عرض الأرقام"],
+    explore_monthly_metrics: ["Explore monthly metrics", "استكشف المؤشرات الشهرية"],
+    monthly_metric_label: ["Show metric", "عرض المؤشر"],
+    monthly_values: ["Monthly values", "القيم الشهرية"],
+    monthly_yield_empty: ["Add flights to see guest nights per 1,000 added seats.", "أضف رحلات لعرض ليالي النزلاء لكل 1,000 مقعد إضافي."],
     what_if_fewer_visitors: ["What if fewer visitors stay in hotels?", "ماذا لو أقام عدد أقل من الزوار في الفنادق؟"],
     stress_trials_lower_flight: ["Stress trials lower flight fullness by 10 percentage points, hotel use by 5 points, and stay length by half a night, within the control limits. They are hypothetical tests, not confidence levels.", "تخفّض اختبارات الحساسية إشغال الرحلات 10 نقاط مئوية والإقامة الفندقية 5 نقاط ومدة الإقامة نصف ليلة ضمن حدود الإدخال. هذه اختبارات افتراضية وليست مستويات ثقة."],
     apply_changes: ["Apply changes", "تطبيق التغييرات"],
@@ -4994,9 +5143,19 @@ const I18N = (() => {
     possible_range_low_to: ["Possible range {low} to {high}; estimate {value}. History-based planning guide, not a guaranteed probability range.", "النطاق المحتمل من {low} إلى {high}، والتقدير {value}. دليل تخطيطي يستند إلى السجلات ولا يمثّل نطاقًا احتماليًا مضمونًا."],
     label_by_month_highest: ["{label} by month, highest in {highestMonth} at {high}, lowest in {lowestMonth} at {low}.", "{label} حسب الشهر. الأعلى في {highestMonth} بقيمة {high}، والأدنى في {lowestMonth} بقيمة {low}."],
     from_seats_to_guest: ["From seats to guest nights", "من المقاعد إلى ليالي النزلاء"],
+    see_exact_calculation: ["See exact calculation →", "عرض الحساب الدقيق ←"],
+    detail_tier_exact: ["Exact inputs, formulas and range", "المدخلات والصيغ والنطاق بالتفصيل"],
+    detail_tier_drivers: ["Sensitivity and visitor mix", "أثر الافتراضات وتوزيع الزوار"],
+    detail_tier_sources: ["Flight history and sources", "سجل الرحلات والمصادر"],
+    detail_tier_validation: ["Validation and comparison markets", "التحقق والأسواق المقارنة"],
+    detail_flow_steps: ["Steps in the plan calculation", "خطوات حساب الخطة"],
+    detail_flow_seats: ["After flight changes", "بعد تعديل الرحلات"],
+    detail_flow_p2p: ["Of passengers", "من الركاب"],
+    detail_flow_event: ["Event adjustment", "تعديل الطلب للفعالية"],
+    detail_flow_delta: ["Guest nights vs. baseline", "ليالي النزلاء مقارنةً بالتقدير المرجعي"],
     how_your_plan_flows: ["How your plan flows through to hotels", "كيف تنعكس خطتك على الفنادق؟"],
     month_estimate: ["{month} estimate", "تقدير شهر {month}"],
-    gray_shows_the_baseline: ["Gray shows the baseline estimate for {month}. The colored cap marks your plan level, and the badge shows the change.", "يمثّل الرمادي التقدير المرجعي لشهر {month}، ويبيّن الخط الملوّن مستوى خطتك، وتشير الشارة إلى مقدار التغيّر."],
+    gray_shows_the_baseline: ["Gold shows the baseline estimate for {month}. The rose cap marks your plan level, and the badge shows the change.", "يمثّل الذهبي التقدير المرجعي لشهر {month}، ويبيّن الجزء الوردي مستوى خطتك، وتشير الشارة إلى مقدار التغيّر."],
     the_proposed_country_route: ["The proposed {country} route has no historical baseline. Comparison countries supply starting assumptions only. The headline changes above compare the proposed route with zero. Use Compare to assess adding the same capacity to an existing route.", "لا يوجد تقدير مرجعي تاريخي للمسار المقترح من {country}. توفّر دول المقارنة افتراضات أولية فقط. تقارن النتائج أعلاه المسار المقترح بالصفر. استخدم «المقارنة» لتقييم إضافة السعة نفسها إلى مسار قائم."],
     baseline_an_estimate_based: ["Baseline: an estimate based on past flight records ({count} matching records), with assumed hotel use and length of stay. Hotel totals for this route were not directly observed.", "التقدير المرجعي مبني على سجلات الرحلات السابقة ({count} سجلات مطابقة) وافتراضات الإقامة الفندقية ومدتها. لم تُرصد إجماليات الفنادق لهذا المسار مباشرةً."],
     baseline_an_estimate_based_2: ["Baseline: an estimate based on past flight records, with estimated hotel use and length of stay. It is not an observed route-level hotel total.", "التقدير المرجعي مبني على سجلات الرحلات السابقة وتقديرات الإقامة الفندقية ومدتها. ولا يمثّل إجماليًا فندقيًا مرصودًا لهذا المسار."],
@@ -5095,7 +5254,10 @@ const I18N = (() => {
     value_extra_guest_nights: ["{value} extra guest nights", "{value} ليلة إضافية للنزلاء"],
     value_flights_week: ["{value} flights / week", "{value} رحلة أسبوعيًا"],
     value_flight_week: ["{value} flight / week", "{value} رحلة أسبوعيًا"],
-    hotel_nights_to_plan: ["Hotel nights to plan for", "الليالي الفندقية المطلوب التخطيط لها"],
+    decision_guest_night_impact: ["Guest-night impact", "الأثر على ليالي النزلاء"],
+    decision_selected_assumptions: ["With selected assumptions", "وفق الافتراضات المختارة"],
+    decision_lower_assumptions: ["With all three assumptions lower", "عند خفض الافتراضات الثلاثة معًا"],
+    decision_flight_comparison_basis: ["Both estimates compare the flight change with zero extra flights.", "يقارن التقديران أثر تغيير عدد الرحلات بالحالة التي لا تُضاف فيها أي رحلات."],
     check_this_assumption_first: ["Check this assumption first", "تحقّق من هذا الافتراض أولًا"],
     verify_before_acting: ["Verify before acting", "تحقّق قبل التنفيذ"],
     how_the_route_alternatives: ["How the route alternatives compare", "مقارنة المسارات البديلة"],
@@ -5973,11 +6135,11 @@ const I18N = (() => {
     a2c_ns_17: ["The small line in the first three cards shows that measure for every month of the year.", "يعرض الخط الصغير في البطاقات الثلاث الأولى هذا المقياس لكل شهر من أشهر السنة."],
     a2c_ns_18: ["The possible range card shows the lower and higher guides as a bar.", "تعرض بطاقة النطاق المحتمل الحدين الأدنى والأعلى في شكل شريط."],
     a2c_ns_19: ["From seats to guest nights: each bar is one step, from flight seats to passengers, passengers ending their trip in Abu Dhabi, hotel check-ins and guest nights.", "من المقاعد إلى ليالي النزلاء: كل عمود خطوة واحدة، من مقاعد الرحلات إلى الركاب، ثم الركاب الذين تنتهي رحلتهم في أبوظبي، ثم التسجيلات الفندقية، ثم ليالي النزلاء."],
-    a2c_ns_20: ["In that chart, gray shows the usual month, the coloured cap marks your plan and the badge shows the change.", "في هذا الرسم، يمثّل الرمادي الشهر المعتاد، ويشير الجزء الملوّن في الأعلى إلى خطتك، وتعرض الشارة مقدار التغيّر."],
+    a2c_ns_20: ["In that chart, gold shows the usual month, the rose cap marks your plan and the badge shows the change.", "في هذا الرسم، يمثّل الذهبي الشهر المعتاد، ويشير الجزء الوردي في الأعلى إلى خطتك، وتعرض الشارة مقدار التغيّر."],
     a2c_ns_21: ["Three launch sizes: cards for cautious, standard and expanded weekly flights, with the extra check-ins and guest nights each would add.", "ثلاثة أحجام للإطلاق: بطاقات للرحلات الأسبوعية الحذرة والقياسية والموسّعة، مع التسجيلات وليالي النزلاء الإضافية لكل منها."],
     a2c_ns_22: ["Compare months: the extra guest nights from the same flights in each month of the year.", "مقارنة الأشهر: ليالي النزلاء الإضافية من الرحلات نفسها في كل شهر من أشهر السنة."],
     a2c_ns_23: ["What if fewer visitors stay in hotels?: how much the extra guest nights fall under each lower-assumption trial, compared with your plan.", "ماذا لو أقام عدد أقل من الزوار في الفنادق؟: مقدار انخفاض ليالي النزلاء الإضافية في كل اختبار للافتراضات الأدنى مقارنةً بخطتك."],
-    a2c_ns_24: ["Show the numbers under each chart opens the table behind it.", "يفتح «عرض الأرقام» أسفل كل رسم الجدول الذي يستند إليه."],
+    a2c_ns_24: ["Explore monthly metrics to compare exact values. The stress chart still has a Show the numbers table.", "استخدم «استكشف المؤشرات الشهرية» لمقارنة القيم الدقيقة. ويتوفر جدول «عرض الأرقام» أسفل رسم اختبار الافتراضات."],
     a2c_ns_25: ["Estimated hotel nights by nationality: the estimated change in hotel nights for each visitor group.", "الليالي الفندقية المقدّرة حسب الجنسية: التغيّر المقدّر في الليالي الفندقية لكل فئة من الزوار."],
     a2c_ns_26: ["One-at-a-time sensitivity: how far guest nights move when one assumption is nudged up or down on its own; the nudge sizes differ, so treat it as a guide.", "الحساسية لكل افتراض على حدة: مقدار تحرّك ليالي النزلاء عند رفع افتراض واحد أو خفضه وحده؛ وتختلف أحجام التغيير، فاعتبرها دليلًا."],
     a2c_ns_27: ["Route map: a schematic line from the country’s reference point to Abu Dhabi city, not airport locations.", "خريطة المسار: خط تخطيطي من النقطة المرجعية للبلد إلى مدينة أبوظبي، لا مواقع المطارات."],
@@ -5992,18 +6154,18 @@ const I18N = (() => {
     a2c_ns_36: ["I couldn’t find a request that matches those words.", "لم أجد طلبًا يطابق هذه الكلمات."],
     a2c_ns_37: ["The request “{item}” from {from} is in Tasks, marked {status}.", "الطلب «{item}» من {from} موجود في «المهام»، وحالته: {status}."],
     a2c_ns_38: ["Open Tasks from the shortcuts on the right edge to see it.", "افتح «المهام» من الاختصارات على حافة الشاشة لعرضه."],
-    a2c_ns_39: ["{folder} is in Messages at the top (messages: {count}).", "تجد {folder} في «الرسائل» في الأعلى (عدد الرسائل: {count})."],
-    a2c_ns_40: ["Open Messages at the top to see them.", "افتح «الرسائل» في الأعلى لعرضها."],
+    a2c_ns_39: ["{folder} is in Messages in the side shortcuts (messages: {count}).", "تجد {folder} في «الرسائل» من الاختصارات الجانبية (عدد الرسائل: {count})."],
+    a2c_ns_40: ["Open Messages in the side shortcuts to see them.", "افتح «الرسائل» من الاختصارات الجانبية لعرضها."],
     a2c_ns_41: ["I couldn’t find a message that matches those words.", "لم أجد رسالة تطابق هذه الكلمات."],
     a2c_ns_42: ["Try a word from the subject or the sender’s name.", "جرّب كلمة من الموضوع أو اسم المرسل."],
     a2c_ns_43: ["I found these messages:", "وجدت هذه الرسائل:"],
     a2c_ns_44: ["“{item}” · {folder}", "«{item}» · {folder}"],
-    a2c_ns_45: ["Open Messages at the top, choose the folder, then select the message.", "افتح «الرسائل» في الأعلى، واختر المجلد، ثم اختر الرسالة."],
+    a2c_ns_45: ["Open Messages in the side shortcuts, choose the folder, then select the message.", "افتح «الرسائل» من الاختصارات الجانبية، واختر المجلد، ثم اختر الرسالة."],
     a2c_ns_46: ["Your draft “{item}” is in {folder}.", "مسودتك «{item}» موجودة في {folder}."],
     a2c_ns_47: ["The message “{item}” to {to} is in {folder}.", "الرسالة «{item}» إلى {to} موجودة في {folder}."],
     a2c_ns_48: ["The message “{item}” from {from} is in {folder}.", "الرسالة «{item}» من {from} موجودة في {folder}."],
     a2c_ns_49: ["It is unread.", "وهي غير مقروءة."],
-    a2c_ns_50: ["Open Messages at the top, choose {folder}, then select it.", "افتح «الرسائل» في الأعلى، واختر {folder}، ثم اختر الرسالة."],
+    a2c_ns_50: ["Open Messages in the side shortcuts, choose {folder}, then select it.", "افتح «الرسائل» من الاختصارات الجانبية، واختر {folder}، ثم اختر الرسالة."],
     // Audit fixes: guide panel, comparison-country notes and status messages.
     a2c_wi_1: ["Here is how this change would affect your plan, without applying it:", "هذا تأثير هذا التغيير على خطتك، دون تطبيقه:"],
     a2c_wi_2: ["{item}: {low} → {high}", "{item}: {low} ← {high}"],

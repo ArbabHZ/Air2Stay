@@ -22,7 +22,7 @@
        <button class="nav-tab" data-view="validationView" data-i18n="check_past_results">Check past results</button>
        <button class="nav-tab" data-view="glossaryView" data-i18n="term_guide">Term guide</button>
        <button type="button" class="nav-tab" data-view="statsView" hidden data-i18n="statistics">Statistics</button>
-       <button class="nav-tab" data-view="messagesView"><span data-i18n="messages">Messages</span> <span id="messageUnread" class="team-count" hidden></span></button>
+       <button type="button" class="nav-tab" data-view="messagesView" hidden data-i18n="messages">Messages</button>
      </nav>
      <div class="header-tools">
        <span id="headerScenario" dir="ltr" class="header-scenario"></span>
@@ -51,8 +51,25 @@
            <label><span data-i18n="month">Month</span><select id="month"></select></label>
           </div></details>
           <details id="aircraftControls" class="control-group"><summary><span>02</span> <span data-i18n="flights">Flights</span></summary><div class="control-group-body">
-           <label><span class="control-label" data-i18n="extra_flights_each_week">Extra flights each week</span><output id="extraFlightsValue">+3</output><input id="extraFlights" type="range" min="-20" max="20" step="1"><small data-i18n="add_or_remove_flights">Add or remove flights from the usual weekly schedule.</small></label>
-           <label><span data-i18n="seats_on_each_flight">Seats on each flight</span><input id="seatsPerFlight" type="number" min="30" max="600" step="1" lang="en" dir="ltr"><small data-i18n="number_of_passenger_seats">Number of passenger seats on each flight.</small></label>
+           <div class="flight-control" id="weeklyFlightControl" data-direction="more">
+             <div class="flight-control-heading"><label for="extraFlights" class="control-label" data-i18n="weekly_flight_change">Weekly flight change</label><output dir="ltr" id="extraFlightsValue" for="extraFlights">+3</output></div>
+             <div class="flight-stepper" dir="ltr">
+               <button type="button" data-flight-control="extraFlights" data-flight-step="-1" aria-label="Remove one weekly flight">−</button>
+               <input id="extraFlights" type="range" min="-20" max="20" step="1" aria-describedby="weeklyFlightSummary">
+               <button type="button" data-flight-control="extraFlights" data-flight-step="1" aria-label="Add one weekly flight">+</button>
+             </div>
+             <div class="flight-scale" dir="ltr" aria-hidden="true"><span>−20</span><span>0</span><span>+20</span></div>
+             <small id="weeklyFlightSummary">3 more flights per week than usual</small>
+           </div>
+           <div class="flight-control">
+             <label for="seatsPerFlight" class="control-label" data-i18n="seats_on_each_flight">Seats on each flight</label>
+             <div class="flight-stepper" dir="ltr">
+               <button type="button" data-flight-control="seatsPerFlight" data-flight-step="-1" aria-label="Remove one seat per flight">−</button>
+               <input id="seatsPerFlight" type="number" lang="en" dir="ltr" min="30" max="600" step="1" aria-describedby="seatsPerFlightHelp">
+               <button type="button" data-flight-control="seatsPerFlight" data-flight-step="1" aria-label="Add one seat per flight">+</button>
+             </div>
+             <small id="seatsPerFlightHelp">Enter the aircraft’s passenger capacity.</small>
+           </div>
            <label><span class="control-label" data-i18n="how_full_flights_are">How full flights are</span><output id="loadFactorValue">82%</output><input id="loadFactor" type="range" min="30" max="100" step="0.1"><small data-i18n="estimated_share_of_seats">Estimated share of seats filled by passengers.</small></label>
           </div></details>
           <details id="eventImpactGroup" class="control-group"><summary><span>03</span> <span data-i18n="event_or_disruption">Event or disruption</span></summary><div class="control-group-body">
@@ -63,7 +80,15 @@
            <div id="purposeAssumptions" class="purpose-assumptions" hidden><label><span data-i18n="your_assumed_hotel_share">Your assumed hotel share (%)</span><input type="number" id="purposeHotelShare" min="5" max="90" step="0.1" lang="en" dir="ltr"></label><label><span data-i18n="your_assumed_nights_per">Your assumed nights per stay</span><input type="number" id="purposeStay" min="1" max="10" step="0.1" lang="en" dir="ltr"></label><button type="button" id="applyPurpose" data-i18n="apply_visitor_assumptions">Apply visitor assumptions</button><small id="purposeStatus" role="status" data-i18n="use_your_own_evidence">Use your own evidence or an explicit planning assumption.</small></div>
            <label><span class="control-label" data-i18n="passengers_ending_their_trip">Passengers ending their trip in Abu Dhabi</span><output id="p2pShareValue">51%</output><input id="p2pShare" type="range" min="5" max="100" step="0.1"><small data-i18n="share_of_passengers_who">Share of passengers who finish their flight journey here.</small></label>
            <label><span class="control-label" data-i18n="share_checking_into_a">Share checking into a hotel</span><output id="conversionRateValue">42%</output><input id="conversionRate" type="range" min="5" max="90" step="0.1"><small data-i18n="estimated_share_of_those">Estimated share of those passengers who stay in a hotel.</small></label>
-           <label><span data-i18n="average_nights_per_hotel">Average nights per hotel stay</span><input id="averageStay" type="number" min="1" max="10" step="0.1" lang="en" dir="ltr"><small data-i18n="average_number_of_nights">Average number of nights each hotel guest stays.</small></label>
+           <div class="flight-control">
+             <label for="averageStay" class="control-label" data-i18n="average_nights_per_hotel">Average nights per hotel stay</label>
+             <div class="flight-stepper" dir="ltr">
+               <button type="button" data-flight-control="averageStay" data-flight-step="-10" aria-label="Decrease average stay by 0.1 night">−</button>
+               <input id="averageStay" type="number" lang="en" dir="ltr" min="1" max="10" step="0.01" aria-describedby="averageStayHelp">
+               <button type="button" data-flight-control="averageStay" data-flight-step="10" aria-label="Increase average stay by 0.1 night">+</button>
+             </div>
+             <small id="averageStayHelp">Adjust by 0.1 nights or type a value.</small>
+           </div>
           </div></details>
          </form>
          <p class="starting-key" data-i18n="orange_number_you_changed">Orange number = you changed it · 'Undo change' puts one value back</p>
@@ -81,7 +106,6 @@
              <button type="button" class="view-mode" data-mode="chat" aria-pressed="false" aria-controls="assistantPanel" hidden disabled data-i18n="chat">Chat</button>
              <button type="button" class="view-mode" data-mode="proposal" aria-pressed="false" aria-controls="proposalWorkspace" data-i18n="follow_ups">Follow-ups</button>
            </div>
-           <button type="button" id="toggleProposalPanel" class="pw-launcher" aria-label="Open priority actions and communications" aria-haspopup="dialog" aria-controls="proposalDrawer" aria-expanded="false" disabled data-i18n-aria-label="open_priority_actions_and"><span class="actions-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="5" width="14" height="16" rx="2"/><rect x="9" y="3" width="6" height="4" rx="1" fill="#312b2a"/><path d="m8 13 3 3 5-5"/></svg></span><span data-i18n="actions">Actions</span><span class="pw-count" data-pw-drawer-count hidden></span></button>
          </div>
   
          <div class="proposal-layout">
@@ -130,17 +154,52 @@
              </div>
            </section>
            <details class="content-block launch-sizes" open><summary data-i18n="three_launch_sizes">Three launch sizes</summary><p class="planning-note" data-i18n="cautious_standard_and_expanded">Cautious, standard and expanded refer to the number of flights only. They are not probabilities of demand.</p><div id="launchOptions" class="launch-grid"></div></details>
-           <details class="content-block month-comparison"><summary data-i18n="compare_months">Compare months</summary><label class="planning-check"><input type="checkbox" id="refreshMonthAssumptions" checked><span data-i18n="use_each_month_s">Use each month’s market starting estimates</span></label><p id="monthComparisonNote" class="planning-note"></p><div id="monthChart" dir="ltr"></div><details class="chart-numbers"><summary data-i18n="show_the_numbers">Show the numbers</summary><div id="monthOptions" class="table-scroll"></div></details></details>
+           <details class="content-block month-comparison">
+             <summary data-i18n="compare_months">Compare months</summary>
+             <label class="planning-check"><input type="checkbox" id="refreshMonthAssumptions" checked><span data-i18n="use_each_month_s">Use each month’s market starting estimates</span></label>
+             <p id="monthComparisonNote" class="planning-note"></p>
+             <div id="monthChart" dir="ltr"></div>
+             <details class="chart-numbers monthly-metric-explorer">
+               <summary data-i18n="explore_monthly_metrics">Explore monthly metrics</summary>
+               <label class="planning-field">
+                 <span data-i18n="monthly_metric_label">Show metric</span>
+                 <select id="monthMetric">
+                   <option value="yield" data-i18n="nights_1_000_added">Nights / 1,000 added seats</option>
+                   <option value="nights" data-i18n="extra_guest_nights">Extra guest nights</option>
+                   <option value="fullness" data-i18n="flights_full">Flights full</option>
+                   <option value="hotel" data-i18n="hotel_use">Hotel use</option>
+                   <option value="stay" data-i18n="nights_stay">Nights / stay</option>
+                 </select>
+               </label>
+               <div id="monthOptions"></div>
+             </details>
+           </details>
            <details class="content-block"><summary data-i18n="what_if_fewer_visitors">What if fewer visitors stay in hotels?</summary><p class="planning-note" data-i18n="stress_trials_scope">These hypothetical trials use lower assumptions within the control limits.</p><div id="stressChart" dir="ltr"></div><details class="chart-numbers"><summary data-i18n="show_the_numbers">Show the numbers</summary><div id="stressOptions" class="table-scroll"></div></details></details>
-           <section class="content-block" id="planningDecision"><div class="section-heading"><div><p data-i18n="decision_note">Decision note</p><h2 id="planningDecisionTitle" tabindex="-1" data-i18n="the_planning_decision">The planning decision</h2></div><div class="decision-note-actions"><button type="button" id="printDecisionNote" data-i18n="save_as_pdf">Save as PDF</button><button type="button" id="exportDecisionNote" class="text-action" data-i18n="or_download_as_text">or download as text</button></div></div><div id="decisionNote" aria-live="polite"></div></section>
+           <section class="content-block" id="planningDecision" aria-labelledby="planningDecisionTitle">
+             <div class="section-heading"><div><p data-i18n="decision_note">Decision note</p><h2 id="planningDecisionTitle" tabindex="-1" data-i18n="the_planning_decision">The planning decision</h2></div></div>
+             <div id="decisionNote"></div>
+             <div class="decision-note-actions">
+               <button type="button" id="printDecisionNote" data-i18n="save_as_pdf">Save as PDF</button>
+               <button type="button" id="exportDecisionNote" class="text-action" data-i18n="or_download_as_text">or download as text</button>
+             </div>
+           </section>
          </section>
          <div id="scenarioResults" style="display:contents">
          <section id="kpis" class="kpi-grid"></section>
 
          <section class="content-block side-by-side-block focus-only" id="sideBySideComparison" aria-live="polite"></section>
 
+         <section id="detailOverview" class="content-block secondary-detail" aria-labelledby="detailOverviewTitle">
+           <div class="section-heading"><div><p data-i18n="details">Details</p><h2 id="detailOverviewTitle" data-i18n="from_seats_to_guest">From seats to guest nights</h2></div></div>
+           <div id="detailFlow"></div>
+           <div class="detail-overview-footer">
+             <div id="detailDelta"></div>
+             <button type="button" class="text-action" data-evidence="calculation" data-i18n="see_exact_calculation">See exact calculation →</button>
+           </div>
+         </section>
+
          <details class="detail-tier content-block secondary-detail" data-tier="1">
-           <summary><span class="tier-icon" aria-hidden="true"><i></i><i></i><i></i><i></i></span><span data-i18n="how_the_result_is">How the result is calculated</span></summary>
+           <summary><span class="tier-icon" aria-hidden="true">01</span><span class="detail-tier-label"><span class="detail-tier-title" data-i18n="how_the_result_is">How the result is calculated</span><small data-i18n="detail_tier_exact">Exact inputs, formulas and range</small></span></summary>
            <div class="detail-tier-body">
          <section class="content-block result-explanation secondary-detail" aria-live="polite">
            <div id="calculationExplanation"></div>
@@ -148,24 +207,25 @@
            </div>
          </details>
          <details class="detail-tier content-block secondary-detail" data-tier="2">
-           <summary><span class="tier-icon" aria-hidden="true"><i></i><i></i><i></i><i></i></span><span data-i18n="what_moves_the_result">What moves the result most</span></summary>
+           <summary><span class="tier-icon" aria-hidden="true">02</span><span class="detail-tier-label"><span class="detail-tier-title" data-i18n="what_moves_the_result">What moves the result most</span><small data-i18n="detail_tier_drivers">Sensitivity and visitor mix</small></span></summary>
            <div class="detail-tier-body">
-         <div class="two-column secondary-detail">
-           <section class="content-block">
-             <div class="section-heading"><div><p data-i18n="visitor_mix">Visitor mix</p><h2 data-i18n="estimated_hotel_nights_by">Estimated hotel nights by nationality</h2><small data-i18n="estimated_change_in_hotel">Estimated change in hotel nights for each visitor group</small></div></div>
-             <div id="marketBars" dir="ltr" class="bars"></div>
-           </section>
+         <div class="two-column detail-driver-grid secondary-detail">
            <section class="content-block">
              <div class="section-heading"><h2>One-at-a-time sensitivity</h2><small data-i18n="possible_change_in_guest">Possible change in guest nights</small></div>
              <div id="sensitivityBars" dir="ltr"></div><p class="planning-note" data-i18n="sensitivity_trial_note">Each trial changes one assumption within its control limits. Trial sizes differ, so the bars show the effect of these specific changes.</p>
+           </section>
+           <section class="content-block">
+             <div class="section-heading"><div><p data-i18n="visitor_mix">Visitor mix</p><h2 data-i18n="estimated_hotel_nights_by">Estimated hotel nights by nationality</h2><small data-i18n="estimated_change_in_hotel">Estimated change in hotel nights for each visitor group</small></div></div>
+             <div id="marketBars" dir="ltr" class="bars"></div>
            </section>
          </div>
 
            </div>
          </details>
          <details class="detail-tier content-block secondary-detail" data-tier="3">
-           <summary><span class="tier-icon" aria-hidden="true"><i></i><i></i><i></i><i></i></span><span data-i18n="where_the_starting_numbers">Where the starting numbers come from</span></summary>
+           <summary><span class="tier-icon" aria-hidden="true">03</span><span class="detail-tier-label"><span class="detail-tier-title" data-i18n="where_the_starting_numbers">Where the starting numbers come from</span><small data-i18n="detail_tier_sources">Flight history and sources</small></span></summary>
            <div class="detail-tier-body">
+         <p id="detailBaselineNote" class="planning-note"></p>
          <section class="content-block secondary-detail" id="peerEvidenceBlock" hidden><div class="section-heading"><div><p data-i18n="starting_assumptions">Starting assumptions</p><h2 data-i18n="comparison_countries_and_their">Comparison countries and their limits</h2></div></div><div id="peerEvidence"></div></section>
          <div class="evidence-grid secondary-detail">
          <section class="content-block route-map-block secondary-detail">
@@ -183,13 +243,13 @@
   
          <section class="content-block secondary-detail">
            <div class="section-heading"><div><h2 data-i18n="why_these_starting_values">Why these starting values appear</h2></div></div>
-           <div id="routeAudit" class="route-audit"></div>
+           <div id="routeAudit" class="route-audit table-scroll" tabindex="0" role="region" aria-label="Why these starting values appear" data-i18n-aria-label="why_these_starting_values"></div>
          </section>
   
            </div>
          </details>
          <details class="detail-tier content-block secondary-detail" data-tier="4">
-           <summary><span class="tier-icon" aria-hidden="true"><i></i><i></i><i></i><i></i></span><span data-i18n="checks_on_the_method">Checks on the method</span></summary>
+           <summary><span class="tier-icon" aria-hidden="true">04</span><span class="detail-tier-label"><span class="detail-tier-title" data-i18n="checks_on_the_method">Checks on the method</span><small data-i18n="detail_tier_validation">Validation and comparison markets</small></span></summary>
            <div class="detail-tier-body">
          <details class="content-block secondary-detail"><summary data-i18n="can_hotel_use_vary">Can hotel use vary by country and season?</summary><div id="conversionEvidence"></div><button id="applySeasonalConversion" type="button" data-i18n="use_this_month_s">Use this month’s training-season hotel-use assumption</button><p id="conversionStatus" role="status" class="planning-note"></p></details>
          <details class="content-block secondary-detail"><summary data-i18n="how_well_does_the">How well does the comparison-market method reconstruct known flight assumptions?</summary><div id="peerValidation"></div></details>
@@ -301,9 +361,12 @@
      <div class="team-rail-grip" role="slider" tabindex="0" aria-label="Vertical position of team shortcuts" aria-orientation="vertical" aria-valuemin="0" aria-valuemax="100" aria-valuenow="50" title="Drag up or down to move shortcuts" data-i18n-aria-label="vertical_position_of_team" data-i18n-title="drag_up_or_down">
        <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><circle cx="6" cy="4" r="1"/><circle cx="10" cy="4" r="1"/><circle cx="6" cy="8" r="1"/><circle cx="10" cy="8" r="1"/><circle cx="6" cy="12" r="1"/><circle cx="10" cy="12" r="1"/></svg>
      </div>
+     <button type="button" id="toggleProposalPanel" class="team-action-button" aria-label="Actions" title="Actions" aria-controls="proposalWorkspace" disabled data-i18n-aria-label="actions" data-i18n-title="actions">
+       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7.5v5"/><circle cx="12" cy="16" r="1" fill="currentColor" stroke="none"/></svg>
+       <span class="team-count" data-pw-drawer-count aria-hidden="true" hidden></span>
+     </button>
      <button type="button" data-team-open="tasks" aria-label="Tasks" title="Tasks" data-i18n-aria-label="tasks" data-i18n-title="tasks"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="5" y="5" width="14" height="16" rx="2"/><path d="M9 5V3h6v2m-7 9 3 3 5-5"/></svg></button>
      <button type="button" data-team-open="messages" aria-label="Messages" title="Messages" data-i18n-aria-label="messages" data-i18n-title="messages"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M4 5h16v11H9l-5 3z"/><path d="M8 9h8m-8 3h5"/></svg></button>
-     <button type="button" data-team-open="notifications" aria-label="Notifications" title="Notifications" data-i18n-aria-label="notifications" data-i18n-title="notifications"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9m-8 12a2 2 0 0 0 4 0"/></svg></button>
      <button type="button" data-team-open="stats" aria-label="Statistics" title="Statistics" data-i18n-aria-label="statistics" data-i18n-title="statistics"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M4 4v16h16M8 16v-4m5 4V7m5 9V9"/></svg></button>
    </nav>
    <button type="button" id="helpChatBubble" class="help-chat-bubble" data-assistant-open aria-label="Open the Air2Stay assistant" title="Ask Air2Stay · Drag to move" aria-description="Drag or use the arrow keys to move. Press Home to reset the position." aria-controls="helpChat" aria-expanded="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 5h16v11H9l-5 3z"/><path d="m12 7.6.8 1.7 1.7.8-1.7.8-.8 1.7-.8-1.7-1.7-.8 1.7-.8z" fill="currentColor" stroke-width="1"/></svg></button>

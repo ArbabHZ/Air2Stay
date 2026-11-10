@@ -195,31 +195,48 @@ await events.get('click')({ target: { closest: () => ({ dataset: { pwAction: 'ba
 fileUi.dispose();
 assert.deepEqual(revoked, ['blob:proposal-test-1', 'blob:proposal-test-2', 'blob:proposal-test-3', 'blob:proposal-test-4', 'blob:proposal-test-5'], 'Disposal releases the remaining download URL');
 console.log('Proposal workspace checks passed: immutable snapshots, exact restoration, route/month isolation, persistence, RAG evidence, overdue/stale checks, drafts, bounds and failure handling.');
-// Rail actions must operate on the same proposal records and exact context.
-const railEvents=new Map();
-const rail={innerHTML:'',addEventListener:(type,fn)=>railEvents.set(type,fn),querySelector:()=>({addEventListener(){}})};
-const railMount=testMount();let workspaceOpens=0;
+// The toolbar shortcut and checklist share the same proposal and exact context.
+const shortcutEvents = new Map();
+const shortcutAttributes = new Map();
+const shortcutBadge = {};
+const launcher = {
+  querySelector: () => shortcutBadge,
+  addEventListener: (type, handler) => shortcutEvents.set(type, handler),
+  setAttribute: (name, value) => shortcutAttributes.set(name, value),
+  removeAttribute: (name) => shortcutAttributes.delete(name),
+  classList: { toggle() {} },
+};
+const rail = { innerHTML: '' };
+const checklistMount = testMount();
+let workspaceOpens = 0;
 const workspaceEvents = new Map();
-railMount.addEventListener = (type, handler) => workspaceEvents.set(type, handler);
-const railUi=createProposalWorkspace({mount:railMount,rail,onOpenWorkspace:()=>workspaceOpens++});
-railUi.update(ctx);
-assert.match(rail.innerHTML,/Priority actions/);
-assert.doesNotMatch(rail.innerHTML,/Communications/);
-assert.equal((rail.innerHTML.match(/>Review<\/button>/g) || []).length, 3);
-assert.match(rail.innerHTML,/France · December/);
-railEvents.get('click')({target:{closest:selector=>selector==='[data-pw-rail="review"]'?{dataset:{check:'demand'}}:null}});
-assert.equal(workspaceOpens,1,'Review opens the connected workspace');
-assert.match(rail.innerHTML,/pw-selected/);
-assert.match(railMount.innerHTML,/data-pw-selected-check/);
-assert.match(railMount.innerHTML,/<summary>Draft email<\/summary>/);
+checklistMount.addEventListener = (type, handler) => workspaceEvents.set(type, handler);
+const checklistUi = createProposalWorkspace({ mount: checklistMount, rail, launcher, onOpenWorkspace: () => workspaceOpens++ });
+checklistUi.update(ctx);
+assert.equal(rail.innerHTML, '', 'There is no separate priority drawer');
+assert.doesNotMatch(checklistMount.innerHTML, /Communications/);
+assert.equal((checklistMount.innerHTML.match(/data-pw-check="/g) || []).length, 3);
+assert.equal((checklistMount.innerHTML.match(/pw-check-status-amber[^>]*>.*?To check<\/span>/g) || []).length, 3);
+assert.match(checklistMount.innerHTML, /France · December/);
+shortcutEvents.get('click')();
+assert.equal(workspaceOpens, 1, 'Actions opens the connected checklist');
+assert.equal(shortcutAttributes.get('aria-controls'), 'proposalWorkspace');
+assert.equal(shortcutBadge.textContent, '3');
+await workspaceEvents.get('click')({ target: { closest: () => ({ dataset: { pwAction: 'add-task', check: 'demand' } }) } });
+assert.match(checklistMount.innerHTML, /data-pw-check="demand" data-pw-selected-check/);
+assert.match(checklistMount.innerHTML, /data-check="demand" aria-expanded="true"/, 'Start expands the matching inline form');
+assert.match(checklistMount.innerHTML, /pw-check-status-blue[^>]*>.*?Confirming<\/span>/);
+assert.match(checklistMount.innerHTML, /data-pw-form="task-update"/);
+assert.match(checklistMount.innerHTML, /<summary>Draft email<\/summary>/);
 await workspaceEvents.get('click')({ target: { closest: () => ({ dataset: { pwAction: 'draft' } }) } });
-assert.match(railMount.innerHTML,/Airline planning inquiry/);
-assert.match(railMount.innerHTML,/Check in focus: Confirm the flight demand/,'Draft retains the selected check as well as current numbers');
-assert.match(railMount.innerHTML,/Nothing has been sent/);
-railUi.update(india);
-assert.match(rail.innerHTML,/India · December/);
-assert.ok(!railMount.innerHTML.includes('Airline planning inquiry'),'Changing route clears the older stakeholder draft');
-railUi.update(null);
-assert.match(rail.innerHTML,/Correct the plan inputs/);
-assert.ok(!rail.innerHTML.includes('France'),'Invalid input cannot show old-route priorities');
-console.log('Priority rail checks passed: review navigation, contextual stakeholder drafts, route changes and invalid-state isolation.');
+assert.match(checklistMount.innerHTML, /Airline planning inquiry/);
+assert.match(checklistMount.innerHTML, /Check in focus: Confirm the flight demand/, 'Draft retains the selected check as well as current numbers');
+assert.match(checklistMount.innerHTML, /Nothing has been sent/);
+checklistUi.update(india);
+assert.match(checklistMount.innerHTML, /India · December/);
+assert.ok(!checklistMount.innerHTML.includes('Airline planning inquiry'), 'Changing route clears the older stakeholder draft');
+checklistUi.update(null);
+assert.match(checklistMount.innerHTML, /Choose a valid plan/);
+assert.equal(launcher.disabled, true);
+assert.ok(!checklistMount.innerHTML.includes('France'), 'Invalid input cannot show old-route priorities');
+console.log('Checklist checks passed: status pills, inline opening, Actions navigation, contextual stakeholder drafts, route changes and invalid-state isolation.');

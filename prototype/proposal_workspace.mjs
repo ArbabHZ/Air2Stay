@@ -14,7 +14,29 @@ const CHECK_DISPLAY = {
   visitors: { title: 'Visitor mix', why: 'Check who is likely to travel so the visitor estimates reflect this route.', icon: 'M12 5a3 3 0 1 1-6 0 3 3 0 0 1 6 0ZM3 16v-2a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v2m0-6a3 3 0 0 1 3 3v2' },
   event: { title: 'Event demand', why: 'Check whether the event is likely to bring in the extra visitors assumed in the plan.', icon: 'M4 5h12v12H4zM4 8h12M7 3v4m6-4v4' },
 };
-const CHECK_STATUS = { red: 'Overdue', amber: 'To check', green: 'Done' };
+const CHECK_STATUS = { red: 'Overdue', amber: 'To check', blue: 'Confirming', green: 'Done' };
+const CHECKLIST_AR = {
+  'Work through each check below before acting on this proposal.': 'استكمل عمليات التحقق أدناه قبل اتخاذ إجراء بشأن هذا المقترح.',
+  'More actions': 'مزيد من الإجراءات',
+  'Saved versions': 'النسخ المحفوظة',
+  'Start': 'ابدأ',
+  'Update': 'تحديث',
+  'Close': 'إغلاق',
+  'Confirming': 'قيد التحقق',
+  'What to confirm': 'ما المطلوب تأكيده',
+  'Who': 'جهة التواصل',
+  'By when': 'الموعد النهائي',
+  'Who confirmed this, and what did they say?': 'من أكّد هذه المعلومات، وماذا أفاد؟',
+  'Mark done': 'تحديد كمكتمل',
+  'Show history': 'عرض السجل',
+  'Saved task': 'المهمة المحفوظة',
+  'No updates yet.': 'لا توجد تحديثات بعد.',
+  'Check expected bookings, aircraft seats, flight occupancy and passengers ending their journey in Abu Dhabi.': 'تحقّق من الحجوزات المتوقعة وسعة الطائرات ونسبة إشغالها وحصة الركاب الذين تنتهي رحلتهم في أبوظبي.',
+  'Check the share choosing hotels, stay length and available capacity for this month. Guest nights are not room nights.': 'تحقّق من حصة المقيمين في الفنادق ومدة الإقامة والسعة المتاحة لهذا الشهر، مع التمييز بين ليالي النزلاء وليالي الغرف.',
+  'Check the assumed visitor mix, trip purpose and returning-resident share against suitable records.': 'قارن توزيع الزوار المفترض وأغراض السفر ونسبة المقيمين العائدين بالسجلات المناسبة.',
+  'Check event dates, expected attendance and hotel demand. This uplift is a planner assumption, not a measured event effect.': 'تحقّق من مواعيد الفعالية والحضور المتوقع والطلب الفندقي، فالزيادة المفترضة تقدير تخطيطي.',
+  'Follow up on this action and record the response.': 'تابع هذا الإجراء وسجّل الرد.',
+};
 const TASK_STATUS = { open: 'Open', waiting: 'Waiting', verified: 'Done' };
 const clone = (value) => JSON.parse(JSON.stringify(value));
 const escape = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
@@ -32,6 +54,11 @@ function stable(value) {
 }
 function localDate(date) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+function validateDueDate(value) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value) || !Number.isFinite(Date.parse(`${value}T12:00:00`)) || new Date(`${value}T12:00:00`).getDate() !== Number(value.slice(-2))) {
+    throw new Error('Choose a valid due date.');
+  }
 }
 function proposalKey(inputs) {
   return `${String(inputs.originKey || '').trim().toUpperCase()}::${Number(inputs.month)}`;
@@ -121,11 +148,12 @@ function createProposalStore(storage, clock = () => new Date()) {
       if (![...CHECKS.map((check) => check.id), 'event', 'general'].includes(fields.check)) throw new Error('Choose a valid check.');
       const title = text(fields.title, 300, 'an action');
       const owner = text(fields.owner, 100, 'an owner or team');
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(fields.dueDate) || !Number.isFinite(Date.parse(`${fields.dueDate}T12:00:00`)) || new Date(`${fields.dueDate}T12:00:00`).getDate() !== Number(fields.dueDate.slice(-2))) throw new Error('Choose a valid due date.');
+      validateDueDate(fields.dueDate);
       const entry = { ...record(context), check: fields.check, title, owner, dueDate: fields.dueDate, status: 'open', evidence: '', updates: [] };
       return mutate(proposalKey(context.inputs), 'tasks', (proposal) => { proposal.tasks.push(entry); return entry; });
     },
-    updateTask(context, id, status, evidence) {
+    updateTask(context, id, status, evidence, dueDate) {
+      if (dueDate !== undefined) validateDueDate(dueDate);
       if (!['open', 'waiting', 'verified'].includes(status)) throw new Error('Choose a valid action status.');
       const note = String(evidence || '').trim();
       if (note.length > 3000) throw new Error('Evidence must be 3,000 characters or fewer.');
@@ -136,6 +164,7 @@ function createProposalStore(storage, clock = () => new Date()) {
         if (task.updates.length >= 40) throw new Error('This action has reached its update limit. Add a new action to continue its record.');
         const update = { ...record(context), status, evidence: note };
         task.updates.push(update);
+        if (dueDate !== undefined) task.dueDate = dueDate;
         Object.assign(task, { status, evidence: note, updatedAt: update.createdAt, verifiedFingerprint: status === 'verified' ? update.fingerprint : null });
         return task;
       });
@@ -225,23 +254,24 @@ function createProposalWorkspace({ mount, rail = null, launcher = null, onOpenWo
   let messageIsError = false;
   let draftKind = 'airline';
   let selectedCheck = null;
-  let drawerOpen = false;
+  let openCheck = null;
+  const activeTasks = new Map();
   const openTools = new Set();
-  function closeDrawer(restoreFocus=true) {
-    drawerOpen=false;
-    rail?.querySelector('dialog')?.close?.();
-    launcher?.setAttribute('aria-expanded','false');
-    if(restoreFocus)launcher?.focus({preventScroll:true});
+  const copy = (text) => doc.documentElement?.lang === 'ar' ? CHECKLIST_AR[text] || text : text;
+  const rowButton = (id) => [...mount.querySelectorAll('[data-pw-action="add-task"]')].find((button) => button.dataset.check === id);
+  function openChecklist() {
+    if (!current()?.result) return;
+    onOpenWorkspace?.();
+    const recommended = priorityActions(current(), store.get(proposalKey(current().inputs))).recommended;
+    const target = (recommended && rowButton(recommended.id)) || mount.querySelector('#pwChecksHeading');
+    target?.scrollIntoView?.({ block: 'center' });
+    target?.focus?.({ preventScroll: true });
   }
-  function openDrawer() {
-    if(!current()?.result)return;
-    drawerOpen=true;
-    const dialog=rail?.querySelector('dialog');
-    if(!dialog?.open)dialog?.showModal?.();
-    launcher?.setAttribute('aria-expanded','true');
-  }
-  const toggleDrawer=()=>{if(drawerOpen)closeDrawer();else openDrawer();};
-  launcher?.addEventListener('click',toggleDrawer);
+  if (rail) rail.innerHTML = '';
+  launcher?.removeAttribute('aria-haspopup');
+  launcher?.removeAttribute('aria-expanded');
+  launcher?.setAttribute('aria-controls', 'proposalWorkspace');
+  launcher?.addEventListener('click', openChecklist);
   let generatedDraft = null;
   let downloadReady = null;
   const draftValues = new Map();
@@ -254,178 +284,123 @@ function createProposalWorkspace({ mount, rail = null, launcher = null, onOpenWo
   function current() { return context; }
   function preserveDrafts() {
     if (!lastKey) return;
-    for (const field of mount.querySelectorAll('form [name]')) draftValues.set(`${lastKey}:${field.form.dataset.pwForm}:${field.form.dataset.id || ''}:${field.name}`, field.value);
+    for (const field of mount.querySelectorAll('form :is(input, select, textarea)[name]')) draftValues.set(`${lastKey}:${field.form.dataset.pwForm}:${field.form.dataset.id || ''}:${field.name}`, field.value);
     openTools.clear();
     for (const tool of mount.querySelectorAll('[data-pw-tool][open]')) openTools.add(tool.dataset.pwTool);
     const draft = mount.querySelector('[data-pw-draft]');
     if (draft && generatedDraft) generatedDraft.text = draft.value;
   }
   function restoreDrafts(key) {
-    for (const field of mount.querySelectorAll('form [name]')) {
+    for (const field of mount.querySelectorAll('form :is(input, select, textarea)[name]')) {
       const value = draftValues.get(`${key}:${field.form.dataset.pwForm}:${field.form.dataset.id || ''}:${field.name}`);
       if (value !== undefined) field.value = value;
     }
   }
   function forgetForm(form, key) {
-    for (const field of form.querySelectorAll('[name]')) draftValues.delete(`${key}:${form.dataset.pwForm}:${form.dataset.id || ''}:${field.name}`);
+    for (const field of form.querySelectorAll(':is(input, select, textarea)[name]')) draftValues.delete(`${key}:${form.dataset.pwForm}:${form.dataset.id || ''}:${field.name}`);
   }
-  function checkStatus(status, dotOnly = false) {
-    const label = CHECK_STATUS[status];
-    const attributes = dotOnly ? ` role="img" aria-label="${label}" title="${label}"` : '';
-    return `<span class="pw-check-status pw-check-status-${status}"${attributes}><span class="pw-status-dot" aria-hidden="true"></span>${dotOnly ? '' : label}</span>`;
+  function checkStatus(status) {
+    return `<span class="pw-check-status pw-check-status-${status}"><span class="pw-status-dot" aria-hidden="true"></span>${escape(copy(CHECK_STATUS[status]))}</span>`;
   }
 
-  function renderRail(ctx, priority) {
-    const pending = priority.rows.filter(row => row.status !== 'green').length;
-    if (launcher) {
-      const count = launcher.querySelector('[data-pw-drawer-count]');
-      launcher.disabled = false;
-      launcher.classList.toggle('is-urgent', priority.rows.some(row => row.status === 'red'));
-      count.textContent = String(pending);
-      count.hidden = false;
-      const label = `Actions · ${pending} ${pending === 1 ? 'check needs' : 'checks need'} attention`;
-      launcher.setAttribute('aria-label', label);
-      launcher.setAttribute('title', label);
-    }
-    if (!rail) return;
-    const first = priority.recommended;
-    const rows = first ? [first, ...priority.rows.filter(row => row.id !== first.id)] : priority.rows;
-    rail.innerHTML = `<dialog id="proposalDrawer" class="pw-drawer pw-simple-drawer" aria-labelledby="pwDrawerTitle" aria-describedby="pwDrawerContext">
-      <header class="pw-drawer-header">
-        <div><h2 id="pwDrawerTitle">Priority actions</h2><p id="pwDrawerContext" class="pw-rail-context">${escape(ctx.result.route.origin)} · ${escape(monthName(ctx.inputs.month))}</p></div>
-        <button type="button" class="pw-drawer-close" data-pw-drawer-close aria-label="Close actions panel"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
-      </header>
-      <ul class="pw-rail-body pw-simple-list">${rows.map(row => {
-        const display = CHECK_DISPLAY[row.id];
-        const title = escape(display?.title || row.title);
-        return `<li class="pw-simple-row${selectedCheck === row.id ? ' pw-selected' : ''}">
-          <svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${display?.icon || 'M4 10l4 4 8-8'}"/></svg>
-          <span class="pw-simple-title">${title}</span>
-          ${checkStatus(row.status, true)}
-          <button type="button" data-pw-rail="review" data-check="${escape(row.id)}" aria-label="Review ${title}">Review</button>
-        </li>`;
-      }).join('')}</ul>
-    </dialog>`;
-    const dialog = rail.querySelector('dialog');
-    dialog.addEventListener('cancel', event => { event.preventDefault(); closeDrawer(); });
-    dialog.addEventListener('click', event => {
-      if (event.target !== dialog) return;
-      const bounds = dialog.getBoundingClientRect();
-      if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) closeDrawer();
-    });
-    if (drawerOpen) openDrawer();
+  function updateLauncher(priority) {
+    if (!launcher) return;
+    const count = launcher.querySelector('[data-pw-drawer-count]');
+    launcher.disabled = !priority;
+    const pending = priority?.rows.filter((row) => row.status !== 'green').length ?? 0;
+    launcher.setAttribute('data-action-level', pending > 2 ? 'high' : pending ? 'pending' : 'clear');
+    count.textContent = String(pending);
+    count.hidden = !pending;
+    const label = priority ? `Actions · ${pending} ${pending === 1 ? 'check needs' : 'checks need'} attention` : 'Actions unavailable: correct the plan inputs';
+    launcher.setAttribute('aria-label', label);
+    launcher.setAttribute('title', label);
   }
 
-  function reveal(selector) {
-    closeDrawer(false);
-    onOpenWorkspace?.();
-    const target=mount.querySelector(selector);
-    if (!target) return;
-    for(let parent=target.closest('details');parent;parent=parent.parentElement?.closest('details')) parent.open=true;
-    target.scrollIntoView({block:'start',behavior:'instant'});
-    target.focus?.({preventScroll:true});
+  function renderCheck(row, tasks, fingerprint) {
+    const display = CHECK_DISPLAY[row.id];
+    const isCurrent = (task) => task.status === 'verified' && task.verifiedFingerprint === fingerprint && task.evidence;
+    const outstanding = tasks.filter((task) => !isCurrent(task));
+    const task = tasks.find((item) => item.id === activeTasks.get(row.id)) ||
+      outstanding.find((item) => item.dueDate < localDate(new Date())) || outstanding[0] || tasks[0];
+    const status = row.status === 'amber' && task ? 'blue' : row.status;
+    const expanded = openCheck === row.id;
+    const panelId = `pwCheck-${row.id}`;
+    const buttonText = expanded ? 'Close' : task ? 'Update' : 'Start';
+    const taskPicker = tasks.length > 1 ? `<label class="pw-check-task-picker">${copy('Saved task')}<select data-pw-task-choice="${escape(row.id)}">
+      ${tasks.map((item) => `<option value="${escape(item.id)}"${item.id === task.id ? ' selected' : ''}>${escape(item.title)} · ${escape(item.dueDate)}</option>`).join('')}
+    </select></label>` : '';
+    const stale = task?.status === 'verified' && !isCurrent(task);
+    const history = task?.updates.slice().reverse().map((update) => `<li><small>${escape(displayDate(update.createdAt))} · ${escape(TASK_STATUS[update.status] || update.status)}</small><p>${escape(update.evidence || 'No notes added.')}</p></li>`).join('');
+    return `<article class="pw-check-row" data-pw-check="${escape(row.id)}"${selectedCheck === row.id ? ' data-pw-selected-check' : ''}>
+      <div class="pw-check-row-header">
+        <svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${display?.icon || 'M4 10l4 4 8-8'}"/></svg>
+        <div class="pw-check-copy"><h3>${escape(display?.title || row.title)}</h3><p>${escape(display?.why || row.ask)}</p></div>
+        ${checkStatus(status)}
+        <button type="button" class="secondary-button pw-check-toggle" data-pw-action="add-task" data-check="${escape(row.id)}" aria-expanded="${expanded}" aria-controls="${escape(panelId)}">${copy(buttonText)}</button>
+      </div>
+      <div class="pw-check-body" id="${escape(panelId)}"${expanded ? '' : ' hidden'}>
+        <p><strong>${copy('What to confirm')}</strong> · ${escape(copy(row.ask))}</p>
+        ${task ? `${taskPicker}
+        ${stale ? '<p class="pw-recheck">Plan changed · Review this again</p>' : ''}
+        <form data-pw-form="task-update" data-id="${escape(task.id)}">
+          <div class="pw-check-fields">
+            <div><strong>${copy('Who')}</strong><p>${escape(task.owner)}</p></div>
+            <label>${copy('By when')}<input name="dueDate" type="date" value="${escape(task.dueDate)}" required></label>
+          </div>
+          <label>Notes<textarea name="evidence" maxlength="3000" rows="3" placeholder="${escape(copy('Who confirmed this, and what did they say?'))}">${escape(task.evidence)}</textarea></label>
+          <div class="pw-check-buttons">
+            <button type="submit" class="pw-mark-done" name="intent" value="done">${copy('Mark done')}</button>
+            <button type="submit" class="secondary-button pw-save-note" name="intent" value="note">Save note</button>
+          </div>
+        </form>
+        <details class="pw-check-history" data-pw-tool="task-history:${escape(task.id)}"${openTools.has(`task-history:${task.id}`) ? ' open' : ''}>
+          <summary>${copy('Show history')} (${task.updates.length})</summary>
+          <ol class="pw-history">${history || `<li>${copy('No updates yet.')}</li>`}</ol>
+        </details>` : ''}
+      </div>
+    </article>`;
   }
-  rail?.addEventListener('click', event => {
-    if (event.target.closest('[data-pw-drawer-close]')) { closeDrawer(); return; }
-    const button = event.target.closest('[data-pw-rail="review"]');
-    if (!button || !current()?.result) return;
-    preserveDrafts();
-    selectedCheck = button.dataset.check;
-    closeDrawer(false);
-    render();
-    reveal('[data-pw-selected-check] h4, .pw-task[data-pw-related] h4');
-  });
-  rail?.addEventListener('keydown', event => {
-    if (event.key === 'Escape' && drawerOpen) event.stopPropagation();
-  });
 
   function render() {
     const ctx = current();
-    if (!ctx?.inputs || !ctx?.result) {closeDrawer(false);if(launcher){launcher.disabled=true;launcher.classList.remove('is-urgent');launcher.querySelector('[data-pw-drawer-count]').hidden=true;launcher.setAttribute('aria-label','Actions unavailable: correct the plan inputs');launcher.setAttribute('title','Actions unavailable: correct the plan inputs');} mount.innerHTML = '<p class="control-note">Choose a valid plan to see its proposal workspace.</p>'; if(rail)rail.innerHTML='<p class="control-note">Correct the plan inputs to see priority actions and communications.</p>'; return; }
+    if (!ctx?.inputs || !ctx?.result) {
+      updateLauncher(null);
+      mount.innerHTML = '<p class="control-note">Choose a valid plan to see its proposal workspace.</p>';
+      return;
+    }
     const key = proposalKey(ctx.inputs);
     if (key !== lastKey) {
       selectedCheck = null;
+      openCheck = null;
+      activeTasks.clear();
       openTools.clear();
     }
     const fingerprint = proposalFingerprint(ctx);
     const proposal = store.get(key);
     const priority = priorityActions(ctx, proposal);
-    if(selectedCheck && !priority.rows.some(row=>row.id===selectedCheck))selectedCheck=null;
+    if (!priority.rows.some((row) => row.id === selectedCheck)) selectedCheck = null;
+    if (!priority.rows.some((row) => row.id === openCheck)) openCheck = null;
     const currentPlan = `${ctx.result.route.origin || ctx.inputs.originKey} · ${monthName(ctx.inputs.month)}`;
-    const checkHtml = priority.rows.filter(row => !row.id.startsWith('task:')).map(row => {
-      const display = CHECK_DISPLAY[row.id];
-      const recommended = row.id === priority.recommended?.id;
-      const selected = row.id === selectedCheck;
-      return `<article class="pw-check pw-check-${row.status}${recommended ? ' pw-recommendation' : ''}" ${selected ? 'data-pw-selected-check' : ''}>
-        ${recommended ? '<p class="pw-start-here">Start here</p>' : ''}
-        <div class="pw-check-heading"><h4 tabindex="-1">${escape(display.title)}</h4>${checkStatus(row.status)}</div>
-        <p>${escape(display.why)}</p>
-        <button type="button" data-pw-action="add-task" data-check="${escape(row.id)}" aria-label="Add task for ${escape(display.title)}">Add task</button>
-      </article>`;
-    }).join('');
-    const relatedTasks = priority.rows.find(row => row.id === selectedCheck)?.tasks || [];
-    const taskHtml = proposal.tasks.slice().reverse().map(task => {
-      const stale = task.status === 'verified' && task.verifiedFingerprint !== fingerprint;
-      const status = stale ? 'open' : task.status;
-      const overdue = task.dueDate < localDate(new Date()) && status !== 'verified';
-      const check = CHECK_DISPLAY[task.check]?.title;
-      const startHere = priority.recommended?.id === `task:${task.id}`;
-      const options = Object.entries(TASK_STATUS).map(([value, label]) => `<option value="${value}"${status === value ? ' selected' : ''}>${label}</option>`).join('');
-      return `<article class="pw-task" ${relatedTasks.includes(task.id) ? 'data-pw-related' : ''}>
-        ${startHere ? '<p class="pw-start-here">Start here</p>' : ''}
-        <h4 tabindex="-1" id="pwTask-${escape(task.id)}">${escape(task.title)}</h4>
-        <p class="pw-task-meta">${check ? `${escape(check)} · ` : ''}${escape(task.owner)} · Due <time datetime="${escape(task.dueDate)}">${escape(task.dueDate)}</time>
-          ${overdue ? checkStatus('red') : ''}${stale ? '<span class="pw-recheck">Plan changed · Review this again</span>' : ''}
-        </p>
-        <form data-pw-form="task-update" data-id="${escape(task.id)}">
-          <label>Status<select name="status">${options}</select></label>
-          <label>Notes<textarea name="evidence" maxlength="3000" rows="2" placeholder="To mark Done, add who confirmed what, and when.">${escape(task.evidence)}</textarea></label>
-          <button type="submit" class="secondary-button">Save</button>
-        </form>
-        ${task.updates.length ? `<details><summary>Task history (${task.updates.length})</summary><ol class="pw-history">${task.updates.slice().reverse().map(row => `<li>${escape(displayDate(row.createdAt))} · ${escape(TASK_STATUS[row.status] || row.status)}<p>${escape(row.evidence || 'No notes added.')}</p></li>`).join('')}</ol></details>` : ''}
-      </article>`;
-    }).join('');
+    const checkHtml = priority.rows.map((row) => renderCheck(row, proposal.tasks.filter((task) => row.tasks.includes(task.id)), fingerprint)).join('');
     const tool = (name) => openTools.has(name) ? ' open' : '';
     const historyHtml = proposal.versions.slice().reverse().map((version) => `<li><div class="pw-item-heading"><strong>${escape(version.name)}</strong><span>${escape(displayDate(version.createdAt))}</span></div><p>${version.fingerprint === fingerprint ? 'Matches the current assumptions.' : 'Saved assumptions differ from the current plan.'} Estimated guest nights: ${fmt(version.result?.scenario?.guestNights)}.</p><details><summary>Saved assumptions</summary><dl class="pw-assumptions">${Object.entries(version.inputs).filter(([key, value]) => INPUT_LABELS[key] && value != null && value !== '').map(([key, value]) => `<div><dt>${escape(INPUT_LABELS[key])}</dt><dd>${escape(['loadFactor', 'p2pShare', 'conversionRate', 'eventUplift'].includes(key) ? pct(value) : typeof value === 'boolean' ? value ? 'Yes' : 'No' : value)}</dd></div>`).join('')}</dl><p class="control-note">The snapshot also retains the visitor mix and comparison-country details for loading this version and downloading history.</p></details><button type="button" class="secondary-button" data-pw-action="restore" data-id="${escape(version.id)}">Load this version</button></li>`).join('');
     mount.innerHTML = `<div class="pw-heading">
-      <div><h2>Follow-ups</h2><p>${escape(currentPlan)}</p></div>
-      <span class="pw-local">Saved in this browser</span>
+      <div><h2 id="pwChecksHeading" tabindex="-1">Follow-ups</h2><p class="pw-plan-context">${escape(currentPlan)}</p></div>
+      <details class="pw-more-actions" data-pw-tool="more"${tool('more')}>
+        <summary>${copy('More actions')}</summary>
+        <div class="pw-more-menu">
+          <button type="button" data-pw-action="tool" data-tool="email">Draft email</button>
+          <button type="button" data-pw-action="tool" data-tool="decision">Log decision</button>
+          <button type="button" data-pw-action="tool" data-tool="history">${copy('Saved versions')}</button>
+        </div>
+      </details>
     </div>
+    <p class="pw-checklist-helper">${copy('Work through each check below before acting on this proposal.')}</p>
     ${store.warning ? `<p class="pw-warning" role="alert">${escape(store.warning)}</p>` : ''}
     <p class="pw-message ${messageIsError ? 'pw-warning' : ''}" role="status" aria-live="polite">${escape(message)}</p>
-    <div class="pw-followup-grid">
-      <section class="pw-priorities" aria-labelledby="pwChecksHeading">
-        <h3 id="pwChecksHeading">What needs checking</h3>
-        <div class="pw-check-list">${checkHtml}</div>
-      </section>
-      <section class="pw-your-tasks" aria-labelledby="pwTasksHeading">
-        <h3 id="pwTasksHeading">Your tasks</h3>
-        <details class="pw-task-editor" data-pw-tool="task"${tool('task')}>
-          <summary>New task</summary>
-          <form class="pw-form-grid" data-pw-form="task">
-            <label>Check<select name="check">
-              ${CHECKS.map(check => `<option value="${check.id}">${escape(CHECK_DISPLAY[check.id].title)}</option>`).join('')}
-              <option value="event">Event demand</option><option value="general">Other follow-up</option>
-            </select></label>
-            <label>Task<input name="title" required maxlength="300" placeholder="What needs confirming?"></label>
-            <label>Owner or team<input name="owner" required maxlength="100" placeholder="For example, hotel team"></label>
-            <label>Due date<input name="dueDate" type="date" required></label>
-            <button type="submit">Add task</button>
-          </form>
-        </details>
-        <div class="pw-task-list">${taskHtml || '<p class="pw-empty">No tasks yet. Choose <strong>Add task</strong> on a check to get started.</p>'}</div>
-      </section>
-    </div>
+    <section class="pw-check-list" aria-labelledby="pwChecksHeading">${checkHtml}</section>
+    <p class="pw-local">Saved in this browser</p>
     <div class="pw-tools" aria-label="More follow-up tools">
-      <details class="pw-discussion" data-pw-tool="note"${tool('note')}>
-        <summary>Add note</summary>
-        <form data-pw-form="comment">
-          <label>Note<textarea name="text" required maxlength="3000" rows="3" placeholder="Record a question, reply or useful detail"></textarea></label>
-          <button type="submit">Save note</button>
-        </form>
-        <ol class="pw-history">${proposal.comments.slice().reverse().map(entry => `<li><small>${escape(displayDate(entry.createdAt))} · ${entry.fingerprint === fingerprint ? 'Current plan' : 'Earlier plan'}</small><p>${escape(entry.text)}</p></li>`).join('') || '<li>No notes yet.</li>'}</ol>
-        ${chatEnabled && proposal.discussions.length ? `<details><summary>Planning chat history (${proposal.discussions.length})</summary><ol class="pw-history">${proposal.discussions.slice().reverse().map(entry => `<li><strong>${entry.role === 'user' ? 'You' : 'Air2Stay'}</strong> <small>· ${escape(displayDate(entry.createdAt))} · ${entry.fingerprint === fingerprint ? 'Current plan' : 'Earlier plan'}</small><p>${escape(entry.text)}</p></li>`).join('')}</ol></details>` : ''}
-      </details>
       <details class="pw-drafts" data-pw-tool="email"${tool('email')}>
         <summary>Draft email</summary>
         <p class="pw-task-meta">Review the draft, then copy it into your email app to send.</p>
@@ -454,6 +429,28 @@ function createProposalWorkspace({ mount, rail = null, launcher = null, onOpenWo
         </form>
         <ol class="pw-history">${historyHtml || '<li>No versions saved for this plan yet.</li>'}</ol>
         <button type="button" class="secondary-button" data-pw-action="backup">Download local history</button>
+      <details class="pw-discussion" data-pw-tool="note"${tool('note')}>
+        <summary>Add note</summary>
+        <form data-pw-form="comment">
+          <label>Note<textarea name="text" required maxlength="3000" rows="3" placeholder="Record a question, reply or useful detail"></textarea></label>
+          <button type="submit">Save note</button>
+        </form>
+        <ol class="pw-history">${proposal.comments.slice().reverse().map(entry => `<li><small>${escape(displayDate(entry.createdAt))} · ${entry.fingerprint === fingerprint ? 'Current plan' : 'Earlier plan'}</small><p>${escape(entry.text)}</p></li>`).join('') || '<li>No notes yet.</li>'}</ol>
+        ${chatEnabled && proposal.discussions.length ? `<details><summary>Planning chat history (${proposal.discussions.length})</summary><ol class="pw-history">${proposal.discussions.slice().reverse().map(entry => `<li><strong>${entry.role === 'user' ? 'You' : 'Air2Stay'}</strong> <small>· ${escape(displayDate(entry.createdAt))} · ${entry.fingerprint === fingerprint ? 'Current plan' : 'Earlier plan'}</small><p>${escape(entry.text)}</p></li>`).join('')}</ol></details>` : ''}
+      </details>
+        <details class="pw-task-editor" data-pw-tool="task"${tool('task')}>
+          <summary>New task</summary>
+          <form class="pw-form-grid" data-pw-form="task">
+            <label>Check<select name="check">
+              ${CHECKS.map(check => `<option value="${check.id}">${escape(CHECK_DISPLAY[check.id].title)}</option>`).join('')}
+              <option value="event">Event demand</option><option value="general">Other follow-up</option>
+            </select></label>
+            <label>Task<input name="title" required maxlength="300" placeholder="What needs confirming?"></label>
+            <label>Owner or team<input name="owner" required maxlength="100" placeholder="For example, hotel team"></label>
+            <label>Due date<input name="dueDate" type="date" required></label>
+            <button type="submit">Add task</button>
+          </form>
+        </details>
         <div id="pwRecommendationFeedback"></div>
       </details>
     </div>
@@ -461,7 +458,7 @@ function createProposalWorkspace({ mount, rail = null, launcher = null, onOpenWo
       ${downloadReady.historyText ? `<details><summary>View or copy history JSON</summary><label>History JSON<textarea readonly rows="8">${escape(downloadReady.historyText)}</textarea></label></details>` : ''}
     </div>` : ''}`;
     restoreDrafts(key);
-    renderRail(ctx, priority);
+    updateLauncher(priority);
     lastKey = key;
     lastFingerprint = fingerprint;
     try { onRecommendation?.(mount.querySelector('#pwRecommendationFeedback'), { context: ctx, recommended: priority.recommended, fingerprint }); } catch { /* Feedback should not interrupt proposal work. */ }
@@ -485,7 +482,7 @@ function createProposalWorkspace({ mount, rail = null, launcher = null, onOpenWo
     const ctx = current();
     const key = proposalKey(ctx.inputs);
     let savedTask = null;
-    const fields = Object.fromEntries([...form.querySelectorAll('[name]')].map((field) => [field.name, field.value]));
+    const fields = Object.fromEntries([...form.querySelectorAll('input[name], select[name], textarea[name]')].map((field) => [field.name, field.value]));
     preserveDrafts();
     try {
       const action = form.dataset.pwForm;
@@ -495,24 +492,37 @@ function createProposalWorkspace({ mount, rail = null, launcher = null, onOpenWo
       if (action === 'task') {
         savedTask = store.addTask(ctx, fields);
         openTools.delete('task');
+        const builtIn = priorityActions(ctx, store.get(key)).rows.some((row) => row.id === savedTask.check);
+        openCheck = selectedCheck = builtIn ? savedTask.check : `task:${savedTask.id}`;
+        activeTasks.set(openCheck, savedTask.id);
       }
-      if (action === 'task-update') savedTask = store.updateTask(ctx, form.dataset.id, fields.status, fields.evidence);
+      if (action === 'task-update') {
+        const task = store.get(key).tasks.find((row) => row.id === form.dataset.id);
+        const retainsEvidence = task?.status === 'verified' && task.verifiedFingerprint === proposalFingerprint(ctx) && fields.evidence.trim() === task.evidence;
+        const status = event.submitter?.value === 'done' || retainsEvidence ? 'verified' : 'waiting';
+        savedTask = store.updateTask(ctx, form.dataset.id, status, fields.evidence, fields.dueDate);
+      }
       forgetForm(form, key);
       notice(store.warning || (action === 'task' ? 'Task added.' : action === 'task-update' ? 'Task saved.' : 'Saved for this plan.'));
       emit(`proposal_${action}`);
     } catch (error) { notice(error.message, true); }
     render();
-    if (savedTask) {
-      const heading = doc.getElementById?.(`pwTask-${savedTask.id}`);
-      heading?.scrollIntoView({ block: 'nearest' });
-      heading?.focus({ preventScroll: true });
+    if (savedTask && openCheck) {
+      rowButton(openCheck)?.focus?.({ preventScroll: true });
     } else if (messageIsError) {
-      const status = mount.querySelector('.pw-message');
-      status?.scrollIntoView({ block: 'nearest' });
+      const field = form.dataset.pwForm === 'task-update' && mount.querySelector('.pw-check-body:not([hidden]) textarea');
+      field?.focus?.();
+      mount.querySelector('.pw-message')?.scrollIntoView?.({ block: 'nearest' });
     }
   });
   mount.addEventListener('change', (event) => {
     if (event.target.matches('[data-pw-draft-kind]')) { draftKind = event.target.value; generatedDraft = null; preserveDrafts(); render(); }
+    if (event.target.matches('[data-pw-task-choice]')) {
+      preserveDrafts();
+      activeTasks.set(event.target.dataset.pwTaskChoice, event.target.value);
+      render();
+      mount.querySelector('[data-pw-task-choice]')?.focus();
+    }
   });
   mount.addEventListener('click', async (event) => {
     const button = event.target.closest('[data-pw-action]');
@@ -550,28 +560,41 @@ function createProposalWorkspace({ mount, rail = null, launcher = null, onOpenWo
         generatedDraft = null;
         notice(`Loaded ${version.name}. The results have been recalculated using the app’s current data.`);
       }
+      if (action === 'tool') {
+        const name = button.dataset.tool;
+        for (const tool of ['more', 'email', 'decision', 'history']) openTools.delete(tool);
+        openTools.add(name);
+        render();
+        const heading = mount.querySelector(`[data-pw-tool="${name}"] > summary`);
+        heading?.scrollIntoView?.({ block: 'nearest' });
+        heading?.focus?.({ preventScroll: true });
+        return;
+      }
       if (action === 'add-task') {
-        const check = priorityActions(ctx, proposal).rows.find(row => row.id === button.dataset.check);
+        const check = priorityActions(ctx, proposal).rows.find((row) => row.id === button.dataset.check);
         if (!check) return;
         selectedCheck = check.id;
-        openTools.add('task');
-        render();
-        const editor = mount.querySelector('.pw-task-editor');
-        const form = editor.querySelector('form');
-        if (form.elements.check.value !== check.id || !form.elements.title.value) {
-          form.elements.check.value = check.id;
-          form.elements.title.value = check.title;
-          form.elements.owner.value = check.owner;
-          form.elements.dueDate.value = '';
+        openCheck = openCheck === check.id ? null : check.id;
+        if (!check.tasks.length) {
+          const dueDate = new Date();
+          dueDate.setDate(dueDate.getDate() + 7);
+          store.addTask(ctx, { check: check.id, title: check.title, owner: check.owner, dueDate: localDate(dueDate) });
+          notice(store.warning || '');
+          emit('proposal_task');
         }
-        editor.scrollIntoView({ block: 'nearest' });
-        form.elements.dueDate.focus({ preventScroll: true });
+        render();
+        const target = rowButton(check.id);
+        target?.scrollIntoView?.({ block: 'nearest' });
+        target?.focus?.({ preventScroll: true });
         return;
       }
       emit(`proposal_${action}`);
     } catch (error) { notice(error.message, true); }
     render();
   });
+  const languageObserver = doc.documentElement && doc.defaultView?.MutationObserver
+    ? new doc.defaultView.MutationObserver(() => { preserveDrafts(); render(); }) : null;
+  languageObserver?.observe(doc.documentElement, { attributeFilter: ['lang'] });
   return {
     update(nextContext) {
       preserveDrafts();
@@ -584,7 +607,7 @@ function createProposalWorkspace({ mount, rail = null, launcher = null, onOpenWo
         const changedRoute = proposalKey(context.inputs) !== lastKey;
         const hadDraft = !!generatedDraft;
         generatedDraft = null;
-        notice(changedRoute ? 'Showing notes for this country and month.' : hadDraft ? 'The plan changed. Prepare a new draft with the updated numbers.' : 'The plan changed. Earlier evidence must be checked against these assumptions.');
+        notice(changedRoute ? '' : hadDraft ? 'The plan changed. Prepare a new draft with the updated numbers.' : 'The plan changed. Earlier evidence must be checked against these assumptions.');
       }
       render();
     },
@@ -624,7 +647,8 @@ function createProposalWorkspace({ mount, rail = null, launcher = null, onOpenWo
     },
     exportLocalData() { return store.exportData(); },
     dispose() {
-      closeDrawer(false);launcher?.removeEventListener('click',toggleDrawer);
+      launcher?.removeEventListener('click', openChecklist);
+      languageObserver?.disconnect();
       if (downloadReady) doc.defaultView.URL.revokeObjectURL(downloadReady.url);
       downloadReady = null;
       mount.querySelector('#pwDownloadReady')?.closest('.pw-download-ready')?.remove();
