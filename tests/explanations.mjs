@@ -48,7 +48,19 @@ assert.match(nodes.get('#calculationExplanation').innerHTML, /ITALY supplies sta
 assert.match(nodes.get('#sideBySideComparison').innerHTML, /headline changes above compare the proposed route with zero/);
 const sum = data.validation.reduce((s,r)=>s+Math.abs(r.actual-r.transparent),0);
 assert.ok(nodes.get('#validationScope').innerHTML.includes(Math.round(sum).toLocaleString('en-US') + ' ÷ 1,550,679'));
-assert.match(nodes.get('#validationKpis').innerHTML, /Live default chain: weighted error/);
+const verifiedScores = nodes.get('#validationKpis').innerHTML;
+assert.match(verifiedScores, /Live default chain: weighted error/);
+const actual = data.validation.reduce((total, row) => total + row.actual, 0);
+for (const field of ['transparent', 'seasonal', 'predicted']) {
+  const errors = data.validation.reduce((total, row) => total + Math.abs(row.actual - row[field]), 0);
+  assert.ok(verifiedScores.includes((100 * errors / actual).toFixed(2) + '%'), field);
+}
+const reportedScores = nodes.get('#validationModelComparison').innerHTML;
+assert.match(reportedScores, /Reported scores without bundled records/);
+for (const score of ['10.42%', '13.93%', '11.3%']) {
+  assert.ok(reportedScores.includes(score));
+  assert.ok(!verifiedScores.includes(score));
+}
 assert.match(nodes.get('#validationScope').innerHTML, /Seasonal comparison/);
 assert.match(nodes.get('#validationScope').innerHTML, /does not test future flight schedules/);
 console.log(`PASS: ${cases} live explanation renderings, new-route context, and reproducible validation scores.`);

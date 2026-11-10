@@ -1002,7 +1002,12 @@ function changeVisitorShare(event) {
   $("#bridgeStatus").textContent = "Other shares adjust automatically. Check-ins, guest nights and the map update when you apply.";
 }
 
-function visitorOriginMap(rows, colors, flag) {
+function countryFlag(location) {
+  const code = location?.aliases?.find((alias) => /^[A-Z]{2}$/.test(alias)) || ({ France: "FR", Norway: "NO" })[location?.name];
+  return code ? [...code].map((letter) => String.fromCodePoint(127397 + letter.charCodeAt(0))).join("") : "";
+}
+
+function visitorOriginMap(rows, colors) {
   const point = projectMapPoint(54.3773, 24.4539);
   const hub = [point[0], point[1] + 85];
   const occupied = [{ x: hub[0] - 10, y: hub[1] + 10, width: 130, height: 35 }];
@@ -1019,7 +1024,7 @@ function visitorOriginMap(rows, colors, flag) {
       ? (1 - turningPoint) ** 2 * y + 2 * (1 - turningPoint) * turningPoint * controlY + turningPoint ** 2 * hub[1]
       : Math.min(y, hub[1]);
     const path = `M ${x} ${y} Q ${controlX} ${controlY} ${hub[0]} ${hub[1]}`;
-    const label = `${flag(location)} ${row.nationality}`;
+    const label = `${countryFlag(location) || "◈"} ${row.nationality}`;
     const width = Math.min(350, 28 + [...label].length * 8.2);
     let best = null;
     for (const dy of [-42, 14, -78, 50, -114, 86, -150, 122]) for (const dx of [14, -width - 14, -width / 2, 45, -width - 45]) {
@@ -1047,10 +1052,6 @@ function visitorOriginMap(rows, colors, flag) {
    const nightsByNationality = new Map(result.contributions.map((row) => [row.nationality, row.scenarioGuestNights]));
    const otherNights = remaining.reduce((sum, row) => sum + (nightsByNationality.get(row.nationality) || 0), 0);
    const palette = ["#e5c365", "#e0757e", "#79a5ed", "#a891d5", "#76b8d1", "#91b897", "#e1b78b", "#91a4c4", "#b3bd7e", "#bc91ab"];
-   const flag = (location) => {
-     const code = location?.aliases?.find((alias) => /^[A-Z]{2}$/.test(alias)) || ({ France: "FR", Norway: "NO" })[location?.name];
-     return code ? [...code].map((letter) => String.fromCodePoint(127397 + letter.charCodeAt(0))).join("") : "◈";
-   };
    const counts = (share, nights) => `<div class="vm-card-counts">
      <div><strong>${formatNumber(result.scenario.hotelCheckins * share)}</strong><span>Hotel check-ins</span></div>
      <div><strong>${formatNumber(nights)}</strong><span>Guest nights</span></div>
@@ -1067,7 +1068,7 @@ function visitorOriginMap(rows, colors, flag) {
      </span>` : "";
      return `<article class="vm-nationality-card${featured ? " vm-featured-card" : ""}" style="--nationality-color:${palette[index]}">
        <span class="vm-card-rank">#${String(rank + 1).padStart(2, "0")}</span>${ring}
-       <div class="vm-card-country"><span class="vm-country-flag" aria-hidden="true">${flag(location)}</span><h3>${name}</h3>${featured ? "<small>Largest nationality group</small>" : ""}</div>
+       <div class="vm-card-country"><span class="vm-country-flag" aria-hidden="true">${countryFlag(location) || "◈"}</span><h3>${name}</h3>${featured ? "<small>Largest nationality group</small>" : ""}</div>
        <div class="vm-card-share"><span class="vm-share-value">${share}%</span>${editor}</div>
        ${counts(row.weight, nightsByNationality.get(row.nationality))}
      </article>`;
@@ -1088,7 +1089,7 @@ function visitorOriginMap(rows, colors, flag) {
        ${counts(otherShare, otherNights)}
      </article>`;
    updateBridgeDraftTotal();
-   $("#bridgeShareChart").innerHTML = visitorOriginMap(rows, palette, flag);
+   $("#bridgeShareChart").innerHTML = visitorOriginMap(rows, palette);
    const supportLabels = { Low: "No route records", Medium: "A few records", High: "Several records" };
    const supportLabel = supportLabels[result.confidence.label] || "Past records";
    $("#confidenceLabel").textContent = supportLabel;
@@ -1102,44 +1103,22 @@ function visitorOriginMap(rows, colors, flag) {
    const liveError = errorTotal("transparent") / actualTotal;
    const periodLabel = (period) => `${data.months[Number(period.slice(5, 7)) - 1].slice(0, 3)} ${period.slice(0, 4)}`;
    const checkedPeriod = `${periodLabel(data.validation[0].month)}–${periodLabel(data.validation[data.validation.length - 1].month)}`;
-   $("#validationSummary").textContent = `Air2Stay was tested on ${data.validation.length} months kept out of conversion calibration (${checkedPeriod}). Its overall weighted error was ${formatPercent(liveError, 2)} of recorded hotel arrivals. The chart below compares estimates with actual arrivals month by month. This checks monthly totals using recorded flight inputs.`;
-   const validationWindows = $("#validationWindows");
-   const firstPeriod = data.validation[0].month;
-   const lastPeriod = data.validation[data.validation.length - 1].month;
-   const primaryPeriod = firstPeriod.slice(0, 4) === lastPeriod.slice(0, 4)
-     ? `${periodLabel(firstPeriod).split(" ")[0]}–${periodLabel(lastPeriod)}` : checkedPeriod;
-   // Extended scores are supplied presentation figures, not additional rows in data.validation.
-   validationWindows.innerHTML = `
-     <div class="validation-windows-grid">
-       <article class="validation-window-card validation-window-primary" aria-labelledby="primaryWindowLabel">
-         <span class="validation-window-metric">${formatPercent(liveError, 2)}</span>
-         <h2 id="primaryWindowLabel">Primary validation window</h2>
-         <p>${primaryPeriod} · ${data.validation.length} months · ${(actualTotal / 1000000).toFixed(2)}M actual arrivals</p>
-         <small>Weighted error · reproduced from the saved monthly records</small>
-       </article>
-       <div class="validation-window-progression"><span>Fuller test →</span></div>
-       <article class="validation-window-card validation-window-secondary" aria-labelledby="extendedWindowLabel">
-         <span class="validation-window-metric">10.42%</span>
-         <h2 id="extendedWindowLabel">Extended validation window</h2>
-         <p>Jan 2025–Feb 2026 · 14 months</p>
-         <small>13.93% on Aug 2025–Feb 2026 alone</small>
-       </article>
-     </div>
-     <p class="validation-window-context">Reported error was higher in the later months. Quarterly retraining was proposed for a production system.</p>
-     <p class="validation-window-source">The extended figures are supplied results. The chart and monthly table cover the primary window only.</p>`;
+   const seasonalError = errorTotal("seasonal") / actualTotal;
+   const hybridError = errorTotal("predicted") / actualTotal;
+   $("#validationSummary").textContent = `Scores recomputed from ${data.validation.length} bundled months (${checkedPeriod}). The test checks monthly hotel arrivals across the included markets, using recorded flight inputs.`;
    $("#validationScope").innerHTML = `
      <p>Weighted error measures the size of the gap relative to recorded arrivals.</p>
      <p>Training: ${metrics.flightTrainingPeriod} (${metrics.trainingMonths} months). Check period: ${metrics.validationPeriod} (${data.validation.length} months). The test used recorded flights from the check period.</p>
      <p><strong>Live default calculation:</strong> seats × flight occupancy × share ending in Abu Dhabi × a single hotel-use rate learned only from ${metrics.flightTrainingPeriod}. The check runs this chain on each held-out country-month’s recorded flights, then sums the estimates across countries. It does not test future flight schedules, occupancy forecasts, edited assumptions, visitor shares, or guest nights. Historical route baselines and visitor profiles are descriptive summaries, not independently held-out forecasts.</p>
-     <p><strong>Seasonal comparison:</strong> recorded passengers ending here × (70% training month-specific hotel-use rate + 30% overall training rate). Its weighted error is ${formatPercent(metrics.seasonalChainWmape, 2)}. This is the optional seasonal assumption in Details, not the default.</p>
+     <p><strong>Seasonal comparison:</strong> recorded passengers ending here × (70% training month-specific hotel-use rate + 30% overall training rate). This is the optional seasonal assumption in Details, not the default.</p>
      <p><strong>Hybrid comparison:</strong> 55% regression estimate + 45% seasonal flight estimate. The route planner does not run this aggregate regression.</p>
      <p><strong>Reproduce the scores:</strong> add the absolute monthly mistakes and divide by recorded hotel arrivals (WMAPE). Live default: ${formatNumber(errorTotal("transparent"))} ÷ ${formatNumber(actualTotal)} × 100. Hybrid comparison: ${formatNumber(errorTotal("predicted"))} ÷ ${formatNumber(actualTotal)} × 100. Scores use full-precision predictions; the table and totals round only for readability.</p>
-     <p><strong>Daily hotel guests:</strong> a separate check over ${metrics.stayValidationPeriod}, with ${formatNumber(metrics.stayValidationRows)} held-out daily records. It tested daily hotel guest counts using hotel-arrival information, not route guest-night changes. Its underlying daily rows are not shown in this monthly table.</p>
+     <p>Seasonal comparison: ${formatNumber(errorTotal("seasonal"))} ÷ ${formatNumber(actualTotal)} × 100.</p>
      <p id="validationRangeEvidence">Range multipliers use the live default chain’s residuals on the same check months. The range has no separate coverage test and is not a guaranteed probability range.</p>`;
    $("#validationKpis").innerHTML = [
-     kpiCard("Live default chain: weighted error", formatPercent(metrics.liveChainWmape, 2), "Tested monthly hotel arrivals across all included markets", "positive"),
-     kpiCard("Hybrid comparison: weighted error", formatPercent(metrics.flightToCheckinsWmape, 2), "Tested the comparison model on the same monthly totals", "positive"),
-     kpiCard("Daily hotel guests: total weighted error", formatPercent(metrics.stayModelWmape, 1), "Separate daily hotel-guest test; not route guest-night accuracy", "neutral"),
+     kpiCard("Live default chain: weighted error", formatPercent(liveError, 2), "The calculation the live planner uses", "positive"),
+     kpiCard("Seasonal comparison: weighted error", formatPercent(seasonalError, 2), "The optional seasonal hotel-use assumption", "neutral"),
+     kpiCard("Hybrid comparison: weighted error", formatPercent(hybridError, 2), "A separate model for totals across markets", "neutral"),
    ].join("");
 
    const maxRaw = Math.max(...data.validation.flatMap((row) => [row.actual, row.predicted, row.transparent * (1 + liveError)]));
@@ -1154,6 +1133,7 @@ function visitorOriginMap(rows, colors, flag) {
    const lowerBand = data.validation.map((row, index) => `L${x(index).toFixed(1)},${y(row.transparent * (1 - liveError)).toFixed(1)}`).reverse().join(" ");
    const ticks = [0, 0.25, 0.5, 0.75, 1].map((share) => ({ value: max * share, y: y(max * share) }));
    $("#validationChart").innerHTML = `
+     <div class="validation-chart-scroll" tabindex="0" role="region" aria-label="Monthly hotel arrivals">
      <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Recorded hotel arrivals compared with Air2Stay estimates">
        ${ticks.map((tick) => `<line x1="${pad.left}" y1="${tick.y}" x2="${width - pad.right}" y2="${tick.y}" class="grid-line"/><text x="${pad.left - 10}" y="${tick.y + 4}" text-anchor="end">${Math.round(tick.value / 1000)}k</text>`).join("")}
        <line x1="${pad.left}" y1="${height - pad.bottom}" x2="${width - pad.right}" y2="${height - pad.bottom}" class="axis"/>
@@ -1163,7 +1143,7 @@ function visitorOriginMap(rows, colors, flag) {
        <path d="${path("transparent")}" class="transparent-line"/>
        <path d="${path("predicted")}" class="predicted-line"/>
        ${data.validation.map((row, index) => `<circle cx="${x(index)}" cy="${y(row.transparent)}" r="5" tabindex="0" fill="#c9a84c"><title>${row.month}: recorded ${formatNumber(row.actual)}, live default estimate ${formatNumber(row.transparent)}, comparison ${formatNumber(row.predicted)}</title></circle><text x="${x(index)}" y="${height - 22}" text-anchor="middle">${row.month}</text>`).join("")}
-     </svg><p class="validation-band-caption"><span aria-hidden="true"></span>Shaded band: ±${formatPercent(liveError, 2)} around the live default estimate. A visual guide based on overall weighted error, not a guaranteed range.</p>`;
+     </svg></div><p class="validation-band-caption"><span aria-hidden="true"></span>Shaded band: ±${formatPercent(liveError, 2)} around the live default estimate. A visual guide based on overall weighted error, not a guaranteed range.</p>`;
 
    const errorCell = (row, field) => {
      const error = Math.abs(row.actual - row[field]) / row.actual;
@@ -1178,21 +1158,24 @@ function visitorOriginMap(rows, colors, flag) {
    </table>
    <p class="validation-table-caption">Lower % means a closer estimate. Live default weighted error: ${formatPercent(liveError, 2)}.</p>`;
 
-   const modelComparison = $("#validationModelComparison");
-   modelComparison.innerHTML = `
-     <div class="section-heading"><div><p>Compare the approaches</p><h2 id="modelComparisonTitle">Model comparison</h2></div></div>
-     <p class="model-comparison-periods">Training: 2022–2024. Test scores read left to right: Jan–Jul 2025 → Aug 2025–Feb 2026. Lower weighted error (WMAPE) means a closer estimate.</p>
-     <div class="model-comparison-scroll" tabindex="0" role="region" aria-label="Model comparison scores; scroll horizontally on narrow screens">
+   $("#validationModelComparison").innerHTML = `
+     <summary>Reported scores without bundled records</summary>
+     <p>The bundled validation data does not include the records needed to reproduce these figures.</p>
+     <ul>
+       <li><strong>Live chain, Jan 2025–Feb 2026:</strong> 10.42% weighted error over 14 months.</li>
+       <li><strong>Ridge alone, Jan–Jul 2025:</strong> 8.56% weighted error. The bundled months contain no Ridge-only predictions.</li>
+       <li><strong>Daily hotel guests:</strong> ${formatPercent(metrics.stayModelWmape, 1)} saved weighted error for ${metrics.stayValidationPeriod} (${formatNumber(metrics.stayValidationRows)} daily records). This separate test used hotel-arrival data to estimate daily guest counts.</li>
+     </ul>
+     <div class="model-comparison-scroll" tabindex="0" role="region" aria-label="Reported model scores">
        <table>
-         <thead><tr><th scope="col">Model</th><th scope="col">Train WMAPE</th><th scope="col">Test WMAPE</th><th scope="col">Verdict</th></tr></thead>
+         <thead><tr><th scope="col">Model</th><th scope="col">Train WMAPE</th><th scope="col">Aug 2025–Feb 2026 WMAPE</th></tr></thead>
          <tbody>
-           <tr class="model-comparison-live"><th scope="row">Live chain</th><td>9.67%</td><td dir="ltr">${formatPercent(liveError, 2)} <span class="model-score-arrow">→</span> 13.93%</td><td>Underfit: constant rate can't follow seasonality</td></tr>
-           <tr><th scope="row">Seasonal chain</th><td>4.90%</td><td dir="ltr">${formatPercent(metrics.seasonalChainWmape, 2)} <span class="model-score-arrow">→</span> 8.72%</td><td>Fine, but drifts low</td></tr>
-           <tr><th scope="row">Ridge alone</th><td>5.53%</td><td dir="ltr">8.56% <span class="model-score-arrow">→</span> 11.88%</td><td>Mild overfit</td></tr>
+           <tr><th scope="row">Live chain</th><td>9.67%</td><td>13.93%</td></tr>
+           <tr><th scope="row">Seasonal chain</th><td>4.90%</td><td>8.72%</td></tr>
+           <tr><th scope="row">Ridge alone</th><td>5.53%</td><td>11.88%</td></tr>
          </tbody>
        </table>
-     </div>
-     <p class="model-comparison-source">The primary live and seasonal test scores match saved results. Training, Ridge-only and later-window scores are supplied figures; verdicts are supplied interpretations, not verified diagnoses.</p>`;
+     </div>`;
  }
 
   
@@ -1213,9 +1196,8 @@ function planningTable(headers, rows) {
 function decisionOptions() {
   const field = $("#alternativeOrigin");
   if (field.value === state.originKey && !field.dataset.userSelected) field.value = knownOrigins().find((item) => item.key !== state.originKey)?.key || field.value;
-  let alternative = defaultState(field.value, state.month);
-  alternative = { ...alternative, extraFlights:state.extraFlights, seatsPerFlight:state.seatsPerFlight, conversionRate:state.conversionRate, eventUplift:state.eventUplift };
-  if ($("#sameComparisonAssumptions").checked) alternative = {...alternative,loadFactor:state.loadFactor,p2pShare:state.p2pShare,averageStay:state.averageStay,routePurpose:state.routePurpose};
+  const starting = defaultState(field.value, state.month);
+  const alternative = { ...starting, extraFlights:state.extraFlights, seatsPerFlight:state.seatsPerFlight, conversionRate:state.conversionRate, eventUplift:state.eventUplift };
   return [{id:"proposal",label:"Current proposal · " + findRoute(data,state.originKey,state.month,state.proxyOriginKey,state.peerProfile).origin,inputs:{...state,bridgeOverride}},
     {id:"existing",label:"Extra flights · " + findRoute(data,alternative.originKey,state.month).origin,inputs:alternative}];
 }
@@ -1231,15 +1213,29 @@ function resolvedMonthInputs(month, source) {
 
 function renderMonthComparisonChart(monthly) {
   const values = monthly.map((row) => row.incremental.guestNights);
-  const top = Math.max(0, ...values);
-  const bottom = Math.min(0, ...values);
-  const span = top - bottom || 1;
-  const zero = top / span * 100;
-  const highest = values.indexOf(Math.max(...values));
-  $("#monthChart").innerHTML = `<p class="compare-chart-key"><span class="month-key-selected">Selected month</span><span class="month-key-highest">Highest month</span></p>
-    <div class="month-comparison-bars" role="img" aria-label="Extra guest nights by month. ${planningEscape(monthly.map((row, index) => row.monthName + ": " + formatSigned(values[index])).join("; "))}">
-    ${monthly.map((row, index) => `<div class="month-comparison-column${row.month === state.month ? " selected" : ""}${index === highest ? " highest" : ""}" title="${planningEscape(row.monthName)}: ${formatSigned(values[index])} guest nights">
-      <div class="month-comparison-plot" style="--zero:${zero}%"><i class="${values[index] < 0 ? "negative" : ""}" style="--bar-size:${Math.abs(values[index]) / span * 100}%"></i></div><small>${planningEscape(row.monthName.slice(0, 3))}</small></div>`).join("")}
+  const peak = Math.max(...values);
+  const minimum = Math.min(...values);
+  const top = Math.max(0, peak);
+  const span = top - Math.min(0, minimum);
+  const zero = span ? top / span * 100 : 50;
+  const highest = peak > minimum ? values.indexOf(peak) : -1;
+  const description = monthly.map((row, index) => row.monthName + ": " + formatSigned(values[index])).join("; ");
+
+  $("#monthChart").innerHTML = `<p class="compare-chart-key month-chart-key"><span class="month-key-selected">Selected month</span><span class="month-key-highest">Highest month</span></p>
+    <div class="month-comparison-scroll" tabindex="0" role="region" aria-label="Extra guest nights by month.">
+      <div class="month-comparison-bars" role="img" aria-label="${planningEscape(description)}" style="--zero:${zero}%">
+        ${monthly.map((row, index) => {
+          const selected = row.month === state.month;
+          const best = index === highest;
+          const barSize = span ? Math.abs(values[index]) / span * 100 : 0;
+          const badge = selected || best ? `<span class="month-comparison-badge">${best ? '<span aria-hidden="true">★</span>' : ""}${selected ? "Current" : "Highest"}</span>` : "";
+          return `<div class="month-comparison-column${selected ? " selected" : ""}${best ? " highest" : ""}" title="${planningEscape(row.monthName)}: ${formatSigned(values[index])} guest nights">
+            ${badge}
+            <div class="month-comparison-plot"><div class="month-comparison-scale"><i class="${values[index] < 0 ? "negative" : ""}" style="--bar-size:${barSize}%"></i></div></div>
+            <small>${planningEscape(row.monthName.slice(0, 3))}</small>
+          </div>`;
+        }).join("")}
+      </div>
     </div>`;
 }
 
@@ -1250,17 +1246,90 @@ function renderStressComparisonChart(stress) {
   </ul>`;
 }
 
+function routeComparisonTable(options) {
+  const metrics = [
+    ["Extra check-ins", (row) => row.incremental.hotelCheckins, formatNumber],
+    ["Extra nights", (row) => row.incremental.guestNights, formatNumber],
+    ["Nights / 1,000 added seats", (row) => row.per1000AddedSeats, formatNumber],
+    ["Flights full", (row) => row.inputs.loadFactor, (value) => formatPercent(value, 1)],
+    ["Trip ends here", (row) => row.inputs.p2pShare, (value) => formatPercent(value, 1)],
+    ["Hotel use", (row) => row.inputs.conversionRate, (value) => formatPercent(value, 1)],
+    ["Nights / stay", (row) => row.inputs.averageStay, (value) => value.toFixed(2)],
+  ].map(([label, read, format]) => {
+    const values = options.map(read);
+    const valid = values.filter(Number.isFinite);
+    return {
+      label, values, format,
+      highest: Math.max(...valid),
+      differs: new Set(valid.map((value) => format(value))).size > 1,
+      scale: Math.max(0, ...valid.map(Math.abs)) || 1,
+    };
+  });
+
+  return `<table class="planning-table route-comparison-table">
+    <thead><tr><th scope="col">Option</th>${metrics.map(({label}) => `<th scope="col">${planningEscape(label)}</th>`).join("")}</tr></thead>
+    <tbody>${options.map((row, index) => {
+      const flag = countryFlag(countryLocationLookup[normalizeCountryName(row.inputs.originKey)]);
+      const cells = metrics.map(({values, highest, differs, scale, format}) => {
+        const value = values[index];
+        if (!Number.isFinite(value)) return "<td>No added capacity</td>";
+        const highlight = differs && value === highest;
+        const barSize = Math.abs(value) / scale * 100;
+        return `<td class="${highlight ? "is-higher" : ""}${value < 0 ? " is-negative" : ""}">
+          <span class="route-metric-value">${highlight ? '<i class="route-metric-arrow" aria-hidden="true"></i>' : ""}<bdi>${planningEscape(format(value))}</bdi></span>
+          <span class="route-metric-track" aria-hidden="true"><i style="--bar-size:${barSize}%"></i></span>
+        </td>`;
+      }).join("");
+      return `<tr><th scope="row"><span class="route-option-name">${flag ? `<span aria-hidden="true">${flag}</span>` : ""}<span>${planningEscape(row.label)}</span></span></th>${cells}</tr>`;
+    }).join("")}</tbody>
+  </table>`;
+}
+
+function renderLaunchCards(options) {
+  const plane = '<svg aria-hidden="true" viewBox="0 0 24 24" fill="currentColor"><path d="M22 11a1 1 0 0 1 0 2h-7l-4 8H8l2.5-8H5l-2 3H1l1.5-4L1 8h2l2 3h5.5L8 3h3l4 8h7Z"/></svg>';
+  const hotel = '<svg aria-hidden="true" viewBox="0 0 24 24" fill="currentColor"><path fill-rule="evenodd" d="M6 2a2 2 0 0 0-2 2v16H2v2h20v-2h-2V4a2 2 0 0 0-2-2H6Zm1 3h2v2H7V5Zm4 0h2v2h-2V5Zm4 0h2v2h-2V5ZM7 9h2v2H7V9Zm4 0h2v2h-2V9Zm4 0h2v2h-2V9Zm-8 4h2v2H7v-2Zm8 0h2v2h-2v-2Zm-4 0h2v7h-2v-7Z"/></svg>';
+  const moon = '<svg aria-hidden="true" viewBox="0 0 24 24" fill="currentColor"><path d="M21.8 14.2A10.2 10.2 0 0 1 9.8 2.2a10.2 10.2 0 1 0 12 12Z"/></svg>';
+  const maxFlights = Math.max(...options.map((row) => row.extraFlights));
+  const segmentCount = 5;
+
+  $("#launchOptions").innerHTML = options.map(({ id, label, extraFlights, incremental, duplicateSchedule }) => {
+    const shownPlanes = Math.min(extraFlights, segmentCount);
+    const remainingPlanes = extraFlights - shownPlanes;
+    const meter = Array.from({ length: segmentCount }, (_, index) => {
+      const fill = Math.min(1, Math.max(0, extraFlights / maxFlights * segmentCount - index));
+      return `<span style="--launch-fill:${fill * 100}%"></span>`;
+    }).join("");
+    return `<article class="launch-card launch-card--${id}">
+      <h3>${planningEscape(label)}</h3>
+      <div class="launch-schedule">
+        <div class="launch-planes" aria-hidden="true" dir="ltr">${plane.repeat(shownPlanes)}${remainingPlanes ? `<span>+${remainingPlanes}</span>` : ""}</div>
+        <strong>${extraFlights} ${extraFlights === 1 ? "flight" : "flights"} / week</strong>
+        <div class="launch-meter" aria-hidden="true">${meter}</div>
+      </div>
+      <div class="launch-metric">
+        <strong>${hotel}<bdi>${formatNumber(incremental.hotelCheckins)}</bdi></strong>
+        <span>Extra check-ins</span>
+      </div>
+      <div class="launch-metric">
+        <strong>${moon}<bdi>${formatNumber(incremental.guestNights)}</bdi></strong>
+        <span>Extra guest nights</span>
+      </div>
+      ${duplicateSchedule ? '<small>Same schedule as another option at the control limit.</small>' : ''}
+    </article>`;
+  }).join("");
+}
+
 function renderDecisionWorkspace() {
   if ($("#decisionWorkspace").hidden || !$("#inputError").hidden) return;
   const options = decisionOptions();
   const comparison = compareOptions(data,options);
-  $("#routeOptions").innerHTML = planningTable(["Option","Extra check-ins","Extra nights","Nights / 1,000 added seats","Flights full","Trip ends here","Hotel use","Nights / stay"], comparison.options.map((row) => [row.label,formatNumber(row.incremental.hotelCheckins),formatNumber(row.incremental.guestNights),row.per1000AddedSeats == null ? "No added capacity" : formatNumber(row.per1000AddedSeats),formatPercent(row.inputs.loadFactor,1),formatPercent(row.inputs.p2pShare,1),formatPercent(row.inputs.conversionRate,1),row.inputs.averageStay.toFixed(2)]));
+  $("#routeOptions").innerHTML = routeComparisonTable(comparison.options);
   const reversals = rankingReversals(data,options);
   const changedTrials = reversals.trials.filter((trial) => trial.rankingChanged).map((trial) => trial.label);
   $("#rankingConclusion").textContent = !comparison.winnerId ? "Add positive flight capacity to compare hotel-night yield." : comparison.winnerIds.length > 1
-    ? "Both options have the same estimated yield per added seat. Identical passenger and hotel assumptions produce a tie; country names alone do not create demand."
+    ? "Both options have the same estimated yield per added seat."
     : comparison.options.find((row) => row.id === comparison.winnerId).label + " has the higher estimated yield per added seat under these assumptions. " + (changedTrials.length ? "The preference reverses under: " + changedTrials.join("; ") + ". Check those assumptions before choosing." : "The same option stays ahead in the four lower-assumption trials. This does not establish a real-world best route.");
-  $("#launchOptions").innerHTML = launchOptions(data,state).map((row) => `<article class="launch-card"><h3>${planningEscape(row.label)}</h3><strong>${row.extraFlights} ${row.extraFlights === 1 ? "flight" : "flights"} / week</strong><p>${formatNumber(row.incremental.hotelCheckins)} extra check-ins</p><p>${formatNumber(row.incremental.guestNights)} extra guest nights</p>${row.duplicateSchedule ? '<small>Same schedule as another option at the control limit.</small>' : ''}</article>`).join("");
+  renderLaunchCards(launchOptions(data, state));
   const monthly = compareMonths(data,state,Array.from({length:12},(_,index)=>index+1),resolvedMonthInputs);
   $("#monthComparisonNote").textContent = $("#refreshMonthAssumptions").checked
     ? "Each month refreshes market flight fullness, trip-ending share and starting stay estimates; flight count and aircraft seats stay fixed. Hotel use stays at your chosen rate unless you applied the training-season option. Any visitor-purpose stay assumption is retained. These are seasonal planning estimates, not future bookings."
@@ -1292,7 +1361,7 @@ function renderPlanningEvidence(result) {
   }
   const evidence=CONVERSION_EVIDENCE;
   const rate=evidence.monthlyRates[state.month];
-  $("#conversionEvidence").innerHTML = `<p>Country-specific hotel-use rates require linking flight and hotel records. <button type="button" class="text-action" data-evidence="mix-method">See why the countries differ →</button></p><p>For ${planningEscape(data.months[state.month-1])}, the optional training-season aggregate rate is <strong>${formatPercent(rate,2)}</strong>. It uses three observations of that calendar month from ${evidence.trainingPeriod}. It is not a measured probability for this route.</p><p>August–December have no matching held-out month in this test. <button type="button" class="text-action" data-evidence="validation">Compare the validation scores →</button></p><details><summary>Method and monthly starting rates</summary><p>${planningEscape(evidence.method)}</p><div class="table-scroll">${planningTable(["Month","Optional hotel-use assumption"],Object.entries(evidence.monthlyRates).map(([month,value])=>[data.months[Number(month)-1],formatPercent(value,2)]))}</div></details>`;
+  $("#conversionEvidence").innerHTML = `<p>Country-specific hotel-use rates require linking flight and hotel records. <button type="button" class="text-action" data-evidence="mix-method">See why the countries differ →</button></p><p>For ${planningEscape(data.months[state.month-1])}, the optional training-season aggregate rate is <strong>${formatPercent(rate,2)}</strong>. It uses three observations of that calendar month from ${evidence.trainingPeriod}. It is not a measured probability for this route.</p><p>August–December have no matching held-out month in this test. <button type="button" class="text-action" data-evidence="validation">Compare the validation scores →</button></p><details><summary>Method and monthly starting rates</summary><p>${planningEscape(evidence.method)}</p><div class="table-scroll" role="region" tabindex="0" aria-label="Method and monthly starting rates">${planningTable(["Month","Optional hotel-use assumption"],Object.entries(evidence.monthlyRates).map(([month,value])=>[data.months[Number(month)-1],formatPercent(value,2)]))}</div></details>`;
   if (!peerValidationResult) peerValidationResult = validatePeerMethod(data,countryLocationLookup);
   const validation=peerValidationResult;
   $("#peerValidation").innerHTML = `<p>We hid one known market at a time and reconstructed its flight assumptions from other markets in the same month: ${validation.caseCount} market-month checks across ${validation.marketCount} markets.</p><div class="table-scroll">${planningTable(["Assumption","Three-market average error","Nearest-country average error"],Object.values(validation.metrics).map((row)=>[row.label,row.blendedMae.toFixed(2)+" "+row.unit,row.nearestMae.toFixed(2)+" "+row.unit]))}</div><ul>${validation.limitations.map((line)=>'<li>'+planningEscape(line)+'</li>').join('')}</ul>`;
@@ -1771,7 +1840,7 @@ function printDecisionNote() {
 
 function setupDecisionTools() {
   $("#printDecisionNote").addEventListener("click", printDecisionNote);
-  ["alternativeOrigin","sameComparisonAssumptions","refreshMonthAssumptions"].forEach((id)=>$("#"+id).addEventListener("input",()=>{if(id==="alternativeOrigin") $("#alternativeOrigin").dataset.userSelected="true";renderDecisionWorkspace();}));
+  ["alternativeOrigin","refreshMonthAssumptions"].forEach((id)=>$("#"+id).addEventListener("input",()=>{if(id==="alternativeOrigin") $("#alternativeOrigin").dataset.userSelected="true";renderDecisionWorkspace();}));
   $("#applyPurpose").addEventListener("click",()=>{
     if (!$("#inputError").hidden) { $("#purposeStatus").textContent="Correct the highlighted plan input before applying visitor assumptions."; return; }
     const shareField=$("#purposeHotelShare"), stayField=$("#purposeStay");
@@ -1945,7 +2014,10 @@ function openPlanControl(groupId, field) {
    const originOptions = knownOrigins().map((origin) => `<option value="${origin.key}">${origin.name}</option>`).join("");
    $("#origin").innerHTML = `${originOptions}<option value="__NEW_ROUTE__">＋ New route</option>`;
    $("#proxyMarket").innerHTML = '<option value="__PEERS__">Blend three comparison countries</option>' + originOptions;
-   $("#alternativeOrigin").innerHTML = originOptions;
+   $("#alternativeOrigin").innerHTML = knownOrigins().map(({key, name}) => {
+     const flag = countryFlag(countryLocationLookup[normalizeCountryName(key)]);
+     return `<option value="${planningEscape(key)}">${planningEscape(name)}${flag ? " " + flag : ""}</option>`;
+   }).join("");
    $("#alternativeOrigin").value = "FRANCE";
    const existingMarkets = new Set();
    for (const origin of knownOrigins()) {
@@ -3730,6 +3802,16 @@ function setupFeaturePack() {
     return Boolean(file.exampleWorkbook || file.fileId || file.dataUrl || selectedFiles.has(file));
   }
 
+  function messageAttachmentUrl(value) {
+    if (typeof value !== "string") return "";
+    try {
+      const url = new URL(value);
+      return url.protocol === "https:" || url.protocol === "http:" ? url.href : "";
+    } catch {
+      return "";
+    }
+  }
+
   function renderMessageAttachments(files, messageId = "") {
     if (!files?.length) return "";
     const composing = !messageId;
@@ -3738,8 +3820,10 @@ function setupFeaturePack() {
       const content = file.url ? `${paperclipIcon}<span data-i18n-ignore dir="auto">${esc(file.url)}</span>`
         : `<span class="attachment-kind">${file.exampleWorkbook ? "Excel" : {image:"Image",pdf:"PDF",file:"File"}[kind]}</span>
           <span data-i18n-ignore dir="auto">${esc(file.name)}</span><small>${file.exampleWorkbook ? "Example template" : esc(attachmentSize(file.size))}</small>`;
-      const chip = file.url
-        ? `<span class="message-attachment-link">${content}</span>`
+      const href = messageAttachmentUrl(file.url);
+      const chip = href
+        ? `<a class="message-attachment-link" href="${esc(href)}" target="_blank" rel="noopener noreferrer" title="Open link in a new tab">${content}<span aria-hidden="true">↗</span></a>`
+        : file.url ? `<span class="message-attachment-link">${content}</span>`
         : `<button class="message-attachment-chip" type="button" data-message-attachment="${index}">${attachmentIcon(kind)}${content}</button>`;
       return `<li>${chip}
         ${hasAttachmentContent(file) ? `<a class="message-file-download export-ready-link" data-download-attachment="${index}" aria-disabled="true" aria-label="Download attachment"><span>Download</span></a>` : ""}
@@ -4153,14 +4237,15 @@ function setupFeaturePack() {
   });
   $("#addAttachmentUrl").addEventListener("click",()=>{
     const input = $("#attachmentUrl");
-    try {
-      const url = new URL(input.value);
-      if (!["https:","http:"].includes(url.protocol) || attachments.length >= 20 || input.value.length > 400) throw Error();
-      if (!attachments.some((attachment) => attachment.url === url.href)) attachments.push({url:url.href});
-      input.value = "";
-      $("#composeStatus").textContent = "";
-      renderAttachments();
-    } catch { $("#composeStatus").textContent = "Use a short http or https link. A message can include up to 20 attachments."; }
+    const url = messageAttachmentUrl(input.value);
+    if (!url || input.value.length > 400 || attachments.length >= 20) {
+      $("#composeStatus").textContent = "Use a short http or https link. A message can include up to 20 attachments.";
+      return;
+    }
+    if (!attachments.some((attachment) => attachment.url === url)) attachments.push({url});
+    input.value = "";
+    $("#composeStatus").textContent = "";
+    renderAttachments();
   });
   $("#attachmentList").addEventListener("click",(event)=>{
     const button = event.target.closest("[data-attachment-index]");
@@ -4338,7 +4423,6 @@ const I18N = (() => {
     ar_browser_storage_is_unavailable_changes_62: ["Browser storage is unavailable. Changes last for this visit only.", "تخزين المتصفح غير متاح. تستمر التغييرات خلال هذه الزيارة فقط."],
     message_reply_prefix: ["Re: ", "رد: "],
     message_forward_prefix: ["Fwd: ", "إعادة توجيه: "],
-    comparison_shared_inputs_tooltip: ["Use the same inputs to isolate the effect of added capacity. Identical inputs may give identical added-seat effects.", "استخدم المدخلات نفسها لعزل أثر السعة الإضافية. قد تؤدي المدخلات المتطابقة إلى الأثر نفسه لكل مقعد إضافي."],
     guide_progress_count: ["{count} of {total}", "{count} من {total}"],
     guide_feedback_label: ["Feedback on {label}", "ملاحظات حول {label}"],
     guided_walkthrough: ["Air2Stay guided walkthrough", "جولة Air2Stay الإرشادية"],
@@ -4486,7 +4570,7 @@ const I18N = (() => {
     localized_live_default_calculation: ["Live default calculation:", "الحساب الافتراضي المباشر:"],
     localized_seats_flight_occupancy_share_ending_in: ["seats × flight occupancy × share ending in Abu Dhabi × a single hotel-use rate learned only from {period}. The check runs this chain on each held-out country-month’s recorded flights, then sums the estimates across countries. It does not test future flight schedules, occupancy forecasts, edited assumptions, visitor shares, or guest nights. Historical route baselines and visitor profiles are descriptive summaries, not independently held-out forecasts.", "المقاعد × نسبة الإشغال × نسبة من ينهون رحلتهم في أبوظبي × نسبة ثابتة للإقامة الفندقية مستخلصة من {period} فقط. يُطبَّق الحساب على الرحلات الفعلية لكل بلد وشهر مستبعَد من التدريب، ثم تُجمع التقديرات عبر البلدان. ولا يختبر جداول الرحلات المستقبلية أو توقعات الإشغال أو الافتراضات المعدّلة أو توزيع الزوار أو ليالي النزلاء. التقديرات المرجعية للمسارات وتوزيع الزوار ملخّصات تاريخية وليست توقعات اختُبرت على بيانات مستقلة."],
     localized_seasonal_comparison: ["Seasonal comparison:", "المقارنة الموسمية:"],
-    localized_recorded_passengers_ending_here_70_tra: ["recorded passengers ending here × (70% training month-specific hotel-use rate + 30% overall training rate). Its weighted error is {value}. This is the optional seasonal assumption in Details, not the default.", "عدد الركاب الذين أنهوا رحلتهم هنا وفق السجلات × (70% من نسبة الإقامة الفندقية للشهر المقابل في بيانات التدريب + 30% من النسبة الإجمالية في بيانات التدريب). الخطأ المرجّح {value}. هذا هو الافتراض الموسمي الاختياري في التفاصيل."],
+    localized_recorded_passengers_ending_here_70_tra: ["recorded passengers ending here × (70% training month-specific hotel-use rate + 30% overall training rate). This is the optional seasonal assumption in Details, not the default.", "عدد الركاب الذين أنهوا رحلتهم هنا وفق السجلات × (70% من نسبة الإقامة الفندقية للشهر المقابل في بيانات التدريب + 30% من النسبة الإجمالية في بيانات التدريب). هذا هو الافتراض الموسمي الاختياري في التفاصيل."],
     localized_hybrid_comparison: ["Hybrid comparison:", "المقارنة بالنموذج الهجين:"],
     localized_55_regression_estimate_45_seasonal_fli: ["55% regression estimate + 45% seasonal flight estimate. The route planner does not run this aggregate regression.", "55% من تقدير الانحدار + 45% من التقدير الموسمي المستند إلى الرحلات. لا يستخدم مخطّط المسارات نموذج الانحدار الإجمالي هذا."],
     localized_reproduce_the_scores: ["Reproduce the scores:", "إعادة حساب الدرجات:"],
@@ -4552,7 +4636,7 @@ const I18N = (() => {
     localized_expand_the_calculation_sections_to_see: ["Expand the calculation sections to see the starting values and each multiplication. Displayed values may be rounded; the calculation retains the underlying precision.", "وسّع أقسام الحساب للاطلاع على القيم الأولية وكل عملية ضرب. قد تُقرّب القيم المعروضة بينما يحتفظ الحساب بكامل الدقة."],
     localized_use_the_longest_bar_to_find_the_input_: ["Use the longest bar to find the input to investigate first.", "انظر إلى أطول شريط لمعرفة الافتراض الذي ينبغي التحقق منه أولًا."],
     localized_open_the_method_notes_for_the_training: ["Open the method notes for the training and test periods.", "افتح ملاحظات المنهجية للاطلاع على فترتي التدريب والاختبار."],
-    localized_select_the_existing_route_to_compare_r: ["Select the existing route to compare. Read which assumptions are shared. Identical inputs can produce identical added-seat effects; that is expected.", "اختر المسار القائم للمقارنة وراجع الافتراضات المشتركة. قد تؤدي المدخلات المتطابقة إلى الأثر نفسه لكل مقعد إضافي."],
+    localized_select_the_existing_route_to_compare_r: ["Select an existing route to compare. The table shows which starting assumptions differ.", "اختر مسارًا قائمًا للمقارنة. يوضح الجدول الافتراضات الأولية التي تختلف بين الخيارين."],
     localized_these_options_vary_the_number_of_weekl: ["These options vary the number of weekly flights. Cautious, standard and expanded describe capacity, not the likelihood of demand.", "تختلف الخيارات في عدد الرحلات الأسبوعية. وتصف الخيارات المتحفّظة والأساسية والموسّعة مستويات السعة."],
     localized_lower_flight_fullness_hotel_use_and_st: ["Lower flight fullness, hotel use and stay length to see how the estimate changes. These are hypothetical stress trials.", "خفّض نسبة إشغال الرحلات والإقامة في الفنادق ومدة الإقامة لترى تغيّر التقدير. هذه اختبارات افتراضية."],
     localized_keep_the_estimated_impact_key_assumpti: ["Keep the estimated impact, key assumptions and next checks together. Review the note before sharing it with an airline, hotel or colleague.", "اجمع الأثر المقدّر والافتراضات الرئيسية وخطوات التحقق التالية. راجع المذكرة قبل مشاركتها مع شركة طيران أو فندق أو زميل."],
@@ -4584,17 +4668,21 @@ const I18N = (() => {
     open_event_controls: ["Open event controls →", "فتح أدوات التحكم بالفعاليات ←"],
     open_export: ["Open Export →", "فتح خيارات التصدير ←"],
     read_privacy_guidance: ["Read the privacy and sharing guidance →", "قراءة إرشادات الخصوصية والمشاركة ←"],
-    validation_windows: ["Validation windows", "فترات التحقق"],
-    validation_summary_period: ["Air2Stay was tested on {count} months kept out of conversion calibration ({period}). Its overall weighted error was {value} of recorded hotel arrivals. The chart below compares estimates with actual arrivals month by month. This checks monthly totals using recorded flight inputs.", "اختُبرت Air2Stay على {count} أشهر لم تُستخدم لمعايرة معدل التحويل ({period}). وبلغ الخطأ المرجّح الإجمالي {value} من التسجيلات الفندقية الفعلية. يقارن الرسم أدناه التقديرات بالأعداد المسجلة شهريًا باستخدام بيانات الرحلات الفعلية."],
-    validation_primary_window: ["Primary validation window", "فترة التحقق الأساسية"],
-    validation_primary_period: ["{period} · {count} months · {arrivals}M actual arrivals", "{period} · {count} أشهر · {arrivals} مليون تسجيل فندقي فعلي"],
-    validation_primary_source: ["Weighted error · reproduced from the saved monthly records", "الخطأ المرجّح محسوب من السجلات الشهرية المرفقة"],
-    validation_fuller_test: ["Fuller test →", "اختبار أوسع ←"],
-    validation_extended_window: ["Extended validation window", "فترة التحقق الممتدة"],
-    validation_extended_period: ["Jan 2025–Feb 2026 · 14 months", "يناير 2025–فبراير 2026 · 14 شهرًا"],
-    validation_later_score: ["13.93% on Aug 2025–Feb 2026 alone", "13.93% خلال أغسطس 2025–فبراير 2026 فقط"],
-    validation_retraining_note: ["Reported error was higher in the later months. Quarterly retraining was proposed for a production system.", "كان الخطأ المبلّغ عنه أعلى في الأشهر اللاحقة. واقتُرح إعادة التدريب كل ثلاثة أشهر في النظام التشغيلي."],
-    validation_extended_source: ["The extended figures are supplied results. The chart and monthly table cover the primary window only.", "الأرقام الممتدة نتائج مقدّمة. ويغطي الرسم والجدول الشهري فترة التحقق الأساسية فقط."],
+    validation_bundled_summary: ["Scores recomputed from {count} bundled months ({period}). The test checks monthly hotel arrivals across the included markets, using recorded flight inputs.", "أُعيد حساب النتائج من سجلات {count} أشهر مرفقة ({period}). يقارن الاختبار التسجيلات الفندقية الشهرية في الأسواق المشمولة باستخدام سجلات الرحلات الفعلية."],
+    validation_live_method_note: ["The calculation the live planner uses", "الحساب الذي يستخدمه مخطِّط المسارات"],
+    validation_seasonal_method_note: ["The optional seasonal hotel-use assumption", "افتراض الإقامة الفندقية الموسمي الاختياري"],
+    validation_hybrid_method_note: ["A separate model for totals across markets", "نموذج مستقل لحساب الإجماليات عبر الأسواق"],
+    validation_seasonal_arithmetic: ["Seasonal comparison: {value} ÷ {total} × 100.", "المقارنة الموسمية: {value} ÷ {total} × 100."],
+    validation_reported_heading: ["Reported scores without bundled records", "النتائج المبلّغ عنها دون سجلات مرفقة"],
+    validation_reported_scope: ["The bundled validation data does not include the records needed to reproduce these figures.", "لا تتضمّن بيانات التحقق المرفقة السجلات اللازمة لإعادة حساب هذه الأرقام."],
+    validation_reported_live: ["Live chain, Jan 2025–Feb 2026:", "الحساب المباشر، يناير 2025–فبراير 2026:"],
+    validation_reported_live_score: ["10.42% weighted error over 14 months.", "الخطأ المرجّح 10.42% على مدى 14 شهرًا."],
+    validation_reported_ridge: ["Ridge alone, Jan–Jul 2025:", "انحدار ريدج وحده، يناير–يوليو 2025:"],
+    validation_reported_ridge_score: ["8.56% weighted error. The bundled months contain no Ridge-only predictions.", "الخطأ المرجّح 8.56%. لا تتضمّن السجلات المرفقة تنبؤات انحدار ريدج وحده."],
+    validation_reported_daily_score: ["{value} saved weighted error for {period} ({count} daily records). This separate test used hotel-arrival data to estimate daily guest counts.", "الخطأ المرجّح المحفوظ {value} للفترة {period} ({count} سجلًا يوميًا). استخدم هذا الاختبار المنفصل بيانات التسجيلات الفندقية لتقدير عدد النزلاء يوميًا."],
+    validation_reported_table: ["Reported model scores", "نتائج النماذج المبلّغ عنها"],
+    validation_later_wmape: ["Aug 2025–Feb 2026 WMAPE", "الخطأ المرجّح من أغسطس 2025 إلى فبراير 2026"],
+    attachment_open_link: ["Open link in a new tab", "فتح الرابط في تبويب جديد"],
     validation_band_tooltip: ["Visual guide: plus or minus {value} of each live estimate. This is not a tested prediction interval.", "دليل بصري بمقدار زائد أو ناقص {value} من كل تقدير مباشر. لم يُختبر هذا النطاق بوصفه مجال تنبؤ."],
     validation_band_caption: ["Shaded band: ±{value} around the live default estimate. A visual guide based on overall weighted error, not a guaranteed range.", "النطاق المظلّل ±{value} حول التقدير الافتراضي المباشر. وهو دليل بصري يستند إلى الخطأ المرجّح الإجمالي، ولا يمثّل نطاقًا مضمونًا."],
     validation_error_low: ["Below 5% error", "الخطأ أقل من 5%"],
@@ -4603,21 +4691,11 @@ const I18N = (() => {
     validation_live_error: ["Live error", "خطأ التقدير المباشر"],
     validation_hybrid_error: ["Hybrid error", "خطأ النموذج الهجين"],
     validation_table_caption: ["Lower % means a closer estimate. Live default weighted error: {value}.", "النسبة الأقل تعني تقديرًا أقرب. الخطأ المرجّح للتقدير الافتراضي المباشر {value}."],
-    validation_compare_approaches: ["Compare the approaches", "مقارنة الأساليب"],
-    validation_model_comparison: ["Model comparison", "مقارنة النماذج"],
-    validation_model_periods: ["Training: 2022–2024. Test scores read left to right: Jan–Jul 2025 → Aug 2025–Feb 2026. Lower weighted error (WMAPE) means a closer estimate.", "التدريب خلال 2022–2024. تُقرأ درجات الاختبار من اليسار إلى اليمين، من يناير–يوليو 2025 إلى أغسطس 2025–فبراير 2026. الخطأ المرجّح الأقل يعني تقديرًا أقرب."],
-    validation_model_scroll: ["Model comparison scores; scroll horizontally on narrow screens", "درجات مقارنة النماذج. مرّر أفقيًا على الشاشات الضيقة"],
     validation_model: ["Model", "النموذج"],
     validation_training_error: ["Train WMAPE", "الخطأ المرجّح في التدريب"],
-    validation_test_error: ["Test WMAPE", "الخطأ المرجّح في الاختبار"],
-    validation_verdict: ["Verdict", "التقييم"],
     validation_live_chain: ["Live chain", "الحساب المباشر"],
     validation_seasonal_chain: ["Seasonal chain", "الحساب الموسمي"],
     validation_ridge: ["Ridge alone", "انحدار ريدج وحده"],
-    validation_live_verdict: ["Underfit: constant rate can't follow seasonality", "ملاءمة ضعيفة لأن المعدل الثابت لا يواكب التغيّرات الموسمية"],
-    validation_seasonal_verdict: ["Fine, but drifts low", "أداء مقبول يميل إلى التقليل من الأعداد"],
-    validation_ridge_verdict: ["Mild overfit", "ملاءمة زائدة طفيفة"],
-    validation_model_source: ["The primary live and seasonal test scores match saved results. Training, Ridge-only and later-window scores are supplied figures; verdicts are supplied interpretations, not verified diagnoses.", "تتطابق نتائج الاختبار الأساسي للحسابين المباشر والموسمي مع النتائج المحفوظة. أما درجات التدريب وانحدار ريدج والفترة اللاحقة فهي أرقام مقدّمة، والتقييمات تفسيرات لم تُتحقّق صحتها."],
     sensitivity_trial_note: ["Each trial changes one assumption within its control limits. Trial sizes differ, so the bars show the effect of these specific changes.", "يغيّر كل اختبار افتراضًا واحدًا ضمن حدوده. وتختلف مقادير التغيير، لذا تُظهر الأشرطة أثر هذه التغييرات المحددة."],
     visitor_edit_help: ["Editing one share adjusts the others to keep the total at 100%.", "عند تعديل حصة واحدة، تتغير الحصص الأخرى ليبقى المجموع 100%."],
     seasonal_comparison: ["Seasonal comparison", "المقارنة الموسمية"],
@@ -4727,12 +4805,12 @@ const I18N = (() => {
     proposal_actions_and_history: ["Proposal actions and history", "إجراءات المقترح وسجله"],
     route_decision_tools: ["Route decision tools", "أدوات اتخاذ القرار بشأن المسار"],
     which_route_option_should: ["Which route option should we investigate?", "أي خيار للمسار يستحق الدراسة؟"],
-    these_tools_isolate_the: ["These tools isolate the effect of added flights: each option is compared with the same assumptions and zero extra flights. The main headline also includes your other edits to the historical baseline. These are planning comparisons, not airline profitability or booking forecasts.", "تعزل هذه الأدوات أثر الرحلات المضافة. يُقارن كل خيار بخطة تستخدم الافتراضات نفسها دون رحلات إضافية. تتضمن النتيجة الرئيسية أيضًا أثر تعديلاتك الأخرى مقارنة بالتقدير المرجعي. هذه المقارنات للتخطيط وليست توقعات للحجوزات أو الربحية."],
+    these_tools_isolate_the: ["These tools isolate the effect of added flights by comparing each option with its own zero-extra-flights estimate. The main headline also includes your other edits to the historical baseline. These are planning comparisons, not airline profitability or booking forecasts.", "تعزل هذه الأدوات أثر الرحلات المضافة من خلال مقارنة كل خيار بتقديره الخاص دون رحلات إضافية. تتضمن النتيجة الرئيسية أيضًا أثر تعديلاتك الأخرى مقارنة بالتقدير المرجعي. هذه المقارنات للتخطيط وليست توقعات للحجوزات أو الربحية."],
     compare_routes: ["Compare routes", "مقارنة المسارات"],
+    route_insight: ["Insight", "خلاصة المقارنة"],
     current_proposal_versus_an: ["Current proposal versus an existing route", "المقترح الحالي مقارنة بمسار قائم"],
     existing_route_to_compare: ["Existing route to compare", "المسار القائم للمقارنة"],
-    use_identical_flight_and: ["Use identical flight and visitor assumptions for both routes", "استخدم افتراضات الرحلات والزوار نفسها للمسارين"],
-    both_options_use_the: ["Both options use the same added flights, seats per flight, event assumption and hotel-use rate. By default, the alternative uses its own flight fullness, trip-ending share and average-stay starting estimates.", "يستخدم الخياران عدد الرحلات والمقاعد المضافة نفسه وافتراض الفعالية ونسبة الإقامة الفندقية نفسها. افتراضيًا، يستخدم المسار البديل تقديراته الخاصة للإشغال ونسبة إنهاء الرحلة ومتوسط الإقامة."],
+    both_options_use_the: ["Both options use the same added flights, seats per flight, event adjustment and hotel-use rate. The alternative uses its own starting estimates for flight fullness, the share ending their trip here and length of stay.", "يستخدم الخياران العدد نفسه من الرحلات الإضافية والمقاعد لكل رحلة، والتعديل نفسه للفعاليات ونسبة الإقامة الفندقية نفسها. يستخدم المسار البديل تقديراته الأولية الخاصة لإشغال الرحلات ونسبة الركاب الذين تنتهي رحلتهم هنا ومدة الإقامة."],
     three_launch_sizes: ["Three launch sizes", "ثلاثة مستويات للتشغيل"],
     cautious_standard_and_expanded: ["Cautious, standard and expanded refer to the number of flights only. They are not probabilities of demand.", "يشير كل مستوى إلى عدد الرحلات فقط، ولا يمثّل احتمالًا للطلب."],
     compare_months: ["Compare months", "مقارنة الأشهر"],
@@ -5008,6 +5086,8 @@ const I18N = (() => {
     extra_flights_country: ["Extra flights · {country}", "الرحلات الإضافية · {country}"],
     selected_month: ["Selected month", "الشهر المختار"],
     highest_month: ["Highest month", "الشهر الأعلى"],
+    month_chart_current: ["Current", "الحالي"],
+    month_chart_highest: ["Highest", "الأعلى"],
     selected_assumptions: ["Selected assumptions", "الافتراضات المختارة"],
     trial: ["Trial", "الاختبار"],
     change_from_selected_assumptions: ["Change from selected assumptions", "التغيّر عن الافتراضات المختارة"],
@@ -5213,7 +5293,7 @@ const I18N = (() => {
     the_matching_records_badge: ["The matching-records badge describes available flight history, not accuracy. The error scores in “Check past results” tested monthly totals, not this route, your changes, the visitor mix, or event effects.", "تشير شارة السجلات المطابقة إلى تاريخ الرحلات المتاح ولا تقيس الدقة. اختبرت درجات الخطأ الإجماليات الشهرية، دون اختبار هذا المسار أو تعديلاتك أو توزيع الزوار أو آثار الفعاليات."],
     the_live_default_calculation: ["The live default calculation had {value} weighted error across {count} checked months. This tested monthly totals, not individual routes or new-route scenarios.", "بلغ الخطأ الموزون للحساب الافتراضي {value} على مدى {count} أشهر اختبار. اختُبرت الإجماليات الشهرية دون المسارات الفردية أو سيناريوهات المسارات الجديدة."],
     add_positive_flight_capacity: ["Add positive flight capacity to compare hotel-night yield.", "أضف سعة رحلات لمقارنة العائد من الليالي الفندقية."],
-    both_options_have_the: ["Both options have the same estimated yield per added seat. Identical passenger and hotel assumptions produce a tie; country names alone do not create demand.", "للخيارين العائد المقدّر نفسه لكل مقعد إضافي. تعطي افتراضات الركاب والفنادق المتطابقة نتيجة متساوية، ولا تكفي أسماء البلدان لتقدير الطلب."],
+    both_options_have_the: ["Both options have the same estimated yield per added seat.", "للخيارين العائد المقدّر نفسه لكل مقعد إضافي."],
     each_month_refreshes_market: ["Each month refreshes market flight fullness, trip-ending share and starting stay estimates; flight count and aircraft seats stay fixed. Hotel use stays at your chosen rate unless you applied the training-season option. Any visitor-purpose stay assumption is retained. These are seasonal planning estimates, not future bookings.", "يُحدَّث لكل شهر إشغال الرحلات ونسبة إنهاء الرحلة والتقدير الأولي للإقامة. يبقى عدد الرحلات والمقاعد ثابتًا. تبقى نسبة الإقامة الفندقية كما اخترتها ما لم تطبّق افتراض الموسم من بيانات التدريب. تظل افتراضات الإقامة المتعلقة بغرض الزيارة سارية. هذه تقديرات موسمية للتخطيط وليست حجوزات مستقبلية."],
     all_selected_flight_and: ["All selected flight and hotel assumptions stay fixed. Differences mainly reflect days in each month, not a learned seasonal demand effect.", "تبقى جميع افتراضات الرحلات والفنادق المختارة ثابتة. تعكس الفروق أساسًا عدد أيام الشهر، ولا تمثّل أثرًا موسميًا مستخلصًا من البيانات."],
     same_schedule_as_another: ["Same schedule as another option at the control limit.", "يتطابق الجدول مع خيار آخر عند حد الإدخال."],

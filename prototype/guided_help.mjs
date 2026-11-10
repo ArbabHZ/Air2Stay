@@ -74,7 +74,7 @@ const ghGuides = [
     ghStep("Understand the accuracy test", "Open the method notes for the training and test periods.", "#validationSummary", "focus", { view: "validationView" }),
   ] },
   { id: "compare", title: "Prepare a planning decision", description: "Compare routes, test a weaker outcome and export a note.", steps: [
-    ghStep("Choose an alternative route", "Select the existing route to compare. Read which assumptions are shared. Identical inputs can produce identical added-seat effects; that is expected.", "#alternativeOrigin", "decisions"),
+    ghStep("Choose an alternative route", "Select an existing route to compare. The table shows which starting assumptions differ.", "#alternativeOrigin", "decisions"),
     ghStep("Compare launch sizes", "These options vary the number of weekly flights. Cautious, standard and expanded describe capacity, not the likelihood of demand.", "#launchOptions", "decisions"),
     ghStep("Test a weaker outcome", "Lower flight fullness, hotel use and stay length to see how the estimate changes. These are hypothetical stress trials.", "#stressChart", "decisions"),
     ghStep("Review and export the note", "Keep the estimated impact, key assumptions and next checks together. Review the note before sharing it with an airline, hotel or colleague.", "#planningDecision", "decisions"),
@@ -132,7 +132,6 @@ export function createGuidedHelp({ mount, getContext = () => ({}), navigate, cha
     ["#averageStay", "Average nights per hotel guest. Guest nights are different from occupied rooms because people may share a room."],
     ["#eventUplift", "A demand increase you assume for an event or season. It is not a measured effect from event data."],
     ["#routePurpose", "Choosing a purpose labels the proposal; it does not change results until separate assumptions are applied."],
-    ["#sameComparisonAssumptions", "Use the same inputs to isolate the effect of added capacity. Identical inputs may give identical added-seat effects."],
     ["#allowAi", "Optional online AI. Enabling it sends your question, recent chat and selected proposal context to Gemini."],
   ]) {
     const element = document.querySelector(selector);

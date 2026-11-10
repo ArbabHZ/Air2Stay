@@ -65,7 +65,6 @@ assert.equal(exported, null);
 nodes.get('#inputError').hidden=true;
 vm.runInContext('state=defaultState("GREECE",12,"__PEERS__"); state.extraFlights=4; state.conversionRate=0.23456789; state.averageStay=4.87654321; state.routePurpose="holiday"; bridgeOverride=null;',context);
 nodes.get('#alternativeOrigin').value='FRANCE';
-nodes.get('#sameComparisonAssumptions').checked=false;
 nodes.get('#exportDecisionNote').handlers.click();
 const decisionText=await exported.text();
 assert.equal(exported.type,'text/plain;charset=utf-8');
