@@ -279,6 +279,8 @@ def load_prototype_html(asset_signature: tuple) -> str:
         "news and events": PROTOTYPE_DIR / "news_events.mjs",
         "event evidence": PROTOTYPE_DIR / "event_evidence.mjs",
         "event forecasts": PROTOTYPE_DIR / "event_forecast.mjs",
+        "news visuals": PROTOTYPE_DIR / "news_visuals.mjs",
+        "news visual styles": PROTOTYPE_DIR / "news_visuals.css",
         "themes": PROTOTYPE_DIR / "theme.mjs",
         "report downloads": PROTOTYPE_DIR / "report_exports.mjs",
         "document reader": PROTOTYPE_DIR / "document_import.mjs",
@@ -297,7 +299,7 @@ def load_prototype_html(asset_signature: tuple) -> str:
     # -------------------------------------------------------------
     # Inline CSS
     # -------------------------------------------------------------
-    for css_name in ("styles.css", "proposal_workspace.css", "guided_help.css", "import_workspace.css"):
+    for css_name in ("styles.css", "proposal_workspace.css", "guided_help.css", "import_workspace.css", "news_visuals.css"):
         css_path = PROTOTYPE_DIR / css_name
         css = css_path.read_text(encoding="utf-8")
 
@@ -421,7 +423,7 @@ def load_prototype_html(asset_signature: tuple) -> str:
         )
 
         helper_sources = []
-        for helper_name in ("route_planning.mjs", "decision_tools.mjs", "conversion_evidence.mjs", "proposal_workspace.mjs", "guided_help.mjs", "planning_chat.mjs", "news_events.mjs", "event_evidence.mjs", "event_forecast.mjs", "theme.mjs", "document_import.mjs", "import_workspace.mjs", "report_exports.mjs"):
+        for helper_name in ("route_planning.mjs", "decision_tools.mjs", "conversion_evidence.mjs", "proposal_workspace.mjs", "guided_help.mjs", "planning_chat.mjs", "news_events.mjs", "event_evidence.mjs", "event_forecast.mjs", "news_visuals.mjs", "theme.mjs", "document_import.mjs", "import_workspace.mjs", "report_exports.mjs"):
             helper_src = (PROTOTYPE_DIR / helper_name).read_text(encoding="utf-8")
             helper_src = re.sub(r'import\s*\{[^}]+\}\s*from\s*["\']\./[^"\']+["\'];?\s*', "", helper_src)
             helper_sources.append(re.sub(r"(?m)^(\s*)export\s+", r"\1", helper_src))

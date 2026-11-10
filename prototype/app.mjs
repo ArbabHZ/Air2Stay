@@ -7,6 +7,7 @@ import { createGuidedHelp } from "./guided_help.mjs";
 import { planningChatReply, arabicPromptToEnglish, pcMessagesQuery, pcMessagesReply, pcFixTypos } from "./planning_chat.mjs";
 import { NEWS_EVENTS } from "./news_events.mjs";
 import { EVENT_EVIDENCE } from "./event_evidence.mjs";
+import { newsUpcomingVisual, newsTopicVisual, newsPastVisual, newsMetricControl } from "./news_visuals.mjs";
 import { EV_MIN_EDITIONS, evIsoDay, evEventSummary, evNewsList, evUnseenCount, evDate, evDateRange, evSignedNumber, evSignedPercent, evAbout, evChatData } from "./event_forecast.mjs";
 import { initTheme, bindChartInteractions } from "./theme.mjs";
 import { createImportWorkspace } from "./import_workspace.mjs";
@@ -3379,6 +3380,7 @@ const NEWS_TOPICS = [["all", "All"], ["flights", "Flights"], ["tourism", "Touris
 const NEWS_CATEGORY = { sport: "Sport", exhibition: "Exhibition", culture: "Culture", flights: "Flights", tourism: "Tourism", events: "Events" };
 let newsTab = "upcoming";
 let newsTopic = "all";
+let newsPastMetric = "international_pct";
 let newsToday = () => evIsoDay();
 let newsSummaries = () => [];
 let renderNewsPage = () => {};
@@ -3620,13 +3622,14 @@ function setupNewsEvents() {
     if (newsTab === "news") {
       const items = evNewsList(NEWS_EVENTS.news, newsTopic);
       body = `<div class="news-topics" role="group" aria-label="News topic">${NEWS_TOPICS.map(([id, label]) => `<button type="button" data-news-topic="${id}" aria-pressed="${newsTopic === id}">${label}</button>`).join("")}</div>
+        ${newsTopicVisual(items, uiLanguage)}
         ${items.length ? `<div class="news-grid">${items.map(newsArticleCard).join("")}</div>` : "<p>No news in this topic.</p>"}
         <p class="news-note">Headlines link to the publisher. Summaries are our own; photos are not copied.</p>`;
     } else if (newsTab === "past") {
-      body = `<div class="news-past">${summaries.map(newsPastTable).join("")}</div>
+      body = `${newsMetricControl(newsPastMetric, uiLanguage)}<div class="news-past">${summaries.map(summary => `<section class="nv-history-event">${newsPastVisual(summary, newsPastMetric, uiLanguage, summaries)}<details class="nv-data-details"><summary data-i18n-ignore>${uiLanguage === "ar" ? "عرض جميع الأرقام والتواريخ" : "See all figures and dates"}</summary>${newsPastTable(summary)}</details></section>`).join("")}</div>
         <p class="news-note">Guest nights on event nights are the main measure. Check-ins can fall while hotels are full of guests staying for the event.</p>`;
     } else {
-      body = `<div class="news-grid">${[...upcoming, ...unscheduled].map(newsEventCard).join("")}</div>`;
+      body = `${newsUpcomingVisual(summaries, uiLanguage)}<div class="news-grid">${[...upcoming, ...unscheduled].map(newsEventCard).join("")}</div>`;
     }
     page.innerHTML = `<div class="intro-row"><div><p>News and events</p><h1 id="newsTitle">What is coming up in Abu Dhabi</h1><span>Upcoming events with forecasts from past editions, and news about tourism and flights.</span></div></div>
       <div class="news-tabs" role="group" aria-label="News and events views">${NEWS_TABS.map(([id, label]) => `<button type="button" data-news-tab="${id}" aria-pressed="${newsTab === id}">${label}</button>`).join("")}</div>
@@ -3645,6 +3648,13 @@ function setupNewsEvents() {
       image.src = newsImageUrl(NEWS_IMAGE_FALLBACK);
     }));
   };
+  page.addEventListener("change", (event) => {
+    if (!event.target.matches("[data-news-metric]")) return;
+    if (!["international_pct", "extra_nights", "domestic_pct", "checkins_pct"].includes(event.target.value)) return;
+    newsPastMetric = event.target.value;
+    renderNewsPage();
+    page.querySelector("[data-news-metric]")?.focus({ preventScroll: true });
+  });
   page.addEventListener("click", (event) => {
     const tab = event.target.closest("[data-news-tab]");
     const topic = event.target.closest("[data-news-topic]");

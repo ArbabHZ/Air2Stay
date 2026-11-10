@@ -27,6 +27,7 @@ REQUIRED = (
     "prototype/data/admin0-countries.svg",
     "prototype/proposal_workspace.css", "prototype/guided_help.css",
     "prototype/import_workspace.css",
+    "prototype/news_visuals.css",
     "prototype/vendor/jszip.min.js", "prototype/vendor/pdf.min.mjs",
     "prototype/vendor/pdf.worker.min.mjs", "prototype/vendor/JSZIP-LICENSE.txt",
     "prototype/vendor/PDFJS-LICENSE.txt", "prototype/vendor/README.txt",

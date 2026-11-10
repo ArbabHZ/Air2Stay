@@ -5,6 +5,7 @@ import * as engine from '../prototype/engine.mjs';
 import * as decisions from '../prototype/decision_tools.mjs';
 import * as routes from '../prototype/route_planning.mjs';
 import * as eventForecast from '../prototype/event_forecast.mjs';
+import * as newsVisuals from '../prototype/news_visuals.mjs';
 import { NEWS_EVENTS } from '../prototype/news_events.mjs';
 import { EVENT_EVIDENCE } from '../prototype/event_evidence.mjs';
 import { EV_MIN_EDITIONS, EV_MAX_UPLIFT, evEventSummary, evForecast, evLeaveOneOut, evNormalPerNight, evNewsList, evUnseenCount, evChatData,
@@ -250,7 +251,7 @@ function testNode() {
     querySelector() { return null; }, click() {},
   };
 }
-const ctx = vm.createContext({ ...engine, ...decisions, ...routes, ...eventForecast, NEWS_EVENTS, EVENT_EVIDENCE,
+const ctx = vm.createContext({ ...engine, ...decisions, ...routes, ...eventForecast, ...newsVisuals, NEWS_EVENTS, EVENT_EVIDENCE,
   inputData: data, inputLocations: locations, setTimeout: () => 0, clearTimeout() {},
   localStorage: { getItem() { return null; }, setItem() {} },
   document: { addEventListener() {}, querySelector(selector) { if (!nodes.has(selector)) nodes.set(selector, testNode()); return nodes.get(selector); } },
