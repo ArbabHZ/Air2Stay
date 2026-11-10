@@ -23,6 +23,7 @@
        <button class="nav-tab" data-view="glossaryView" data-i18n="term_guide">Term guide</button>
        <button type="button" class="nav-tab" data-view="statsView" hidden data-i18n="statistics">Statistics</button>
        <button type="button" class="nav-tab" data-view="messagesView" hidden data-i18n="messages">Messages</button>
+       <button type="button" class="nav-tab" data-view="newsView" hidden data-i18n="news_and_events">News and events</button>
      </nav>
      <div class="header-tools">
        <span id="headerScenario" dir="ltr" class="header-scenario"></span>
@@ -329,6 +330,7 @@
        <section id="privacyLimits" class="content-block limits"><h2 data-i18n="about_privacy_and_sharing">About privacy and sharing</h2><ul><li data-i18n="the_planner_runs_locally">The planner runs locally.</li><li id="chatPrivacy" hidden>When Gemini is enabled in Chat, open-ended questions send your question, recent chat, plan summary and built-in check statuses to Google.</li><li data-i18n="privacy_local_proposals">Proposal comments, evidence and decisions stay in this browser. Assigning an owner does not send a notification.</li><li data-i18n="it_uses_totals_for">It uses totals for groups, not names or details about individual travellers.</li><li data-i18n="exported_files_include_your">Exported files include your plan assumptions and any edited visitor mix. Proposal-history downloads also include your saved notes.</li><li data-i18n="guide_me_explains_local">Guide me explains local storage, optional usage counts and feedback. Share competition data only with people who are allowed to receive it.</li></ul></section>
      </section>
      <section id="statsView" class="view standard-view"></section>
+     <section id="newsView" class="view standard-view news-view" aria-labelledby="newsTitle"></section>
      <section id="messagesView" class="view standard-view" aria-labelledby="messagesTitle">
        <div class="intro-row">
          <div><p data-i18n="messages">Messages</p><h1 id="messagesTitle" data-i18n="talk_to_your_team">Talk to your team and partners</h1><span data-i18n="write_prioritise_and_keep">Write, prioritise and keep track of messages. Messages are saved in this browser and not emailed.</span></div>
@@ -368,6 +370,7 @@
      <button type="button" data-team-open="tasks" aria-label="Tasks" title="Tasks" data-i18n-aria-label="tasks" data-i18n-title="tasks"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="5" y="5" width="14" height="16" rx="2"/><path d="M9 5V3h6v2m-7 9 3 3 5-5"/></svg></button>
      <button type="button" data-team-open="messages" aria-label="Messages" title="Messages" data-i18n-aria-label="messages" data-i18n-title="messages"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M4 5h16v11H9l-5 3z"/><path d="M8 9h8m-8 3h5"/></svg></button>
      <button type="button" data-team-open="stats" aria-label="Statistics" title="Statistics" data-i18n-aria-label="statistics" data-i18n-title="statistics"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M4 4v16h16M8 16v-4m5 4V7m5 9V9"/></svg></button>
+     <button type="button" class="team-news-button" data-team-open="news" aria-label="News and events" title="News and events" data-i18n-aria-label="news_and_events" data-i18n-title="news_and_events"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 5H5.5A1.5 1.5 0 0 0 4 6.5v11A2.5 2.5 0 0 0 6.5 20h13"/><path d="M17 5v12.5a2.5 2.5 0 0 0 5 0V9h-5"/><path class="news-line news-line-1" d="M7.5 8.5h6"/><path class="news-line news-line-2" d="M7.5 12h6"/><path class="news-line news-line-3" d="M7.5 15.5h4"/></svg><span class="team-count" data-news-count aria-hidden="true" hidden></span></button>
    </nav>
    <button type="button" id="helpChatBubble" class="help-chat-bubble" data-assistant-open aria-label="Open the Air2Stay assistant" title="Ask Air2Stay · Drag to move" aria-description="Drag or use the arrow keys to move. Press Home to reset the position." aria-controls="helpChat" aria-expanded="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 5h16v11H9l-5 3z"/><path d="m12 7.6.8 1.7 1.7.8-1.7.8-.8 1.7-.8-1.7-1.7-.8 1.7-.8z" fill="currentColor" stroke-width="1"/></svg></button>
    <section id="helpChat" class="help-chat" role="dialog" aria-modal="false" aria-labelledby="helpChatTitle" hidden>

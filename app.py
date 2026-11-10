@@ -276,6 +276,9 @@ def load_prototype_html(asset_signature: tuple) -> str:
         "guided help": PROTOTYPE_DIR / "guided_help.mjs",
         "help styles": PROTOTYPE_DIR / "guided_help.css",
         "planning chat": PROTOTYPE_DIR / "planning_chat.mjs",
+        "news and events": PROTOTYPE_DIR / "news_events.mjs",
+        "event evidence": PROTOTYPE_DIR / "event_evidence.mjs",
+        "event forecasts": PROTOTYPE_DIR / "event_forecast.mjs",
     }
     missing = [f"{label}: {path}" for label, path in required_files.items() if not path.is_file()]
     if missing:
@@ -401,7 +404,7 @@ def load_prototype_html(asset_signature: tuple) -> str:
         )
 
         helper_sources = []
-        for helper_name in ("route_planning.mjs", "decision_tools.mjs", "conversion_evidence.mjs", "proposal_workspace.mjs", "guided_help.mjs", "planning_chat.mjs"):
+        for helper_name in ("route_planning.mjs", "decision_tools.mjs", "conversion_evidence.mjs", "proposal_workspace.mjs", "guided_help.mjs", "planning_chat.mjs", "news_events.mjs", "event_evidence.mjs", "event_forecast.mjs"):
             helper_src = (PROTOTYPE_DIR / helper_name).read_text(encoding="utf-8")
             helper_src = re.sub(r'import\s*\{[^}]+\}\s*from\s*["\']\./[^"\']+["\'];?\s*', "", helper_src)
             helper_sources.append(re.sub(r"(?m)^(\s*)export\s+", r"\1", helper_src))
@@ -444,14 +447,26 @@ def load_prototype_html(asset_signature: tuple) -> str:
         if path.is_file():
             help_assets.append({"name": name, "filename":path.name, "url":"data:" + mime + ";base64," + base64.b64encode(path.read_bytes()).decode("ascii")})
     help_script = "<script>window.__AIR2STAY_HELP_ASSETS__=" + json.dumps(help_assets) + ";</script>"
-    return html.replace("<head>", "<head>" + help_script, 1)
+
+    # News and events card pictures: image files in one folder only, by name,
+    # embedded so the self-contained page can show them. Oversized files are skipped.
+    news_images = {}
+    news_image_dir = PROTOTYPE_DIR / "images" / "news-events"
+    image_types = {".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp"}
+    if news_image_dir.is_dir():
+        for path in sorted(news_image_dir.iterdir()):
+            mime = image_types.get(path.suffix.lower())
+            if mime and path.is_file() and path.stat().st_size <= 3 * 1024 * 1024:
+                news_images[path.name] = "data:" + mime + ";base64," + base64.b64encode(path.read_bytes()).decode("ascii")
+    news_script = "<script>window.__AIR2STAY_NEWS_IMAGES__=" + json.dumps(news_images) + ";</script>"
+    return html.replace("<head>", "<head>" + help_script + news_script, 1)
 
 
 # -------------------------------------------------------------
 # Render prototype
 # -------------------------------------------------------------
 try:
-    asset_signature = tuple((str(path.relative_to(PROTOTYPE_DIR)), path.stat().st_mtime_ns) for path in sorted(PROTOTYPE_DIR.rglob("*")) if path.is_file() and path.suffix in {".html", ".css", ".mjs", ".json", ".svg"})
+    asset_signature = tuple((str(path.relative_to(PROTOTYPE_DIR)), path.stat().st_mtime_ns) for path in sorted(PROTOTYPE_DIR.rglob("*")) if path.is_file() and path.suffix.lower() in {".html", ".css", ".mjs", ".json", ".svg", ".png", ".jpg", ".jpeg", ".webp"})
     audit_path = ROOT / "Air2Stay_Calculation_Audit_v2.0.xlsx"
     if audit_path.is_file():
         asset_signature += ((audit_path.name, audit_path.stat().st_mtime_ns),)

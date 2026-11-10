@@ -5,6 +5,9 @@ import { CONVERSION_EVIDENCE } from "./conversion_evidence.mjs";
 import { createProposalWorkspace } from "./proposal_workspace.mjs";
 import { createGuidedHelp } from "./guided_help.mjs";
 import { planningChatReply, arabicPromptToEnglish, pcMessagesQuery, pcMessagesReply, pcFixTypos } from "./planning_chat.mjs";
+import { NEWS_EVENTS } from "./news_events.mjs";
+import { EVENT_EVIDENCE } from "./event_evidence.mjs";
+import { EV_MIN_EDITIONS, evIsoDay, evEventSummary, evNewsList, evUnseenCount, evDate, evDateRange, evSignedNumber, evSignedPercent, evAbout, evChatData } from "./event_forecast.mjs";
   
  const chatEnabled = globalThis.__AIR2STAY_CHAT_ENABLED__ === true;
  const $ = (selector) => document.querySelector(selector);
@@ -1918,7 +1921,13 @@ function helpChatExtras() {
     missing: summary && next ? { checks: summary.checks || [], decisionLogged: (summary.decisions || []).length > 0, total: next.plan.readiness.total } : null,
     where: { view: $(".nav-tab.active")?.dataset.view || "scenarioView", mode: $(".view-mode.active")?.dataset.mode || "focus" },
     history: planHistoryForChat(),
+    events: newsEventsForChat(),
   };
+}
+
+// Plain English data about events and news for the assistant (it translates the lines).
+function newsEventsForChat() {
+  return evChatData(NEWS_EVENTS, EVENT_EVIDENCE, newsToday(), newsCountryName, data.routes.map((route) => route.origin));
 }
 
 function decisionNoteText() {
@@ -3297,6 +3306,284 @@ function packBarChart(rows, formatter, maximum = Math.max(1, ...rows.map(row => 
   </li>`).join("")}</ul>`;
 }
 
+// ---------------------------------------------------------------------------
+// News and events: upcoming events with forecasts from measured past editions,
+// news from the team's list, and the measured past editions themselves.
+const NEWS_SEEN_KEY = "air2stay:news:seen:v1";
+const NEWS_TABS = [["upcoming", "Upcoming events"], ["news", "News"], ["past", "Past events"]];
+const NEWS_TOPICS = [["all", "All"], ["flights", "Flights"], ["tourism", "Tourism"], ["events", "Events"]];
+const NEWS_CATEGORY = { sport: "Sport", exhibition: "Exhibition", culture: "Culture", flights: "Flights", tourism: "Tourism", events: "Events" };
+let newsTab = "upcoming";
+let newsTopic = "all";
+let newsToday = () => evIsoDay();
+let newsSummaries = () => [];
+let renderNewsPage = () => {};
+
+const newsDate = (day, lang = uiLanguage) => evDate(day, lang);
+
+// Dictionary pairs for the team's event and news data (used by the page and the assistant).
+function newsEventLabels() {
+  const pairs = [];
+  // Runs while the dictionary is built; the data module is always inlined in the app.
+  if (typeof NEWS_EVENTS === "undefined") return pairs;
+  for (const event of NEWS_EVENTS.events) {
+    pairs.push([`nev_event_${event.id}`, event.name, event.nameAr]);
+    pairs.push([`nev_venue_${event.id}`, event.venue, event.venueAr]);
+    for (const edition of event.editions) {
+      pairs.push([`nev_dates_${edition.id}`, newsDateRange(edition.start, edition.end, "en"), newsDateRange(edition.start, edition.end, "ar")]);
+    }
+  }
+  for (const item of NEWS_EVENTS.news) {
+    pairs.push([`nev_newsdate_${item.id}`, newsDate(item.date, "en"), newsDate(item.date, "ar")]);
+    pairs.push([`nev_summary_${item.id}`, item.summary, item.summaryAr]);
+  }
+  return pairs;
+}
+
+const newsDateRange = (start, end, lang = uiLanguage) => evDateRange(start, end, lang);
+
+const newsSignedNumber = (value) => evSignedNumber(value);
+const newsSignedPercent = (value) => evSignedPercent(value);
+const newsAbout = (value, step) => evAbout(value, step);
+
+function newsCountryName(name) {
+  const location = countryLocationLookup[normalizeCountryName(name)];
+  if (location) return location.name;
+  const route = data.routes.find((row) => row.originKey === name);
+  if (route) return route.origin;
+  return String(name).toLowerCase().replace(/\b[a-z]+/g, (word, index) => index > 0 && ["of", "and", "the"].includes(word) ? word : word[0].toUpperCase() + word.slice(1));
+}
+
+// Card pictures are image files in prototype/images/news-events/, named in
+// news_events.mjs, so the team can swap them. The Streamlit app embeds the files
+// (window.__AIR2STAY_NEWS_IMAGES__); the plain prototype loads them by path.
+const NEWS_IMAGE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*\.(?:svg|png|jpe?g|webp)$/i;
+const NEWS_IMAGE_FALLBACK = "news-events.jpg";
+
+function newsImageUrl(file) {
+  const name = NEWS_IMAGE_NAME.test(String(file || "")) ? String(file) : NEWS_IMAGE_FALLBACK;
+  const embedded = globalThis.__AIR2STAY_NEWS_IMAGES__;
+  if (embedded && typeof embedded === "object") return embedded[name] || embedded[NEWS_IMAGE_FALLBACK] || "";
+  return `./images/news-events/${encodeURIComponent(name)}`;
+}
+
+// Author and licence for pictures from Wikimedia Commons (required by their licences).
+function newsCredit(file) {
+  const credit = NEWS_EVENTS.imageCredits?.[file];
+  if (!credit || !credit.author || !credit.licence) return "";
+  const link = (url, text) => /^https:\/\//.test(String(url || ""))
+    ? `<a href="${planningEscape(url)}" target="_blank" rel="noopener noreferrer" data-i18n-ignore>${planningEscape(text)}</a>`
+    : `<span data-i18n-ignore>${planningEscape(text)}</span>`;
+  return `<p class="news-credit"><span>${credit.cropped ? "Photo (cropped)" : "Photo"}</span><span data-i18n-ignore>: </span>${link(credit.source, credit.author)}<span data-i18n-ignore> · </span>${link(credit.licenceUrl, credit.licence)}${credit.site ? `<span data-i18n-ignore> · ${planningEscape(credit.site)}</span>` : ""}</p>`;
+}
+
+function newsImage(file) {
+  const url = newsImageUrl(file);
+  return url ? `<img class="news-art" src="${planningEscape(url)}" alt="" loading="lazy" decoding="async" data-news-image>` : '<span class="news-art" aria-hidden="true"></span>';
+}
+
+function newsSeen() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(NEWS_SEEN_KEY) || "{}");
+    return stored && typeof stored === "object" ? stored : {};
+  } catch { return {}; }
+}
+
+function updateNewsBadge() {
+  const badge = $("[data-news-count]");
+  if (!badge) return;
+  const count = evUnseenCount(NEWS_EVENTS.news, newsSummaries(), newsSeen(), newsToday());
+  badge.hidden = count === 0;
+  badge.textContent = count > 9 ? "9+" : String(count);
+}
+
+function markNewsSeen() {
+  const soon = newsSummaries().filter((summary) => summary.upcoming).map((summary) => summary.upcoming.id);
+  try { localStorage.setItem(NEWS_SEEN_KEY, JSON.stringify({ news: NEWS_EVENTS.news.map((item) => item.id), events: soon })); }
+  catch { /* The badge clears for this visit only. */ }
+  const badge = $("[data-news-count]");
+  if (badge) badge.hidden = true;
+}
+
+function newsForecastBlock(summary) {
+  const { forecast, effect, upcoming } = summary;
+  if (!forecast) {
+    return `<div class="news-forecast"><h3>Forecast for international hotel guests</h3><p>${effect
+      ? "The normal level for these dates is not in the supplied guest-night data, so no forecast is shown."
+      : `There are not enough measured past editions to forecast this event yet (at least ${EV_MIN_EDITIONS} are needed).`}</p></div>`;
+  }
+  const perNight = newsAbout(forecast.perNight.mid, 10);
+  const total = newsAbout(forecast.extraNights.mid, 100);
+  const percent = forecast.uplift == null ? 0 : Math.round(forecast.uplift * 100);
+  const country = summary.nationalities.map((name) => `<span>${planningEscape(newsCountryName(name))}</span>`).join("");
+  return `<div class="news-forecast">
+    <h3>Forecast for international hotel guests</h3>
+    <p class="news-big">${perNight >= 0 ? `About ${formatNumber(perNight)} more international hotel guests each night` : `About ${formatNumber(-perNight)} fewer international hotel guests each night`}</p>
+    <p>${total >= 0 ? `About ${formatNumber(total)} extra guest nights over ${forecast.nights} nights.` : `About ${formatNumber(-total)} fewer guest nights over ${forecast.nights} nights.`}</p>
+    <p>Past editions ranged from ${newsSignedNumber(newsAbout(forecast.perNight.low, 10))} to ${newsSignedNumber(newsAbout(forecast.perNight.high, 10))} guests a night.</p>
+    <p>Based on ${effect.years.length} past editions: ${effect.years.join(", ")}.</p>
+    ${effect.checkPoints == null ? "" : `<p>Checked by predicting each past edition from the others: average miss ${effect.checkPoints.toFixed(1)} percentage points.</p>`}
+    ${country ? `<p>Most extra guests came from:</p><div class="news-chips">${country}</div>` : ""}
+    ${effect.domesticMean == null ? "" : `<p>${effect.domesticMean < 0
+      ? `UAE-resident hotel guests usually fell during this event (${newsSignedPercent(effect.domesticMean)} on average).`
+      : `UAE-resident hotel guests also rose during this event (${newsSignedPercent(effect.domesticMean)} on average).`}</p>`}
+    <div class="news-actions">${percent >= 1
+      ? `<button type="button" class="feature-primary" data-news-apply="${planningEscape(upcoming.id)}">Apply to plan: ${percent}% in ${data.months[forecast.planMonth - 1]}</button>`
+      : `<p>Too small to set on the plan's event control (under 1% of the month).</p>`}</div>
+    ${forecast.upliftCapped ? "<p>Capped at the control's 50% limit.</p>" : ""}
+  </div>`;
+}
+
+function newsEventCard(summary) {
+  const { event, upcoming, effect } = summary;
+  const ar = uiLanguage === "ar";
+  const name = ar ? event.nameAr : event.name;
+  const venue = ar ? event.venueAr : event.venue;
+  const dates = upcoming
+    ? `<span data-i18n-ignore>${planningEscape(newsDateRange(upcoming.start, upcoming.end))}</span>`
+    : "<span>Dates not announced yet</span>";
+  const usual = !upcoming && effect
+    ? `<div class="news-forecast"><h3>Usual effect on international hotel guests</h3><p class="news-big">${newsSignedPercent(effect.mean)} guest nights on event nights</p><p>Past editions ranged from ${newsSignedPercent(effect.low)} to ${newsSignedPercent(effect.high)}.</p><p>Based on ${effect.years.length} past editions: ${effect.years.join(", ")}.</p></div>`
+    : "";
+  return `<article class="news-card">
+    ${newsImage(event.image)}
+    <div class="news-body">
+      ${newsCredit(event.image)}
+      <div class="news-meta"><strong>Event</strong>${dates}</div>
+      <h2 class="news-title" data-i18n-ignore lang="${ar ? "ar" : "en"}">${planningEscape(name)}</h2>
+      <p data-i18n-ignore lang="${ar ? "ar" : "en"}">${planningEscape(venue)}</p>
+      ${upcoming ? newsForecastBlock(summary) : usual || "<p>No forecast yet.</p>"}
+      ${upcoming?.source ? `<a class="news-source" href="${planningEscape(upcoming.source)}" target="_blank" rel="noopener noreferrer">Date source ↗</a>` : ""}
+    </div>
+  </article>`;
+}
+
+function newsArticleCard(item) {
+  const ar = uiLanguage === "ar";
+  const event = item.eventId ? NEWS_EVENTS.events.find((row) => row.id === item.eventId) : null;
+  const chips = [
+    ...(item.affects || []).map((key) => `<span>${planningEscape(newsCountryName(key))}</span>`),
+    ...(event ? [`<span data-i18n-ignore>${planningEscape(ar ? event.nameAr : event.name)}</span>`] : []),
+  ].join("");
+  return `<article class="news-card">
+    ${newsImage(item.image)}
+    <div class="news-body">
+      ${newsCredit(item.image)}
+      <div class="news-meta"><strong>Article · ${NEWS_CATEGORY[item.topic] || "News"}</strong><span>${item.dateKind === "updated" ? "Updated" : "Published"} <span data-i18n-ignore>${planningEscape(newsDate(item.date))}</span></span></div>
+      <h2 class="news-title"><a href="${planningEscape(item.url)}" target="_blank" rel="noopener noreferrer" lang="en" dir="ltr" data-i18n-ignore>${planningEscape(item.headline)}</a></h2>
+      <div class="news-meta"><span data-i18n-ignore>${planningEscape(item.source)}</span>${ar ? '<span class="news-lang-note">English article</span>' : ""}</div>
+      <p data-i18n-ignore lang="${ar ? "ar" : "en"}">${planningEscape(ar ? item.summaryAr : item.summary)}</p>
+      ${chips ? `<p>May affect:</p><div class="news-chips">${chips}</div>` : ""}
+    </div>
+  </article>`;
+}
+
+function newsPastTable(summary) {
+  const { event } = summary;
+  const ar = uiLanguage === "ar";
+  const notMeasured = {
+    no_guest_nights: ["Not measured: the supplied files have guest nights only up to", EVENT_EVIDENCE.guestsPeriod.end],
+    after_data: ["Not measured: the supplied data ends on", EVENT_EVIDENCE.dataPeriod.end],
+    before_data: ["Not measured: the supplied data starts on", EVENT_EVIDENCE.dataPeriod.start],
+    too_few_days: ["Not measured: not enough clean comparison days around it.", null],
+    stale: ["The dates changed after the last measurement. Run src/build_event_evidence.py again.", null],
+    not_measured: ["Not measured.", null],
+    upcoming: ["Upcoming.", null],
+  };
+  const rows = summary.rows.map(({ edition, status, evidence }) => {
+    const dates = `<td data-i18n-ignore>${planningEscape(newsDateRange(edition.start, edition.end))}</td>`;
+    if (status !== "measured") {
+      const [label, day] = notMeasured[status] || notMeasured.not_measured;
+      return `<tr><th scope="row">${edition.start.slice(0, 4)}</th>${dates}<td colspan="5"><span>${label}</span>${day ? ` <span data-i18n-ignore>${planningEscape(newsDate(day))}</span>.` : ""}</td></tr>`;
+    }
+    const international = evidence.nights.international;
+    const domestic = evidence.nights.domestic;
+    const checkins = evidence.checkins?.international;
+    return `<tr><th scope="row">${edition.start.slice(0, 4)}</th>${dates}
+      <td>${newsSignedPercent(international.pct)}</td><td>${newsSignedNumber(international.extra)}</td>
+      <td>${domestic && Number.isFinite(domestic.pct) ? newsSignedPercent(domestic.pct) : "—"}</td>
+      <td>${checkins && Number.isFinite(checkins.pct) ? newsSignedPercent(checkins.pct) : "—"}</td>
+      <td>${international.days.length} of ${evidence.eventNights}</td></tr>`;
+  }).join("");
+  return `<div class="news-table-wrap"><table class="news-table">
+    <caption data-i18n-ignore lang="${ar ? "ar" : "en"}">${planningEscape(ar ? event.nameAr : event.name)}</caption>
+    <thead><tr><th scope="col">Edition</th><th scope="col">Dates</th><th scope="col">International guest nights</th><th scope="col">Extra international guest nights</th><th scope="col">UAE-resident guest nights</th><th scope="col">International check-ins</th><th scope="col">Event nights measured</th></tr></thead>
+    <tbody>${rows}</tbody></table></div>`;
+}
+
+function setupNewsEvents() {
+  const page = $("#newsView");
+  if (!page) return;
+  newsSummaries = () => NEWS_EVENTS.events.map((event) => evEventSummary(event, EVENT_EVIDENCE, newsToday()));
+  const toast = (text) => {
+    const element = $("#featureToast");
+    if (!element) return;
+    element.textContent = text;
+    element.hidden = false;
+    clearTimeout(toast.timer);
+    toast.timer = setTimeout(() => { element.hidden = true; }, 5000);
+  };
+  renderNewsPage = () => {
+    const summaries = newsSummaries();
+    const upcoming = summaries.filter((summary) => summary.upcoming).sort((a, b) => a.upcoming.start.localeCompare(b.upcoming.start));
+    const unscheduled = summaries.filter((summary) => !summary.upcoming);
+    let body;
+    if (newsTab === "news") {
+      const items = evNewsList(NEWS_EVENTS.news, newsTopic);
+      body = `<div class="news-topics" role="group" aria-label="News topic">${NEWS_TOPICS.map(([id, label]) => `<button type="button" data-news-topic="${id}" aria-pressed="${newsTopic === id}">${label}</button>`).join("")}</div>
+        ${items.length ? `<div class="news-grid">${items.map(newsArticleCard).join("")}</div>` : "<p>No news in this topic.</p>"}
+        <p class="news-note">Headlines link to the publisher. Summaries are our own; photos are not copied.</p>`;
+    } else if (newsTab === "past") {
+      body = `<div class="news-past">${summaries.map(newsPastTable).join("")}</div>
+        <p class="news-note">Guest nights on event nights are the main measure. Check-ins can fall while hotels are full of guests staying for the event.</p>`;
+    } else {
+      body = `<div class="news-grid">${[...upcoming, ...unscheduled].map(newsEventCard).join("")}</div>`;
+    }
+    page.innerHTML = `<div class="intro-row"><div><p>News and events</p><h1 id="newsTitle">What is coming up in Abu Dhabi</h1><span>Upcoming events with forecasts from past editions, and news about tourism and flights.</span></div></div>
+      <div class="news-tabs" role="group" aria-label="News and events views">${NEWS_TABS.map(([id, label]) => `<button type="button" data-news-tab="${id}" aria-pressed="${newsTab === id}">${label}</button>`).join("")}</div>
+      ${body}
+      <details class="news-method"><summary>How the forecasts work</summary><ul>
+        <li>Each past edition is compared with normal weeks: the same weekday one, two and three weeks before and after, in matched pairs.</li>
+        <li>Public holidays, Ramadan and Eid, the year-end season and other events are left out of the comparison.</li>
+        <li>The main measure is international hotel guests staying on event nights, from the daily DCT hotel data.</li>
+        <li>A forecast averages the measured editions and applies that change to the latest normal level for those dates.</li>
+        <li>It needs at least two measured editions and shows the range of past editions, not a guarantee.</li>
+      </ul></details>`;
+    // A missing or misnamed picture falls back to the default once, then hides.
+    page.querySelectorAll("img[data-news-image]").forEach((image) => image.addEventListener("error", () => {
+      if (image.dataset.fallback) { image.style.visibility = "hidden"; return; }
+      image.dataset.fallback = "true";
+      image.src = newsImageUrl(NEWS_IMAGE_FALLBACK);
+    }));
+  };
+  page.addEventListener("click", (event) => {
+    const tab = event.target.closest("[data-news-tab]");
+    const topic = event.target.closest("[data-news-topic]");
+    const apply = event.target.closest("[data-news-apply]");
+    if (tab) { newsTab = tab.dataset.newsTab; renderNewsPage(); page.querySelector(`[data-news-tab="${newsTab}"]`)?.focus(); return; }
+    if (topic) { newsTopic = topic.dataset.newsTopic; renderNewsPage(); page.querySelector(`[data-news-topic="${newsTopic}"]`)?.focus(); return; }
+    if (!apply) return;
+    const summary = newsSummaries().find((row) => row.upcoming?.id === apply.dataset.newsApply);
+    const forecast = summary?.forecast;
+    const percent = forecast?.uplift == null ? 0 : Math.round(forecast.uplift * 100);
+    if (percent < 1) return;
+    if (!$("#inputError").hidden) { toast("Correct the highlighted plan input before applying an event."); return; }
+    const changes = { month: forecast.planMonth, eventUplift: percent / 100 };
+    try {
+      const text = applyAssistantPlan({ inputs: { ...state, ...changes }, changes, understood: true });
+      renderAll();
+      $('.nav-tab[data-view="scenarioView"]')?.click();
+      // The same line-by-line translation the assistant uses for this confirmation.
+      toast(uiLanguage === "ar" ? helpChatInLanguage(helpChatAppliedLines(text), "ar").replace(/\n- /g, " ").replace(/\n/g, " ") : text);
+    } catch (error) { toast(friendlyPlanError(error)); }
+  });
+  $('.nav-tab[data-view="newsView"]')?.addEventListener("click", () => { renderNewsPage(); markNewsSeen(); });
+  // Event names, venues, dates and summaries carry their own Arabic, so redraw on a language change.
+  document.addEventListener("click", (event) => { if (event.target.closest("button[data-lang]")) renderNewsPage(); });
+  renderNewsPage();
+  updateNewsBadge();
+}
+
 function setupPackStatistics() {
   const page = $("#statsView");
   page.innerHTML = '<div class="intro-row"><div><p>Statistics</p><h1>See the numbers in context</h1><span id="statsContext"></span></div></div><div id="statsCharts" class="pack-statistics-grid"></div>';
@@ -3802,8 +4089,8 @@ function setupFeaturePack() {
   }
 
   function openTeam(tab) {
-    if (tab === "messages" || tab === "stats") {
-      selectPage(tab === "messages" ? "messagesView" : "statsView");
+    if (tab === "messages" || tab === "stats" || tab === "news") {
+      selectPage(tab === "messages" ? "messagesView" : tab === "news" ? "newsView" : "statsView");
       return;
     }
     teamTab = tab;
@@ -4484,6 +4771,7 @@ function setupFeaturePack() {
   setupTeamDock();
   setupPackSearch({getMessages: () => team.messages, getRequests: () => team.requests, openMessage, openRequest});
   setupPackStatistics();
+  setupNewsEvents();
   renderBadges();
 }
 
@@ -6225,8 +6513,105 @@ const I18N = (() => {
     a2c_cmp_7: ["Ask “Compare with my first result” to compare with where you started.", "اسأل «قارن بنتيجتي الأولى» للمقارنة بنقطة البداية."],
     a2c_cmp_8: ["There is no earlier result to compare with yet.", "لا توجد نتيجة سابقة للمقارنة بها بعد."],
     a2c_cmp_9: ["Change the plan, then ask again; I compare with the result just before the change.", "غيّر الخطة، ثم اسأل مرة أخرى؛ أقارن بالنتيجة التي سبقت التغيير مباشرةً."],
+    // Audit fixes: guide panel, comparison-country notes and status messages.
+    nev_1: ["News and events", "الأخبار والفعاليات"],
+    nev_2: ["What is coming up in Abu Dhabi", "ما الذي ينتظر أبوظبي قريبًا"],
+    nev_3: ["Upcoming events with forecasts from past editions, and news about tourism and flights.", "فعاليات قادمة مع توقعات مبنية على الدورات السابقة، وأخبار عن السياحة والرحلات الجوية."],
+    nev_4: ["Upcoming events", "الفعاليات القادمة"],
+    nev_5: ["News", "الأخبار"],
+    nev_6: ["Past events", "الفعاليات السابقة"],
+    nev_7: ["Tourism", "السياحة"],
+    nev_8: ["Events", "الفعاليات"],
+    nev_9: ["News and events views", "طرق عرض الأخبار والفعاليات"],
+    nev_10: ["News topic", "موضوع الأخبار"],
+    nev_11: ["Event", "فعالية"],
+    nev_12: ["Sport", "رياضة"],
+    nev_13: ["Exhibition", "معرض"],
+    nev_14: ["Culture", "ثقافة"],
+    nev_15: ["Article", "مقال"],
+    nev_16: ["Updated", "آخر تحديث"],
+    nev_17: ["Published", "تاريخ النشر"],
+    nev_18: ["English article", "مقال باللغة الإنجليزية"],
+    nev_19: ["May affect:", "قد يؤثر في:"],
+    nev_20: ["Headlines link to the publisher. Summaries are our own; photos are not copied.", "تفتح العناوين موقع الناشر. الملخصات من إعدادنا، ولم تُنسخ أي صور."],
+    nev_21: ["No news in this topic.", "لا توجد أخبار في هذا الموضوع."],
+    nev_22: ["Guest nights on event nights are the main measure. Check-ins can fall while hotels are full of guests staying for the event.", "ليالي النزلاء في ليالي الفعالية هي المقياس الرئيسي. قد تنخفض التسجيلات الفندقية عندما تمتلئ الفنادق بنزلاء يقيمون من أجل الفعالية."],
+    nev_23: ["How the forecasts work", "كيف تعمل التوقعات"],
+    nev_24: ["Each past edition is compared with normal weeks: the same weekday one, two and three weeks before and after, in matched pairs.", "تُقارَن كل دورة سابقة بأسابيع عادية: اليوم نفسه من الأسبوع قبلها وبعدها بأسبوع وأسبوعين وثلاثة أسابيع، في أزواج متقابلة."],
+    nev_25: ["Public holidays, Ramadan and Eid, the year-end season and other events are left out of the comparison.", "تُستبعد من المقارنة العطلات الرسمية ورمضان والعيدان وموسم نهاية العام والفعاليات الأخرى."],
+    nev_26: ["The main measure is international hotel guests staying on event nights, from the daily DCT hotel data.", "المقياس الرئيسي هو نزلاء الفنادق الدوليون المقيمون في ليالي الفعالية، من بيانات الفنادق اليومية لدائرة الثقافة والسياحة."],
+    nev_27: ["A forecast averages the measured editions and applies that change to the latest normal level for those dates.", "يأخذ التوقع متوسط الدورات المقاسة ويطبّق هذا التغيّر على أحدث مستوى عادي لتلك التواريخ."],
+    nev_28: ["It needs at least two measured editions and shows the range of past editions, not a guarantee.", "يتطلب دورتين مقاستين على الأقل، ويعرض نطاق الدورات السابقة، لا نتيجة مضمونة."],
+    nev_29: ["Dates not announced yet", "لم تُعلَن المواعيد بعد"],
+    nev_30: ["Usual effect on international hotel guests", "التأثير المعتاد على نزلاء الفنادق الدوليين"],
+    nev_31: ["{value} guest nights on event nights", "{value} في ليالي النزلاء خلال ليالي الفعالية"],
+    nev_32: ["Past editions ranged from {low} to {high}.", "تراوحت الدورات السابقة بين {low} و{high}."],
+    nev_33: ["Based on {count} past editions: {item}.", "عدد الدورات السابقة المعتمدة: {count} ({item})."],
+    nev_34: ["No forecast yet.", "لا يوجد توقع بعد."],
+    nev_35: ["Date source ↗", "مصدر المواعيد ↗"],
+    nev_36: ["Forecast for international hotel guests", "التوقع لنزلاء الفنادق الدوليين"],
+    nev_37: ["About {value} more international hotel guests each night", "نحو {value} من النزلاء الدوليين الإضافيين في الفنادق كل ليلة"],
+    nev_38: ["About {value} fewer international hotel guests each night", "انخفاض بنحو {value} في عدد النزلاء الدوليين في الفنادق كل ليلة"],
+    nev_39: ["About {value} extra guest nights over {count} nights.", "نحو {value} ليلة نزلاء إضافية خلال ليالي الفعالية ({count})."],
+    nev_40: ["About {value} fewer guest nights over {count} nights.", "نحو {value} ليلة نزلاء أقل خلال ليالي الفعالية ({count})."],
+    nev_41: ["Past editions ranged from {low} to {high} guests a night.", "تراوحت الدورات السابقة بين {low} و{high} من النزلاء في الليلة."],
+    nev_42: ["Checked by predicting each past edition from the others: average miss {value} percentage points.", "تم التحقق بتوقّع كل دورة سابقة من الدورات الأخرى: متوسط الفرق {value} نقطة مئوية."],
+    nev_43: ["Most extra guests came from:", "جاء معظم النزلاء الإضافيين من:"],
+    nev_44: ["UAE-resident hotel guests usually fell during this event ({value} on average).", "انخفض عادةً عدد نزلاء الفنادق المقيمين في الإمارات خلال هذه الفعالية ({value} في المتوسط)."],
+    nev_45: ["UAE-resident hotel guests also rose during this event ({value} on average).", "ارتفع أيضًا عدد نزلاء الفنادق المقيمين في الإمارات خلال هذه الفعالية ({value} في المتوسط)."],
+    nev_46: ["Apply to plan: {value} in {month}", "طبّق على الخطة: {value} في {month}"],
+    nev_47: ["Too small to set on the plan's event control (under 1% of the month).", "أصغر من أن يُضبط في عنصر الفعالية في الخطة (أقل من 1% من الشهر)."],
+    nev_48: ["Capped at the control's 50% limit.", "تم تحديده عند الحد الأقصى للعنصر وهو 50%."],
+    nev_49: ["The normal level for these dates is not in the supplied guest-night data, so no forecast is shown.", "المستوى العادي لهذه التواريخ غير موجود في بيانات ليالي النزلاء المقدّمة، لذا لا يُعرض توقع."],
+    nev_50: ["There are not enough measured past editions to forecast this event yet (at least {count} are needed).", "لا توجد دورات سابقة مقاسة كافية لتوقع هذه الفعالية بعد (يلزم {count} على الأقل)."],
+    nev_51: ["Correct the highlighted plan input before applying an event.", "صحّح مدخل الخطة المظلّل قبل تطبيق فعالية."],
+    nev_52: ["Edition", "الدورة"],
+    nev_53: ["Dates", "التواريخ"],
+    nev_54: ["International guest nights", "ليالي النزلاء الدوليين"],
+    nev_55: ["Extra international guest nights", "ليالي النزلاء الدوليين الإضافية"],
+    nev_56: ["UAE-resident guest nights", "ليالي النزلاء المقيمين في الإمارات"],
+    nev_57: ["International check-ins", "التسجيلات الفندقية الدولية"],
+    nev_58: ["Event nights measured", "ليالي الفعالية المقاسة"],
+    nev_59: ["{count} of {value}", "{count} من {value}"],
+    nev_60: ["Not measured: the supplied files have guest nights only up to", "غير مقاس: تتضمن الملفات المقدّمة ليالي النزلاء حتى"],
+    nev_61: ["Not measured: the supplied data ends on", "غير مقاس: تنتهي البيانات المقدّمة في"],
+    nev_62: ["Not measured: the supplied data starts on", "غير مقاس: تبدأ البيانات المقدّمة في"],
+    nev_63: ["Not measured: not enough clean comparison days around it.", "غير مقاس: لا توجد أيام مقارنة نظيفة كافية حولها."],
+    nev_64: ["The dates changed after the last measurement. Run src/build_event_evidence.py again.", "تغيّرت التواريخ بعد آخر قياس. شغّل src/build_event_evidence.py مرة أخرى."],
+    nev_65: ["Not measured.", "غير مقاس."],
+    nev_66: ["Upcoming.", "قادمة."],
+    // Audit fixes: guide panel, comparison-country notes and status messages.
+    a2c_ev_1: ["Next edition of {item}: dates not announced yet.", "لم تُعلن مواعيد الدورة القادمة من {item} بعد."],
+    a2c_ev_2: ["Usual effect: {value} international guest nights on event nights.", "التأثير المعتاد: {value} في ليالي النزلاء الدوليين خلال ليالي الفعالية."],
+    a2c_ev_3: ["Next edition of {item}: {dates}.", "الدورة القادمة من {item}: {dates}."],
+    a2c_ev_4: ["Use Apply to plan on the event in News and events to add it to your plan.", "استخدم «طبّق على الخطة» على الفعالية في «الأخبار والفعاليات» لإضافتها إلى خطتك."],
+    a2c_ev_5: ["Measured past editions of {item}:", "الدورات السابقة المقاسة من {item}:"],
+    a2c_ev_6: ["{count}: {value} international guest nights on event nights", "{count}: {value} في ليالي النزلاء الدوليين خلال ليالي الفعالية"],
+    a2c_ev_7: ["{count}: not measured", "{count}: غير مقاسة"],
+    a2c_ev_8: ["Open News and events, then Past events, for the details.", "افتح «الأخبار والفعاليات» ثم «الفعاليات السابقة» لمعرفة التفاصيل."],
+    a2c_ev_9: ["I found no news about {item} in the team’s list.", "لم أجد أخبارًا عن {item} في قائمة الفريق."],
+    a2c_ev_10: ["I found no news in the team’s list.", "لم أجد أخبارًا في قائمة الفريق."],
+    a2c_ev_11: ["Latest news about {item}:", "أحدث الأخبار عن {item}:"],
+    a2c_ev_12: ["Latest news:", "أحدث الأخبار:"],
+    a2c_ev_13: ["{item} — {source}, {dates}", "{item} — {source}، {dates}"],
+    a2c_ev_14: ["Open News and events in the shortcuts to read the full articles.", "افتح «الأخبار والفعاليات» من الاختصارات لقراءة المقالات كاملة."],
+    a2c_ev_15: ["No upcoming events with announced dates are in the list for {month}.", "لا توجد في القائمة فعاليات قادمة بمواعيد معلنة في {month}."],
+    a2c_ev_16: ["No upcoming events with announced dates are in the list.", "لا توجد في القائمة فعاليات قادمة بمواعيد معلنة."],
+    a2c_ev_17: ["Upcoming events in {month}:", "الفعاليات القادمة في {month}:"],
+    a2c_ev_18: ["Upcoming events in Abu Dhabi:", "الفعاليات القادمة في أبوظبي:"],
+    a2c_ev_19: ["{item} — {dates}", "{item} — {dates}"],
+    a2c_ev_20: ["Ask about one of them, such as “What is the forecast for F1?”, or open News and events in the shortcuts.", "اسأل عن إحداها، مثل «ما توقع الفورمولا 1؟»، أو افتح «الأخبار والفعاليات» من الاختصارات."],
+    // Audit fixes: guide panel, comparison-country notes and status messages.
+    nev_photo_1: ["Photo (cropped)", "صورة (مقتطعة)"],
+    nev_photo_2: ["Photo", "صورة"],
     a2c_hotel_occupancy: ["Hotel occupancy means how full hotels are. This planner does not have that control. You can change flight occupancy or the share of visitors using hotels; please name which one. The plan has not changed.", "إشغال الفنادق يعني مدى امتلائها، وهذا المخطِّط لا يتضمن هذا الإعداد. يمكنك تغيير نسبة إشغال الرحلات أو نسبة الزوار المقيمين في الفنادق؛ يُرجى تحديد أيهما. لم تتغير الخطة."],
   };
+  // Event names, venues, dates and our news summaries come from the team's list, so the
+  // assistant can translate them too. Existing entries are never replaced.
+  const known = new Set(Object.values(labels).map(([english]) => english));
+  for (const [key, english, arabic] of newsEventLabels()) {
+    if (english && arabic && !known.has(english)) { labels[key] = [english, arabic]; known.add(english); }
+  }
   return {
     en: Object.fromEntries(Object.entries(labels).map(([key, [english]]) => [key, english])),
     ar: Object.fromEntries(Object.entries(labels).map(([key, [, arabic]]) => [key, arabic])),

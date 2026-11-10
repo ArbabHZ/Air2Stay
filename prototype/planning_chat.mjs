@@ -174,7 +174,8 @@ export function arabicPromptToEnglish(data, prompt) {
       [/(الرحلات الاضافيه|عدد الرحلات|الرحلات الاسبوعيه)/, 'Where are extra flights?'],
       [/(المقاعد|مقاعد)/, 'Where are seats per flight?'],
       [/(اشغال|امتلاء)/, 'Where is flight occupancy?'],
-      [/(الفعاليه|الموسم|الفعاليات)/, 'Where is the event control?'],
+      [/(الفعاليات|فعاليات)/, 'Where are the upcoming events?'],
+      [/(الفعاليه|الموسم)/, 'Where is the event control?'],
       [/(الغرض من السفر|غرض السفر|الغرض)/, 'Where is travel purpose?'],
       [/(تنتهي رحلتهم|الركاب الذين)/, 'Where is passengers ending their trip?'],
       [/(التسجيل في الفنادق|استخدام الفنادق|نسبه الفنادق)/, 'Where is hotel use?'],
@@ -210,6 +211,23 @@ export function arabicPromptToEnglish(data, prompt) {
   if (/(^|\s)(ماذا|ما الذي|ما اللذي|شو) (تغير|تغيرت)/.test(text)) return 'What changed?';
   if (/(قارن|قارنها|قارنه|قارني|مقارنه|بالمقارنه)/.test(text) && /(السابق|السابقه|قبل|الماضي|الماضيه|الاولي|الاول|البدايه|الاصليه|الان|مجددا)/.test(text)) {
     return /(الاولي|الاول|البدايه|الاصليه)/.test(text) ? 'Compare with my first result' : 'Compare with the previous result';
+  }
+  // Events and news: "ما توقع الفورمولا 1؟", "أخبار عن الهند", "ما الفعاليات القادمة؟".
+  const eventName = /(الفورمولا|فورمولا|جائزه ابوظبي الكبري|الجائزه الكبري|حلبه مرسي ياس)/.test(text) ? 'F1'
+    : /(اديبك|معرض ومؤتمر ابوظبي الدولي للبترول)/.test(text) ? 'ADIPEC'
+    : /(ايدكس|نافدكس|معرض الدفاع)/.test(text) ? 'IDEX'
+    : /(معرض ابوظبي الدولي للكتاب|معرض الكتاب)/.test(text) ? 'the book fair' : null;
+  if (/(^|\s)(اخبار|الاخبار|خبر|مقالات|المقالات)(\s|$|[?.,!])/.test(text)) {
+    const about = eventName || country
+      || (/(رحلات|الرحلات|طيران|الطيران)/.test(text) ? 'flights' : /(سياحه|السياحه|فنادق|الفنادق|زوار|الزوار)/.test(text) ? 'tourism' : null);
+    return about ? `Any news about ${about}?` : 'Any news?';
+  }
+  if (eventName) {
+    const past = /(العام الماضي|السابقه|السابق|الماضيه|كيف اثر|كيف اثرت|ماذا حدث)/.test(text) && !/(توقع|التوقع|القادم|القادمه|المقبل|المقبله|سياتي)/.test(text);
+    return past ? `How did ${eventName} affect hotels last year?` : `What is the forecast for ${eventName}?`;
+  }
+  if (/(الفعاليات|فعاليات|المعارض)/.test(text) && /(القادمه|القادم|المقبله|قريبا|(^|\s)ما(\s|$)|ماهي|ما هي|(^|\s)اي(\s|$)|(^|\s)في(\s|$))/.test(text)) {
+    return `What events are coming up${month ? ' in ' + month : ''}?`;
   }
   // "ماذا لو …": a what-if on the open plan.
   if (/(ماذا لو|ماذا سيحدث|ما الذي سيحدث|ماذا يحدث|ماذا يصير|لو افترضنا|افترض ان)/.test(text)) {
@@ -852,9 +870,113 @@ export function pcCompareReply(data, lower, current, history) {
   return lines.join('\n');
 }
 
+// ---------------------------------------------------------------------------
+// News and events: upcoming events, forecasts, measured past editions and news.
+// The controller passes plain data (extras.events); every line is one sentence.
+const PC_EVENT_NAMES = [
+  ['f1', /\b(?:f1|formula ?(?:1|one)|grand prix|yas marina)\b/],
+  ['adipec', /\badipec\b/],
+  ['idex', /\b(?:idex|navdex|defen[cs]e exhibition)\b/],
+  ['adibf', /\b(?:book fair|adibf)\b/],
+];
+const PC_EVENT_CONTROL = /\bevent (?:uplift|control|increase|demand|slider|setting)\b|\bevent or season\b/;
+const PC_MONTHS = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december'];
+
+function pcEventLines(item) {
+  const lines = [];
+  if (!item.upcoming) {
+    lines.push(`Next edition of ${item.name}: dates not announced yet.`);
+    if (item.effect) {
+      lines.push(`Usual effect: ${item.effect.mean} international guest nights on event nights.`);
+      lines.push(`Past editions ranged from ${item.effect.low} to ${item.effect.high}.`);
+      lines.push(`Based on ${item.effect.years.length} past editions: ${item.effect.years.join(', ')}.`);
+    }
+    return lines;
+  }
+  lines.push(`Next edition of ${item.name}: ${item.upcoming.dates}.`);
+  const f = item.forecast;
+  if (!f) {
+    lines.push(item.effect ? 'The normal level for these dates is not in the supplied guest-night data, so no forecast is shown.'
+      : `There are not enough measured past editions to forecast this event yet (at least ${item.minEditions} are needed).`);
+    return lines;
+  }
+  lines.push(f.perNight >= 0 ? `About ${pcNumber(f.perNight)} more international hotel guests each night` : `About ${pcNumber(-f.perNight)} fewer international hotel guests each night`);
+  lines.push(f.extraNights >= 0 ? `About ${pcNumber(f.extraNights)} extra guest nights over ${f.nights} nights.` : `About ${pcNumber(-f.extraNights)} fewer guest nights over ${f.nights} nights.`);
+  lines.push(`Past editions ranged from ${f.low} to ${f.high} guests a night.`);
+  lines.push(`Based on ${item.effect.years.length} past editions: ${item.effect.years.join(', ')}.`);
+  if (item.effect.domestic) {
+    lines.push(item.effect.domesticFell ? `UAE-resident hotel guests usually fell during this event (${item.effect.domestic} on average).`
+      : `UAE-resident hotel guests also rose during this event (${item.effect.domestic} on average).`);
+  }
+  if (f.applyPercent >= 1) lines.push('Use Apply to plan on the event in News and events to add it to your plan.');
+  return lines;
+}
+
+function pcEventPastLines(item) {
+  const lines = [`Measured past editions of ${item.name}:`];
+  for (const row of item.rows.filter((entry) => entry.status !== 'upcoming')) {
+    lines.push(row.pct ? `- ${row.year}: ${row.pct} international guest nights on event nights` : `- ${row.year}: not measured`);
+  }
+  if (item.effect?.domestic) {
+    lines.push(item.effect.domesticFell ? `UAE-resident hotel guests usually fell during this event (${item.effect.domestic} on average).`
+      : `UAE-resident hotel guests also rose during this event (${item.effect.domestic} on average).`);
+  }
+  lines.push('Open News and events, then Past events, for the details.');
+  return lines;
+}
+
+/** Exported for tests: replies about events and news, or null when the question is about something else. */
+export function pcEventsReply(lower, events) {
+  if (!events || PC_EVENT_CONTROL.test(lower)) return null;
+  const named = PC_EVENT_NAMES.find(([, pattern]) => pattern.test(lower))?.[0];
+  const item = named ? events.items.find((entry) => entry.id === named) : null;
+  if (/\b(?:news|articles?|headlines?|announcements?|press)\b/.test(lower)) {
+    const mentions = (name) => new RegExp(`\\b${pcEscapePattern(name.toLowerCase())}\\b`).test(lower);
+    const country = events.countries.find(mentions);
+    // A country with no news in the list gets a clear answer, not the whole list.
+    const other = !country && !item ? (events.knownCountries || []).find(mentions) : null;
+    if (other) return `I found no news about ${other} in the team’s list.`;
+    const topic = /\b(?:flights?|airlines?|routes?|etihad|aviation)\b/.test(lower) ? 'flights'
+      : /\b(?:tourism|tourists?|visitors?|hotels?)\b/.test(lower) ? 'tourism' : null;
+    const label = item ? item.name : country || (topic === 'flights' ? 'Flights' : topic === 'tourism' ? 'Tourism' : null);
+    const found = events.news.filter((news) => (!item || news.eventId === item.id) && (!country || news.affects.includes(country))
+      && (!topic || item || country || news.topic === topic)).slice(0, 4);
+    if (!found.length) return label ? `I found no news about ${label} in the team’s list.` : 'I found no news in the team’s list.';
+    const lines = [label ? `Latest news about ${label}:` : 'Latest news:'];
+    for (const news of found) lines.push(`- ${news.headline} — ${news.source}, ${news.date}`, news.summary);
+    lines.push('Open News and events in the shortcuts to read the full articles.');
+    return lines.join('\n');
+  }
+  if (item) {
+    const past = /\b(?:last (?:year|time|edition)|past|previous|history|before|did|affected|impacted|was|were)\b/.test(lower)
+      && !/\b(?:forecast|predict|expect|next|upcoming|will|coming)\b/.test(lower);
+    return (past ? pcEventPastLines(item) : pcEventLines(item)).join('\n');
+  }
+  const monthIndex = PC_MONTHS.findIndex((name) => new RegExp(`\\b${name}\\b`).test(lower));
+  const asksEvents = /\b(?:events?|exhibitions?|festivals?|conferences?|concerts?)\b/.test(lower)
+    && (monthIndex >= 0 || /\b(?:upcoming|coming|next|future|planned|scheduled|soon|calendar|what|which|any|list|show)\b/.test(lower));
+  if (!asksEvents) return null;
+  const upcoming = events.items.filter((entry) => entry.upcoming && (monthIndex < 0 || entry.upcoming.months.includes(monthIndex + 1)))
+    .sort((a, b) => a.upcoming.start.localeCompare(b.upcoming.start));
+  const month = monthIndex >= 0 ? PC_MONTHS[monthIndex][0].toUpperCase() + PC_MONTHS[monthIndex].slice(1) : null;
+  if (!upcoming.length) {
+    return month ? `No upcoming events with announced dates are in the list for ${month}.` : 'No upcoming events with announced dates are in the list.';
+  }
+  const lines = [month ? `Upcoming events in ${month}:` : 'Upcoming events in Abu Dhabi:'];
+  for (const entry of upcoming) lines.push(`- ${entry.name} — ${entry.upcoming.dates}`);
+  const unscheduled = events.items.filter((entry) => !entry.upcoming);
+  if (!month && unscheduled.length) for (const entry of unscheduled) lines.push(`Next edition of ${entry.name}: dates not announced yet.`);
+  lines.push('Ask about one of them, such as “What is the forecast for F1?”, or open News and events in the shortcuts.');
+  return lines.join('\n');
+}
+
 function pcExtrasReply(text, lower, extras, data, current, result) {
   if (!extras) return null;
   if (extras.history && PC_COMPARE_INTENT.test(lower)) return pcCompareReply(data, lower, current, extras.history);
+  if (extras.events) {
+    const eventReply = pcEventsReply(lower, extras.events);
+    if (eventReply) return eventReply;
+  }
   const plain = lower.replace(/[?.!]+$/, '').trim();
   if (/\b(?:graph|graphs|chart|charts|plot|plots|diagram|diagrams|visuals?)\b/.test(lower) && !pcExplicitCommand(text)) return pcChartsReply(lower, extras.where);
   if (extras.missing && /\b(?:missing|left to do|still (?:need|to do|have to)|not (?:done|finished|checked)|haven'?t (?:done|checked|finished)|remaining|incomplete|what else (?:is|do i|should|needs?))\b/.test(lower)) return pcMissingReply(extras.missing);
