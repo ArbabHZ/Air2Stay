@@ -156,7 +156,7 @@ function populatePurposeInputs() {
    if (hasNewCountry) {
      $("#proxyMarket").value = state.referenceMode === "peers" ? "__PEERS__" : state.proxyOriginKey;
      const selectedCountry = countryLocationLookup[normalizeCountryName(state.originKey)];
-     if (selectedCountry) $("#newMarketCountry").value = selectedCountry.name;
+     if (selectedCountry) $("#newMarketCountry").value = localizedName(selectedCountry.name);
      const recommendation = recommendProxy(state.originKey, state.month);
      $("#proxyMarketReason").textContent = state.peerProfile
        ? state.peerProfile.peers.map((peer) => peer.origin + " " + formatPercent(peer.weight,1)).join(" · ") + ". Geography and approximate route length supply starting assumptions only."
@@ -483,7 +483,7 @@ function renderSideBySideComparison(result, previousResult) {
         </div>
         ${!isNewRoute && rounded ? `<div class="comparison-step-plan" style="--previous-height:${height(previous.scenario[key], previousMaximum)}px"></div>` : ""}
       </div>
-      <strong class="comparison-step-label">${key === "hotelCheckins" ? "Hotel <span>check-ins</span>" : label}</strong>
+      <strong class="comparison-step-label">${label}</strong>
       <small>${caption}</small>
     </div>`;
   }).join("");
@@ -1329,6 +1329,7 @@ function printDecisionNote() {
   sheet.id = "decisionPrintSheet";
   const body = document.createElement("pre");
   body.textContent = decisionNoteText();
+  localizeUi(body);
   sheet.append(body);
   document.body.append(sheet);
   document.body.classList.add("printing-decision-note");
@@ -1528,7 +1529,7 @@ function openPlanControl(groupId, field) {
    const newMarketOptions = [...new Map(Object.values(countryLocationLookup).map((country) => [country.name, country])).values()]
      .filter((country) => !existingMarkets.has(normalizeCountryName(country.name)))
      .sort((first, second) => first.name.localeCompare(second.name))
-     .map((country) => `<option value="${country.name}">${country.name}</option>`)
+     .map((country) => `<option value="${planningEscape(country.name)}" data-country-name="${planningEscape(country.name)}">${planningEscape(country.name)}</option>`)
      .join("");
    $("#newMarketCountryList").innerHTML = newMarketOptions;
    $("#month").innerHTML = data.months.map((month, index) => `<option value="${index + 1}">${month}</option>`).join("");
@@ -1552,7 +1553,7 @@ function openPlanControl(groupId, field) {
      }
      if (input.id === "proxyMarket") {
        bridgeOverride = null;
-       const market = $("#newMarketCountry").value.trim() || "NEW MARKET";
+       const market = countryFromInput($("#newMarketCountry").value)?.name || $("#newMarketCountry").value.trim() || "NEW MARKET";
        state = defaultState(market.toUpperCase(), state.month, input.value);
        setFormFromState();
        renderAll();
@@ -1596,7 +1597,7 @@ function openPlanControl(groupId, field) {
    }));
 
   $("#confirmNewMarket").addEventListener("click", () => {
-    const selectedCountry = countryLocationLookup[normalizeCountryName($("#newMarketCountry").value)];
+    const selectedCountry = countryFromInput($("#newMarketCountry").value);
     if (!selectedCountry) {
       $("#newMarketStatus").textContent = "Choose a country from the suggestions so the map can find its location.";
       $("#newMarketStatus").hidden = false;
@@ -2188,7 +2189,7 @@ function buildPlanWorkbook(report) {
   const { title, subtitle, result, steps, assumptions, annual, visitors, launch, trials, comparedMonths, notes } = report;
   const number = value => [value, "integer"];
   const change = value => [value, "change"];
-  const row = (values, style = "plain", height = 22) => ({ values, style, height });
+  const row = (values, style = "plain", height = 22) => ({ values: values.map(value => typeof value === "string" ? translateUiString(value) : value), style, height });
   const header = (...labels) => row(labels, "header", 28);
   const section = label => row([label], "accent", 24);
   const blank = () => row([], "plain", 10);
@@ -2332,6 +2333,7 @@ function planReportMarkup(report) {
 function printPlanReport(report) {
   const sheet = $("#planPrintSheet");
   sheet.innerHTML = planReportMarkup(report);
+  localizeUi(sheet);
   document.body.classList.add("printing-plan-report");
   const finish = () => {
     sheet.replaceChildren();
@@ -2443,6 +2445,16 @@ function downloadPlan(blob, name) {
   link.click();
 }
 
+function refreshGlossaryLetters() {
+  const letters = new Map();
+  for (const card of $$("#glossaryGrid .definition")) {
+    const term = card.querySelector("h3");
+    const letter = translateUiString(englishUiText(term))[0];
+    if (letter && !letters.has(letter)) letters.set(letter, card.id);
+  }
+  $("#glossaryLetters").innerHTML = [...letters].map(([letter, id]) => `<a href="#${id}">${planningEscape(letter)}</a>`).join("");
+}
+
  function renderGlossary() {
    const plainTerms = {
      "Hotel check-in": "A guest arriving to begin a stay at a hotel.",
@@ -2456,8 +2468,7 @@ function downloadPlan(blob, name) {
    const examples = { "Hotel check-in": "One guest beginning a hotel stay = one check-in.", "Guest night": "2 guests × 3 nights = 6 guest nights.", "Passengers ending their trip in Abu Dhabi": "A traveller staying here is included; one changing planes is not.", "How full a flight is": "160 passengers ÷ 200 seats = 80% full.", "Possible range": "Read it as a planning guide, not a guaranteed outcome.", "Estimated visitor mix": "A 20% share means about 20 in every 100 estimated hotel guests.", "Past records": "Four matching records describe the data available, not four successful predictions." };
    const terms = Object.entries(plainTerms).sort(([a],[b]) => a.localeCompare(b));
    $("#glossaryGrid").innerHTML = terms.map(([term, meaning],index) => `<article class="definition" id="term-${index}" data-search="${(term + " " + meaning).toLowerCase()}"><h3>${term}</h3><p>${meaning}</p><p class="term-example">${examples[term]}</p></article>`).join("");
-   const letters = [...new Set(terms.map(([term]) => term[0]))];
-   $("#glossaryLetters").innerHTML = letters.map((letter) => `<a href="#term-${terms.findIndex(([term]) => term[0] === letter)}">${letter}</a>`).join("");
+   refreshGlossaryLetters();
    const search = () => {
      const value = $("#glossarySearch").value.trim().toLowerCase();
      let matches = 0;
@@ -2680,7 +2691,7 @@ function setupPackSearch({getMessages, getRequests, openMessage, openRequest}) {
       label: name, type: "Departure country", open: () => { planView("focus"); choose($("#origin"), key); }
     }));
     const newCountries = [...$("#newMarketCountryList").options].map(option => ({
-      label: option.value, type: "New departure country", open: () => {
+      label: option.dataset.countryName, type: "New departure country", open: () => {
         planView("focus");
         choose($("#origin"), "__NEW_ROUTE__");
         choose($("#newMarketCountry"), option.value);
@@ -2700,10 +2711,10 @@ function setupPackSearch({getMessages, getRequests, openMessage, openRequest}) {
       }
     }));
     const messages = getMessages().map(message => ({
-      label: message.subject, keywords: message.body, type: "Message", open: () => openMessage(message.id)
+      label: message.subject, keywords: message.body, example: message.example, type: "Message", open: () => openMessage(message.id)
     }));
     const requests = getRequests().map(request => ({
-      label: request.title, type: "Approval request", open: () => openRequest(request.id)
+      label: request.title, example: request.example, type: "Approval request", open: () => openRequest(request.id)
     }));
     return [...pages, ...views, ...compare, ...details, ...fields, ...countries, ...newCountries, ...months, ...glossary, ...messages, ...requests];
   }
@@ -2736,13 +2747,12 @@ function setupPackSearch({getMessages, getRequests, openMessage, openRequest}) {
     const words = query.split(/\s+/);
     matches = searchEntries().map(entry => {
       const label = comparableText(entry.label);
-      const key = ["Message", "Approval request"].includes(entry.type) ? null : labelKeys.get(entry.label);
-      const localized = key ? comparableText(t(key)) : "";
+      const localized = !entry.example && ["Message", "Approval request"].includes(entry.type) ? "" : comparableText(translateUiString(entry.label));
       const terms = [label, localized, comparableText(entry.type), comparableText(entry.keywords)].join(" ");
       const score = label === query || localized === query ? 4 : label.startsWith(query) || localized.startsWith(query) ? 3 : label.includes(query) || localized.includes(query) ? 2 : words.every(word => terms.includes(word)) ? 1 : 0;
       return {entry, score};
     }).filter(item => item.score).sort((a, b) => b.score - a.score).slice(0, 12).map(item => item.entry);
-    list.innerHTML = matches.map((entry, index) => `<li id="appSearchOption-${index}" role="option" aria-selected="false" data-app-search-index="${index}"><span${["Message", "Approval request"].includes(entry.type) ? " data-i18n-ignore" : ""}>${planningEscape(entry.label)}</span><small>${planningEscape(entry.type)}</small></li>`).join("");
+    list.innerHTML = matches.map((entry, index) => `<li id="appSearchOption-${index}" role="option" aria-selected="false" data-app-search-index="${index}"><span${!entry.example && ["Message", "Approval request"].includes(entry.type) ? " data-i18n-ignore" : ""}>${planningEscape(entry.label)}</span><small>${planningEscape(entry.type)}</small></li>`).join("");
     selected = -1;
     input.removeAttribute("aria-activedescendant");
     input.setAttribute("aria-expanded", "true");
@@ -2933,8 +2943,8 @@ function setupFeaturePack() {
         <span class="feature-status status-${esc(item.status)}">${esc(requestStates[item.status] || "Waiting")}</span>
         ${item.example ? exampleBadge : ""}
       </div>
-      <h3 data-i18n-ignore dir="auto">${esc(item.title)}</h3>
-      ${item.note ? `<p class="request-note" data-i18n-ignore dir="auto">${esc(item.note)}</p>` : ""}
+      <h3 ${item.example ? "" : "data-i18n-ignore"} dir="auto">${esc(item.title)}</h3>
+      ${item.note ? `<p class="request-note" ${item.example ? "" : "data-i18n-ignore"} dir="auto">${esc(item.note)}</p>` : ""}
       <p class="feature-muted">${esc(metadata)}</p>
       <div class="feature-button-row">${item.status === "waiting"
         ? '<button type="button" data-request-action="approved">Approve</button><button type="button" data-request-action="changes">Ask for changes</button><button type="button" data-request-action="rejected">Reject</button>'
@@ -3061,7 +3071,8 @@ function setupFeaturePack() {
     const shown = team.messages.filter((item) => {
       if (item.folder !== folder || (priorityFilter && item.priority !== priorityFilter)) return false;
       const {from, to} = messageParties(item);
-      return [item.subject, item.body, item.from, from, to].join(" ").toLowerCase().includes(search);
+      const translated = item.example ? [translateUiString(item.subject), translateUiString(item.body || "")] : [];
+      return [item.subject, item.body, item.from, from, to, ...translated].join(" ").toLowerCase().includes(search);
     });
     const selected = shown.find((item) => item.id === selectedMessageId) || shown[0];
     selectedMessageId = selected?.id || "";
@@ -3072,8 +3083,8 @@ function setupFeaturePack() {
       return `<button type="button" class="message-preview${item.unread ? " unread" : ""}" data-message-select="${esc(item.id)}" aria-pressed="${item === selected}">
         <span class="message-preview-top"><span class="mail-dot ${priorityClass(item.priority)}" title="${esc(item.priority)} priority"></span>
           <strong class="message-ellipsis">${esc(party)}</strong>${timestamp ? `<time datetime="${esc(item.createdAt)}">${esc(timestamp)}</time>` : ""}</span>
-        <span class="message-preview-subject"><strong class="message-ellipsis" data-i18n-ignore dir="auto">${esc(item.subject)}</strong>${item.attachments?.length ? `<span title="Has attachments">${paperclipIcon}</span>` : ""}</span>
-        <span class="message-ellipsis message-snippet" data-i18n-ignore dir="auto">${esc((item.body || "").replace(/\s+/g, " ").trim())}</span>
+        <span class="message-preview-subject"><strong class="message-ellipsis" ${item.example ? "" : "data-i18n-ignore"} dir="auto">${esc(item.subject)}</strong>${item.attachments?.length ? `<span title="Has attachments">${paperclipIcon}</span>` : ""}</span>
+        <span class="message-ellipsis message-snippet" ${item.example ? "" : "data-i18n-ignore"} dir="auto">${esc(item.example ? (item.body || "") : (item.body || "").replace(/\s+/g, " ").trim())}</span>
         ${item.unread ? '<span class="feature-sr">Unread</span>' : ""}
       </button>`;
     }).join("") || '<p class="feature-muted">No messages match this view.</p>';
@@ -3085,9 +3096,9 @@ function setupFeaturePack() {
     const timestamp = Date.parse(item.createdAt);
     return `<article data-message-id="${esc(item.id)}">
       <div class="mail-tags"><span class="priority-tag ${priorityClass(item.priority)}">${esc(item.priority)} priority</span>${item.example ? exampleBadge : ""}</div>
-      <h2 data-i18n-ignore dir="auto">${esc(item.subject)}</h2>
+      <h2 ${item.example ? "" : "data-i18n-ignore"} dir="auto">${esc(item.subject)}</h2>
       <p class="message-parties"><bdi>${esc(from)}</bdi><span class="i18n-arrow" aria-hidden="true">→</span><bdi>${esc(to)}</bdi>${Number.isFinite(timestamp) ? " · " + esc(fullDate.format(timestamp)) : ""}</p>
-      <p class="message-body" data-i18n-ignore dir="auto">${esc(item.body || "")}</p>
+      <p class="message-body" ${item.example ? "" : "data-i18n-ignore"} dir="auto">${esc(item.body || "")}</p>
       ${item.example && item.id === "example-mail-data" ? '<button type="button" class="text-action" data-evidence="validation">Open historical validation results →</button>' : ""}
       ${item.attachments?.length ? `<ul class="message-attachments" aria-label="Attachments">${item.attachments.map((file) =>
         `<li>${paperclipIcon}<span data-i18n-ignore dir="auto">${esc(file.url || file.name)}</span>${file.url ? "" : `<small>${esc(attachmentSize(file.size))}</small>`}</li>`).join("")}</ul>` : ""}
@@ -3289,8 +3300,8 @@ function setupFeaturePack() {
     const item = team.messages.find((row)=>row.id === event.target.closest("[data-message-id]")?.dataset.messageId);
     if (!action || !item) return;
     if (action === "edit") openCompose(item,true);
-    if (action === "reply") openCompose({subject:"Re: " + item.subject, recipients:item.folder === "inbox" ? [item.from] : item.recipients, priority:item.priority});
-    if (action === "forward") openCompose({subject:"Fwd: " + item.subject, body:item.body, attachments:item.attachments, priority:item.priority});
+    if (action === "reply") openCompose({subject:t("message_reply_prefix") + (item.example ? translateUiString(item.subject) : item.subject), recipients:item.folder === "inbox" ? [item.from] : item.recipients, priority:item.priority});
+    if (action === "forward") openCompose({subject:t("message_forward_prefix") + (item.example ? translateUiString(item.subject) : item.subject), body:item.example ? translateUiString(item.body || "") : item.body, attachments:item.attachments, priority:item.priority});
     if (action === "delete") {
       team.messages = team.messages.filter((row)=>row.id !== item.id);
       persist("Message deleted.");
@@ -3347,6 +3358,296 @@ function setupFeaturePack() {
 
 const I18N = (() => {
   const labels = {
+    ar_subject_title_country_month_1: ["Subject: {title} — {country}, {month}", "الموضوع: {title} — {country}، {month}"],
+    ar_airline_planning_inquiry_2: ["Airline planning inquiry", "استفسار عن تخطيط الرحلات"],
+    ar_hotel_capacity_inquiry_3: ["Hotel capacity inquiry", "استفسار عن السعة الفندقية"],
+    ar_team_proposal_update_4: ["Team proposal update", "تحديث المقترح للفريق"],
+    ar_we_are_reviewing_the_proposed_route_fr_5: ["We are reviewing the proposed route from {country} to Abu Dhabi for {month}.", "نراجع المسار المقترح من {country} إلى أبوظبي في {month}."],
+    ar_the_current_plan_estimates_a_change_of_6: ["The current plan estimates a change of {value} guest nights versus the historical-baseline estimate.", "تقدّر الخطة الحالية تغيّرًا بمقدار {value} ليلة للنزلاء مقارنةً بالتقدير المرجعي التاريخي."],
+    ar_this_isolates_the_flight_change_versus_7: ["This isolates the flight change versus zero extra flights using the same visitor assumptions.", "يعزل هذا الحساب أثر تعديل الرحلات مقارنةً بصفر رحلة إضافية مع استخدام افتراضات الزوار نفسها."],
+    ar_this_compares_the_current_plan_with_it_8: ["This compares the current plan with its estimated historical baseline.", "تقارن النتيجة الخطة الحالية بتقديرها المرجعي التاريخي."],
+    ar_this_is_a_planning_estimate_not_confir_9: ["This is a planning estimate, not confirmed demand.", "هذه نتيجة تقديرية للتخطيط."],
+    ar_guest_nights_count_people_staying_over_10: ["Guest nights count people staying overnight, not occupied rooms.", "تحسب ليالي النزلاء الليالي التي يقضيها الأشخاص في الإقامة."],
+    ar_please_help_confirm_the_proposed_sched_11: ["Please help confirm the proposed schedule and aircraft capacity, expected bookings and flight occupancy, and the proportion ending their journey in Abu Dhabi.", "نرجو تأكيد الجدول المقترح وسعة الطائرة والحجوزات والإشغال المتوقعين ونسبة من ينهون رحلتهم في أبوظبي."],
+    ar_please_distinguish_visitors_from_resid_12: ["Please distinguish visitors from residents returning home, state the source/date, and highlight any constraints.", "يرجى التمييز بين الزوار والمقيمين العائدين، وذكر المصدر والتاريخ وأي قيود."],
+    ar_please_help_confirm_expected_hotel_use_13: ["Please help confirm expected hotel use, typical stay length, available hotel capacity and existing occupancy for this month.", "نرجو تأكيد نسبة الإقامة في الفنادق ومدتها المعتادة والسعة المتاحة والإشغال لهذا الشهر."],
+    ar_please_include_guests_per_occupied_roo_14: ["Please include guests per occupied room before translating guest nights into room needs, and state the source/date.", "يرجى ذكر عدد النزلاء في الغرفة المشغولة قبل تحويل ليالي النزلاء إلى احتياجات من الغرف، مع ذكر المصدر والتاريخ."],
+    ar_please_review_these_assumptions_and_ag_15: ["Please review these assumptions and agree which checks must be completed before advancing the proposal.", "يرجى مراجعة الافتراضات والاتفاق على ما يجب التحقق منه قبل المضي في المقترح."],
+    ar_assumptions_to_review_16: ["Assumptions to review", "الافتراضات المطلوب مراجعتها"],
+    ar_the_baseline_is_an_estimate_based_on_p_17: ["The baseline is an estimate based on past flight records, not directly observed hotel outcomes for this route.", "التقدير المرجعي مبني على سجلات الرحلات السابقة، ولا يستند إلى نتائج فندقية مرصودة لهذا المسار."],
+    ar_there_are_no_past_flight_records_for_t_18: ["There are no past flight records for this route; comparison markets are a starting point only.", "لا توجد سجلات رحلات سابقة لهذا المسار. تُستخدم أسواق المقارنة نقطة انطلاق فقط."],
+    ar_check_in_focus_check_19: ["Check in focus: {check}", "بند التحقق الحالي: {check}"],
+    ar_suggested_contact_contact_20: ["Suggested contact: {contact}", "جهة الاتصال المقترحة: {contact}"],
+    ar_suggested_contact_21: ["Suggested contact", "جهة الاتصال المقترحة"],
+    ar_awaiting_response_22: ["Awaiting response", "بانتظار الرد"],
+    ar_no_tasks_yet_23: ["No tasks yet.", "لا توجد مهام بعد."],
+    ar_no_draft_to_copy_24: ["No draft to copy.", "لا توجد مسودة للنسخ."],
+    ar_task_added_25: ["Task added.", "أُضيفت المهمة."],
+    ar_task_saved_26: ["Task saved.", "حُفظت المهمة."],
+    ar_saved_for_this_plan_27: ["Saved for this plan.", "حُفظت التغييرات لهذه الخطة."],
+    ar_that_saved_version_is_unavailable_28: ["That saved version is unavailable.", "هذه النسخة المحفوظة غير متاحة."],
+    ar_loading_a_saved_version_is_unavailable_29: ["Loading a saved version is unavailable in this app.", "لا يمكن تحميل نسخة محفوظة في هذا التطبيق."],
+    ar_new_country_confirmed_30: ["New country confirmed", "تأكّد بلد المغادرة الجديد"],
+    ar_help_searched_31: ["Help searched", "بُحث في المساعدة"],
+    ar_help_answer_opened_32: ["Help answer opened", "فُتحت إجابة من المساعدة"],
+    ar_reference_document_opened_33: ["Reference document opened", "فُتح مستند مرجعي"],
+    ar_feedback_submitted_34: ["Feedback submitted", "أُرسلت الملاحظات"],
+    ar_first_plan_guide_started_35: ["First plan guide started", "بدأت جولة الخطة الأولى"],
+    ar_first_plan_guide_completed_36: ["First plan guide completed", "اكتملت جولة الخطة الأولى"],
+    ar_first_plan_guide_exited_early_37: ["First plan guide exited early", "انتهت جولة الخطة الأولى مبكرًا"],
+    ar_new_route_guide_started_38: ["New route guide started", "بدأت جولة المسار الجديد"],
+    ar_new_route_guide_completed_39: ["New route guide completed", "اكتملت جولة المسار الجديد"],
+    ar_new_route_guide_exited_early_40: ["New route guide exited early", "انتهت جولة المسار الجديد مبكرًا"],
+    ar_results_guide_started_41: ["Results guide started", "بدأت جولة النتائج"],
+    ar_results_guide_completed_42: ["Results guide completed", "اكتملت جولة النتائج"],
+    ar_results_guide_exited_early_43: ["Results guide exited early", "انتهت جولة النتائج مبكرًا"],
+    ar_comparison_guide_started_44: ["Comparison guide started", "بدأت جولة المقارنة"],
+    ar_comparison_guide_completed_45: ["Comparison guide completed", "اكتملت جولة المقارنة"],
+    ar_comparison_guide_exited_early_46: ["Comparison guide exited early", "انتهت جولة المقارنة مبكرًا"],
+    ar_proposal_actions_guide_started_47: ["Proposal actions guide started", "بدأت جولة متابعة المقترح"],
+    ar_proposal_actions_guide_completed_48: ["Proposal actions guide completed", "اكتملت جولة متابعة المقترح"],
+    ar_proposal_actions_guide_exited_early_49: ["Proposal actions guide exited early", "انتهت جولة متابعة المقترح مبكرًا"],
+    ar_no_past_flight_records_for_this_route_50: ["No past flight records for this route.", "لا توجد سجلات رحلات سابقة لهذا المسار."],
+    ar_the_weighted_comparison_country_blend_51: ["The weighted comparison-country blend", "المتوسط المرجّح لدول المقارنة"],
+    ar_weighted_comparison_countries_52: ["weighted comparison countries", "دول المقارنة المرجّحة"],
+    ar_no_historical_schedule_for_this_new_ro_53: ["No historical schedule for this new route. Use the proposed extra flights above; the comparison blend does not borrow a schedule.", "لا يوجد جدول تاريخي لهذا المسار الجديد. استخدم الرحلات الإضافية المقترحة أعلاه، فدول المقارنة لا توفّر جدولًا لهذا المسار."],
+    ar_flight_occupancy_must_be_between_30_an_54: ["Flight occupancy must be between 30% and 100%.", "يجب أن تكون نسبة إشغال الرحلات بين 30% و100%."],
+    ar_passengers_ending_their_trip_in_abu_dh_55: ["Passengers ending their trip in Abu Dhabi must be between 5% and 100%.", "يجب أن تكون نسبة الركاب الذين ينهون رحلتهم في أبوظبي بين 5% و100%."],
+    ar_hotel_use_must_be_between_5_and_90_56: ["Hotel use must be between 5% and 90%.", "يجب أن تكون نسبة الإقامة في الفنادق بين 5% و90%."],
+    ar_average_stay_must_be_between_1_and_10__57: ["Average stay must be between 1 and 10 nights.", "يجب أن يكون متوسط الإقامة بين 1 و10 ليالٍ."],
+    ar_extra_event_demand_must_be_between_0_a_58: ["Extra event demand must be between 0% and 50%.", "يجب أن تكون زيادة الطلب بسبب الفعالية بين 0% و50%."],
+    ar_use_between_20_fewer_and_20_extra_flig_59: ["Use between 20 fewer and 20 extra flights each week.", "اختر تغييرًا بين خفض 20 رحلة وإضافة 20 رحلة أسبوعيًا."],
+    ar_use_between_30_and_600_seats_per_fligh_60: ["Use between 30 and 600 seats per flight.", "اختر من 30 إلى 600 مقعد لكل رحلة."],
+    ar_could_not_load_the_model_or_country_lo_61: ["Could not load the model or country-location data.", "تعذّر تحميل بيانات النموذج أو مواقع البلدان."],
+    ar_browser_storage_is_unavailable_changes_62: ["Browser storage is unavailable. Changes last for this visit only.", "تخزين المتصفح غير متاح. تستمر التغييرات خلال هذه الزيارة فقط."],
+    message_reply_prefix: ["Re: ", "رد: "],
+    message_forward_prefix: ["Fwd: ", "إعادة توجيه: "],
+    comparison_shared_inputs_tooltip: ["Use the same inputs to isolate the effect of added capacity. Identical inputs may give identical added-seat effects.", "استخدم المدخلات نفسها لعزل أثر السعة الإضافية. قد تؤدي المدخلات المتطابقة إلى الأثر نفسه لكل مقعد إضافي."],
+    guide_progress_count: ["{count} of {total}", "{count} من {total}"],
+    guide_feedback_label: ["Feedback on {label}", "ملاحظات حول {label}"],
+    guided_walkthrough: ["Air2Stay guided walkthrough", "جولة Air2Stay الإرشادية"],
+    confirm_flight_demand: ["Confirm the flight demand", "أكّد الطلب المتوقع على الرحلات"],
+    check_hotel_capacity: ["Check hotel use and capacity", "تحقّق من استخدام الفنادق وسعتها"],
+    review_visitor_mix: ["Review the visitor mix", "راجع توزيع الزوار"],
+    approve_request_status: ["Request updated · {status}.", "حُدّث الطلب · {status}."],
+    choose_country_suggestions: ["Choose a country from the suggestions so the map can find its location.", "اختر بلدًا من الاقتراحات حتى تتمكّن الخريطة من تحديد موقعه."],
+    invalid_plan_number: ["The shared plan contains an invalid number.", "تحتوي الخطة المشتركة على رقم غير صالح."],
+    invalid_plan_country: ["The plan country is not recognised.", "بلد الخطة غير معروف."],
+    invalid_plan_month: ["The plan month is invalid.", "شهر الخطة غير صالح."],
+    invalid_plan_file: ["This plan file has an unsupported format.", "صيغة ملف الخطة غير مدعومة."],
+    invalid_plan_mix: ["The plan visitor mix is invalid.", "توزيع الزوار في الخطة غير صالح."],
+    invalid_plan_comparison: ["Choose a supported comparison country.", "اختر بلد مقارنة مدعومًا."],
+    missing_comparison_assumptions: ["Comparison-country assumptions are unavailable.", "افتراضات دول المقارنة غير متاحة."],
+    invalid_plan_share_total: ["The visitor shares must add up to more than zero.", "يجب أن يكون مجموع حصص الزوار أكبر من صفر."],
+    shared_plan_error: ["Could not open the shared plan: {reason}", "تعذّر فتح الخطة المشتركة: {reason}"],
+    draft_feedback: ["Email draft ready to review.", "مسودة البريد جاهزة للمراجعة."],
+    draft_copied: ["Draft copied. Nothing was sent.", "نُسخت المسودة. لم تُرسل أي رسالة."],
+    no_saved_notes: ["No notes yet.", "لا توجد ملاحظات بعد."],
+    tour_no_matches: ["No matching help answers.", "لا توجد إجابات مساعدة مطابقة."],
+    guide_country_search_hint: ["Try: new route, hotel nights or accuracy", "جرّب: مسار جديد أو ليالي الفنادق أو الدقة"],
+    unnamed_country: ["Unspecified country", "بلد غير محدّد"],
+    holiday_purpose_check: ["Check hotel use and stay length with tourism and hotel records.", "تحقّق من الإقامة الفندقية ومدتها بالرجوع إلى سجلات السياحة والفنادق."],
+    business_purpose_check: ["Check business travel patterns and typical stay length.", "تحقّق من أنماط سفر الأعمال والمدة المعتادة للإقامة."],
+    family_purpose_check: ["Check how many visitors stay with family rather than in hotels.", "تحقّق من عدد الزوار الذين يقيمون مع أسرهم بدلًا من الفنادق."],
+    export_report_ready: ["Excel report ready.", "تقرير Excel جاهز."],
+    export_file_link: ["Your file is ready. If the download did not begin, choose:", "ملفك جاهز. إذا لم يبدأ التنزيل، اختر:"],
+    export_failed: ["The report could not be prepared. Check the plan and try again.", "تعذّر إعداد التقرير. تحقّق من الخطة وحاول مجددًا."],
+    export_confirm_new_country: ["Confirm a new departure country first.", "أكّد بلد المغادرة الجديد أولًا."],
+    export_correct_input: ["Correct the highlighted input first.", "صحّح الحقل المحدّد أولًا."],
+    export_save_pdf: ["Choose Save as PDF in the print window.", "اختر «حفظ بصيغة PDF» في نافذة الطباعة."],
+    report_brand: ["Air2Stay · Plan report", "Air2Stay · تقرير الخطة"],
+    report_title: ["Air2Stay plan: {country} → Abu Dhabi, {month}", "خطة Air2Stay: {country} إلى أبوظبي، {month}"],
+    report_overview_caption: ["Your plan and its change from usual", "خطتك والتغيّر عن المعتاد"],
+    report_month_chart_caption: ["Same plan inputs each month. The dotted line marks {month} ({usual} usual, {planned} planned).", "تُستخدم مدخلات الخطة نفسها لكل شهر. يشير الخط المنقّط إلى {month} ({usual} في المعتاد، و{planned} في الخطة)."],
+    report_visitor_caption: ["Plan guest nights and change from usual", "ليالي النزلاء في الخطة والتغيّر عن المعتاد"],
+    report_assumptions_note: ["Event impact is a user estimate of the effect on hotel demand.", "أثر الفعالية تقدير يدخله المستخدم لتأثيرها على الطلب الفندقي."],
+    report_trial_caption: ["Extra guest nights from flight changes at the trial assumptions", "ليالي النزلاء الإضافية الناتجة عن تعديل الرحلات وفق افتراضات الاختبار"],
+    report_limits: ["Notes and limits", "ملاحظات وحدود التقدير"],
+    report_diff: ["Difference from plan", "الفرق عن الخطة"],
+    report_changed: ["Changed?", "هل تغيّرت القيمة؟"],
+    report_start: ["Starting value", "القيمة الأولية"],
+    report_extra_nights_target: ["Plan for about {value} extra guest nights in {month} under the selected assumptions.", "خطّط لنحو {value} ليلة إضافية للنزلاء في {month} وفق الافتراضات المختارة."],
+    report_reduced_nights_target: ["The flight reduction implies about {value} fewer guest nights in {month} under the selected assumptions.", "يؤدي خفض الرحلات إلى نحو {value} ليلة أقل للنزلاء في {month} وفق الافتراضات المختارة."],
+    report_no_added_nights: ["No added guest nights are estimated because this plan adds no flight capacity.", "لا تُقدّر ليالٍ إضافية للنزلاء لأن الخطة لا تضيف سعة للرحلات."],
+    report_lower_trial: ["The combined lower-assumption trial gives {value} guest nights from the flight change. This is an illustrative check, not a probability bound.", "يعطي اختبار الخفض المجمّع {value} ليلة للنزلاء نتيجة تعديل الرحلات. هذا اختبار توضيحي ولا يحدّد نطاقًا احتماليًا."],
+    report_nights_caution: ["Guest nights count nights spent by people, not rooms. Confirm passenger demand and hotel capacity before committing to the proposal.", "تقيس ليالي النزلاء الليالي التي يقضيها الأشخاص. تحقّق من الطلب على الرحلات وسعة الفنادق قبل اعتماد المقترح."],
+    localized_gray_shows_the_baseline_estimate_for_m: ["Gray shows the baseline estimate for {month}. The colored cap marks your plan level. The cards above give the hotel totals and changes.", "يمثّل الرمادي التقدير المرجعي لشهر {month}. ويبيّن الجزء الملوّن مستوى خطتك. وتعرض البطاقات أعلاه الإجماليات الفندقية والتغيّرات."],
+    localized_start_by_checking_label_it_had_the_lar: ["Start by checking {label}. It had the largest effect in these trials.", "ابدأ بالتحقق من {label}، فقد كان له الأثر الأكبر في هذه الاختبارات."],
+    localized_check_ins: ["check-ins", "التسجيلات الفندقية"],
+    localized_flight_fullness: ["flight fullness", "إشغال الرحلة"],
+    localized_average_nights_per_hotel_stay: ["average nights per hotel stay", "متوسط الليالي لكل إقامة فندقية"],
+    localized_share_checking_into_a_hotel: ["share checking into a hotel", "نسبة من يسجّلون الوصول إلى الفنادق"],
+    localized_passengers_ending_in_abu_dhabi: ["passengers ending in abu dhabi", "الركاب الذين ينهون رحلتهم في أبوظبي"],
+    localized_how_full_flights_are: ["how full flights are", "إشغال الرحلات"],
+    localized_extra_flights_each_week: ["extra flights each week", "الرحلات الإضافية أسبوعيًا"],
+    localized_seats_on_each_flight: ["seats on each flight", "المقاعد في كل رحلة"],
+    localized_extra_hotel_demand_for_an_event_or_sea: ["extra hotel demand for an event or season", "الطلب الفندقي الإضافي بسبب فعالية أو موسم"],
+    localized_undo_change_to_label: ["Undo change to {label}", "التراجع عن تغيير {label}"],
+    localized_flight_fullness_the_percentage_of_seat: ["Flight fullness: the percentage of seats expected to have a passenger. This is an assumption you can adjust.", "إشغال الرحلة هو النسبة المتوقّعة للمقاعد التي يشغلها الركاب. يمكنك تعديل هذا الافتراض."],
+    localized_label_count_for_your_new_route: ["{label}: {count} for your new route", "{label}: {count} لمسارك الجديد"],
+    localized_label_count_usual_plan_in_your_plan_ba: ["{label}: {count} usual, {plan} in your plan ({badge})", "{label}: {count} في المعتاد، و{plan} في خطتك ({badge})"],
+    localized_label_count_for_your_new_route_15: ["{label}: {count} for your new route.", "{label}: {count} لمسارك الجديد."],
+    localized_label_count_for_a_usual_month_change: ["{label}: {count} for a usual {month}, {change}.", "{label}: {count} في شهر {month} المعتاد، {change}."],
+    localized_plus_count_with_your_plan: ["plus {count} with your plan", "زيادة {count} في خطتك"],
+    localized_minus_count_with_your_plan: ["minus {count} with your plan", "انخفاض {count} في خطتك"],
+    localized_no_change: ["no change", "دون تغيّر"],
+    localized_guest_nights_measure_nights_spent_in_h: ["Guest nights measure nights spent in hotels.", "تقيس ليالي النزلاء عدد الليالي المقضاة في الفنادق."],
+    localized_share_stay_in_a_hotel_event_uplift_app: ["{share} stay in a hotel · event uplift applied", "{share} يقيمون في فندق · بعد تعديل أثر الفعالية"],
+    localized_a_past_seats_b_flight_fullness_c: ["{a} past seats × {b} flight fullness = {c}", "{a} مقعدًا في السجلات السابقة × {b} نسبة الإشغال = {c}"],
+    localized_a_b_flight_fullness_c: ["{a} × {b} flight fullness = {c}", "{a} × {b} نسبة إشغال الرحلات = {c}"],
+    localized_a_b_ending_trip_share_c: ["{a} × {b} ending-trip share = {c}", "{a} × {b} نسبة من ينهون رحلتهم هنا = {c}"],
+    localized_a_b_hotel_use_assumption_c: ["{a} × {b} hotel-use assumption = {c}", "{a} × {b} النسبة المفترضة للإقامة في الفنادق = {c}"],
+    localized_a_b_weighted_nights_per_stay_c: ["{a} × {b} weighted nights per stay = {c}", "{a} × {b} المتوسط المرجّح لليالي لكل إقامة = {c}"],
+    localized_max_0_a_b_flights_week_c_seats_flight_: ["max(0, {a} + {b} flights/week × {c} seats/flight × {d} weeks) = {e}", "الحد الأعلى من (0، {a} + {b} رحلة أسبوعيًا × {c} مقعدًا لكل رحلة × {d} أسبوعًا) = {e}"],
+    localized_a_b_hotel_use_assumption_1_c_event_upl: ["{a} × {b} hotel-use assumption × (1 + {c} event uplift) = {d}", "{a} × {b} النسبة المفترضة للإقامة في الفنادق × (1 + {c} زيادة الطلب بسبب الفعالية) = {d}"],
+    localized_a_b_nights_per_stay_c: ["{a} × {b} nights per stay = {c}", "{a} × {b} ليلة لكل إقامة = {c}"],
+    localized_weeks_days_in_the_selected_month_7_feb: ["Weeks = days in the selected month ÷ 7; February uses 28.25 days.", "الأسابيع = أيام الشهر المختار ÷ 7. يُستخدم 28.25 يومًا لشهر فبراير."],
+    localized_seats_cannot_fall_below_zero: ["Seats cannot fall below zero.", "لا يمكن أن يقل عدد المقاعد عن الصفر."],
+    localized_your_flight_reduction_exceeds_the_avai: ["Your flight reduction exceeds the available seats, so seats are limited to zero.", "يؤدي خفض الرحلات إلى تجاوز المقاعد المتاحة، لذا يُضبط عدد المقاعد على صفر."],
+    localized_the_event_uplift_is_your_assumption_an: ["The event uplift is your assumption and is applied once to hotel check-ins; guest nights then use those check-ins.", "زيادة الطلب بسبب الفعالية افتراض تطبّقه مرة واحدة على التسجيلات الفندقية، ثم تُحسب ليالي النزلاء منها."],
+    localized_lower_guide_a_b_c_nights: ["Lower guide = {a} × {b} = {c} nights.", "الحد الإرشادي الأدنى = {a} × {b} = {c} ليلة."],
+    localized_upper_guide_a_b_c_nights: ["Upper guide = {a} × {b} = {c} nights.", "الحد الإرشادي الأعلى = {a} × {b} = {c} ليلة."],
+    localized_visitor_group_check_ins_plan_check_ins: ["Visitor-group check-ins = plan check-ins × that group's normalized share.", "التسجيلات الفندقية لفئة الزوار = التسجيلات في الخطة × حصة الفئة بعد ضبط مجموع الحصص."],
+    localized_nights_also_use_that_group_s_relative_: ["Nights also use that group's relative stay length, adjusted to match your selected overall average stay.", "يراعي حساب الليالي مدة إقامة الفئة بعد ضبطها لتتوافق مع متوسط الإقامة العام المختار."],
+    localized_the_estimated_visitor_shares_are_in_us: ["The estimated visitor shares are in use.", "يُستخدم التوزيع المقدّر للزوار."],
+    localized_your_edited_visitor_shares_are_in_use: ["Your edited visitor shares are in use.", "يُستخدم توزيع الزوار الذي عدّلته."],
+    localized_group_contributions_add_up_to_the_head: ["Group contributions add up to the headline change; they are not measured nationality-level effects.", "يبلغ مجموع مساهمات الفئات مقدار التغيّر الرئيسي. وهذه المساهمات تقديرات وليست آثارًا مرصودة حسب الجنسية."],
+    localized_the_weighted_comparison_country_blend_: ["The weighted comparison-country blend supplies starting assumptions only.", "يوفّر المتوسط المرجّح لدول المقارنة الافتراضات الأولية فقط."],
+    localized_country_supplies_starting_assumptions_: ["{country} supplies starting assumptions only.", "تُستخدم بيانات {country} للافتراضات الأولية فقط."],
+    localized_the_available_markets: ["The available markets", "الأسواق المتاحة"],
+    localized_country_reference_point_to_abu_dhabi_c: ["Country reference point to Abu Dhabi city.", "من نقطة مرجعية في البلد إلى مدينة أبوظبي."],
+    localized_schematic_route_not_airport_locations: ["Schematic route, not airport locations.", "المسار توضيحي ولا يمثّل مواقع المطارات."],
+    localized_antarctic_outline_is_unavailable_in_th: ["Antarctic outline is unavailable in the supplied map.", "حدود القارة القطبية الجنوبية غير متاحة في الخريطة المرفقة."],
+    localized_no_verified_country_location_is_availa: ["No verified country location is available for this route. Choose a country from the departure list to display its map.", "لا يتوفّر موقع جغرافي مؤكّد لهذا المسار. اختر بلدًا من قائمة المغادرة لعرض الخريطة."],
+    localized_based_on_past_flight_records_for_count: ["Based on past flight records for {country}. These are starting seat estimates, not future bookings. Focus or hover on a bar for its exact value.", "تستند التقديرات الأولية للمقاعد إلى سجلات الرحلات السابقة في {country}، ولا تمثّل حجوزات مستقبلية. مرّر المؤشر فوق العمود أو حدّده لعرض القيمة الدقيقة."],
+    localized_reference_flights_each_week_count: ["Reference flights each week · {count}", "الرحلات المرجعية أسبوعيًا · {count}"],
+    localized_no_past_flight_seats_for_this_route_st: ["No past flight seats for this route. Starting assumptions use {source}.", "لا توجد سجلات سابقة للمقاعد على هذا المسار. تستند الافتراضات الأولية إلى {source}."],
+    localized_reference_schedule_for_country_only_no: ["Reference schedule for {country} only; not a schedule for the proposed route.", "هذا الجدول المرجعي يخص {country} فقط، ولا يمثّل جدول المسار المقترح."],
+    localized_starts_from_source_you_can_change_it: ["Starts from {source}. You can change it.", "تبدأ القيمة من {source} ويمكنك تعديلها."],
+    localized_starts_from_source_there_are_no_past_r: ["Starts from {source}. There are no past records for this route.", "تبدأ القيمة من {source}. لا توجد سجلات سابقة لهذا المسار."],
+    localized_a_weighted_blend_of_names: ["a weighted blend of {names}", "متوسط مرجّح من {names}"],
+    localized_the_selected_comparison_country: ["the selected comparison country", "بلد المقارنة المختار"],
+    localized_the_comparison_country: ["the comparison country", "بلد المقارنة"],
+    localized_country_specific_hotel_use_rates_requi: ["Country-specific hotel-use rates require linking flight and hotel records.", "يتطلّب تقدير نسب الإقامة الفندقية حسب البلد ربط سجلات الرحلات بسجلات الفنادق."],
+    localized_for_month_the_optional_training_season: ["For {month}, the optional training-season aggregate rate is", "النسبة الموسمية الاختيارية المستخلصة من بيانات التدريب لشهر {month} هي"],
+    localized_it_uses_three_observations_of_that_cal: [". It uses three observations of that calendar month from {period}. It is not a measured probability for this route.", ". تستند إلى 3 مشاهدات للشهر نفسه خلال {period}، ولا تمثّل احتمالًا مقاسًا لهذا المسار."],
+    localized_august_december_have_no_matching_held_: ["August–December have no matching held-out month in this test.", "لا يشمل هذا الاختبار الأشهر من أغسطس إلى ديسمبر."],
+    localized_method_and_monthly_starting_rates: ["Method and monthly starting rates", "المنهجية والنسب الشهرية الأولية"],
+    localized_optional_hotel_use_assumption: ["Optional hotel-use assumption", "النسبة الاختيارية للإقامة في الفنادق"],
+    localized_seasonal_rate_70_of_the_training_month: ["Seasonal rate = 70% of the training month-of-year aggregate hotel-arrivals / P2P ratio + 30% of the overall training aggregate ratio. Ratios use only common months before 2025-01.", "النسبة الموسمية = 70% من نسبة التسجيلات الفندقية إلى الركاب الذين ينهون رحلتهم هنا في شهر التدريب المقابل + 30% من النسبة الإجمالية في بيانات التدريب. تُحسب النسب من الأشهر المشتركة قبل 2025-01 فقط."],
+    localized_we_hid_one_known_market_at_a_time_and_: ["We hid one known market at a time and reconstructed its flight assumptions from other markets in the same month: {count} market-month checks across {value} markets.", "استبعدنا كل سوق معروف على حدة وأعدنا تقدير افتراضات رحلاته من أسواق أخرى في الشهر نفسه. شمل الاختبار {count} حالة شهرية في {value} سوقًا."],
+    localized_three_market_average_error: ["Three-market average error", "متوسط خطأ المقارنة بثلاثة أسواق"],
+    localized_nearest_country_average_error: ["Nearest-country average error", "متوسط خطأ المقارنة بأقرب بلد"],
+    localized_value_percentage_points: ["{value} percentage points", "{value} نقطة مئوية"],
+    localized_this_checks_seats_per_flight_flight_oc: ["This checks seats per flight, flight occupancy and the share ending their trip in Abu Dhabi only.", "يفحص هذا الاختبار عدد المقاعد لكل رحلة وإشغال الرحلات ونسبة من ينهون رحلتهم في أبوظبي فقط."],
+    localized_it_does_not_validate_new_route_demand_: ["It does not validate new-route demand, hotel conversion, visitor nationality shares, hotel arrivals or guest nights.", "ولا يقيس دقة الطلب على المسارات الجديدة أو نسبة الإقامة الفندقية أو توزيع الجنسيات أو التسجيلات الفندقية أو ليالي النزلاء."],
+    localized_the_supplied_export_contains_market_mo: ["The supplied export contains market-month aggregates. This is not an independent future-period back-test, and may share years with its comparison records.", "تتضمن البيانات المرفقة إجماليات شهرية حسب السوق. الاختبار لا يستخدم فترة مستقبلية مستقلة، وقد تتداخل سنواته مع سجلات المقارنة."],
+    localized_three_market_estimates_can_perform_wor: ["Three-market estimates can perform worse than the nearest single country. Each measured error is reported alongside that baseline.", "قد يكون تقدير الأسواق الثلاثة أقل دقة من المقارنة بأقرب بلد واحد. ويُعرض كل خطأ مقاس إلى جانب ذلك التقدير المرجعي."],
+    localized_the_heuristic_and_weights_are_fixed_de: ["The heuristic and weights are fixed design choices. There is no economic, travel-purpose or airport-specific similarity model.", "أسلوب الاختيار والأوزان محدّدة مسبقًا. ولا يستند التشابه إلى نموذج اقتصادي أو غرض السفر أو خصائص المطارات."],
+    localized_geography_and_approximate_route_length: ["Geography and approximate route length supply starting assumptions only.", "يُستخدم الموقع الجغرافي وطول المسار التقريبي لتحديد الافتراضات الأولية فقط."],
+    localized_country_is_your_chosen_starting_countr: ["{country} is your chosen starting country. This is an assumption, not evidence of demand on the proposed route.", "اخترت {country} مرجعًا أوليًا. هذا افتراض ولا يثبت الطلب على المسار المقترح."],
+    localized_country_is_the_closest_place_with_past: ["{country} is the closest place with past flight records. We’ll use its numbers as a rough starting point; it may not behave like {market}.", "إن {country} أقرب بلد تتوفر له سجلات رحلات. تُستخدم أرقامه نقطة بداية تقريبية وقد يختلف عن {market}."],
+    localized_country_is_used_as_a_rough_starting_po: ["{country} is used as a rough starting point because we don’t have a location record for this place.", "تُستخدم بيانات {country} مرجعًا تقريبيًا لعدم توفّر سجل جغرافي لهذا المكان."],
+    localized_difference_in_extra_guest_nights_from_: ["Difference in extra guest nights from the selected plan", "الفرق في ليالي النزلاء الإضافية عن الخطة المختارة"],
+    localized_extra_guest_nights_by_month: ["Extra guest nights by month.", "ليالي النزلاء الإضافية حسب الشهر."],
+    localized_if_we_add_this_route_how_many_extra_ho: ["If we add this route, how many extra hotel nights might we need to plan for, what assumption matters most, and what should we verify with airlines or hotels before acting?", "إذا أضفنا هذا المسار، فكم ليلة فندقية إضافية قد نحتاج إلى التخطيط لها؟ وما الافتراض الأكثر تأثيرًا؟ وما الذي ينبغي التحقق منه مع شركات الطيران أو الفنادق قبل اتخاذ القرار؟"],
+    localized_label_has_the_largest_effect_in_the_in: ["{label} has the largest effect in the individual lower-assumption trials tested: about {value} guest nights. The trial sizes differ.", "كان لافتراض {label} أكبر أثر في اختبارات الخفض الفردية، بنحو {value} ليلة للنزلاء. وتختلف درجات الخفض بين الاختبارات."],
+    localized_how_full_the_flights_are: ["How full the flights are", "إشغال الرحلات"],
+    localized_share_of_passengers_ending_their_trip_: ["Share of passengers ending their trip in Abu Dhabi who use a hotel", "نسبة الركاب الذين ينهون رحلتهم في أبوظبي ويقيمون في فندق"],
+    localized_the_individual_lower_assumption_trials: ["The individual lower-assumption trials do not change the added-flight result at this setting. There is no leading assumption to report from these trials.", "في الإعداد الحالي، لا تغيّر اختبارات الخفض الفردية نتيجة الرحلات الإضافية. لذلك لا يبرز افتراض واحد من هذه الاختبارات."],
+    localized_ask_the_airline_how_many_of_the_arriva: ["Ask the airline how many of the arrivals will be residents returning home.", "اسأل شركة الطيران عن عدد المقيمين العائدين المتوقع بين القادمين."],
+    localized_ask_hotels_about_guests_per_occupied_r: ["Ask hotels about guests per occupied room before using guest nights to plan rooms or staffing.", "تحقّق من عدد النزلاء في الغرفة المشغولة قبل استخدام ليالي النزلاء لتخطيط الغرف أو التوظيف."],
+    localized_check_the_mix_of_hotel_stays_family_vi: ["Check the mix of hotel stays, family visits and other trips.", "تحقّق من توزيع الإقامات الفندقية والزيارات العائلية والرحلات الأخرى."],
+    ranking_stable: ["{label} has the higher estimated yield per added seat under these assumptions. The same option stays ahead in the four lower-assumption trials. This does not establish a real-world best route.", "يحقّق {label} أعلى عائد تقديري لكل مقعد إضافي وفق هذه الافتراضات. ظل الخيار نفسه متقدمًا في اختبارات الخفض الأربعة، ولا تثبت النتيجة أنه أفضل مسار عمليًا."],
+    ranking_reversal: ["{label} has the higher estimated yield per added seat under these assumptions. The preference reverses under: {trials}. Check those assumptions before choosing.", "يحقّق {label} أعلى عائد تقديري لكل مقعد إضافي وفق هذه الافتراضات. تتغيّر الأفضلية في الاختبارات الآتية: {trials}. راجع افتراضاتها قبل الاختيار."],
+    localized_count_extra_flights_each_week_would_re: ["{count} extra flights each week would reach at least {target} extra guest nights under the selected assumptions (about {value} nights). This is required capacity, not proof of passenger demand.", "تبلغ {count} رحلة إضافية أسبوعيًا هدفًا لا يقل عن {target} ليلة إضافية وفق الافتراضات المختارة، أي نحو {value} ليلة. هذه السعة المطلوبة ولا تثبت الطلب الفعلي."],
+    localized_the_target_is_not_reached_within_20_ex: ["The target is not reached within 20 extra flights per week. At that limit the estimate is {value} nights, leaving {shortfall} nights below the target.", "لا يمكن بلوغ الهدف ضمن حد 20 رحلة إضافية أسبوعيًا. يبلغ التقدير عند هذا الحد {value} ليلة، أي أقل من الهدف بمقدار {shortfall} ليلة."],
+    localized_estimated_nationality_origins_connecte: ["Estimated nationality origins connected to Abu Dhabi; illustrative country-centroid arcs", "الجنسيات المقدّرة للزوار المرتبطة بأبوظبي بخطوط توضيحية من نقاط مرجعية للبلدان"],
+    localized_country_share_country_reference_point: ["{country}: {share} · country reference point", "{country}: {share} · نقطة مرجعية للبلد"],
+    localized_share_outside_the_5_largest_nationalit: ["Share outside the 5 largest nationality groups:", "الحصة خارج أكبر 5 فئات حسب الجنسية:"],
+    localized_month_series_value: ["{month} · {series}: {value}", "{month} · {series}: {value}"],
+    localized_month_value_guest_nights: ["{month}: {value} guest nights", "{month}: {value} ليلة للنزلاء"],
+    localized_weighted_error_measures_the_size_of_th: ["Weighted error measures the size of the gap relative to recorded arrivals.", "يقيس الخطأ المرجّح حجم الفجوة مقارنة بعدد التسجيلات الفندقية الفعلية."],
+    localized_training_training_traincount_months_ch: ["Training: {training} ({trainCount} months). Check period: {testing} ({testCount} months). The test used recorded flights from the check period.", "التدريب: {training} ({trainCount} شهرًا). فترة الاختبار: {testing} ({testCount} أشهر). استُخدمت سجلات الرحلات الفعلية من فترة الاختبار."],
+    localized_live_default_calculation: ["Live default calculation:", "الحساب الافتراضي المباشر:"],
+    localized_seats_flight_occupancy_share_ending_in: ["seats × flight occupancy × share ending in Abu Dhabi × a single hotel-use rate learned only from {period}. The check runs this chain on each held-out country-month’s recorded flights, then sums the estimates across countries. It does not test future flight schedules, occupancy forecasts, edited assumptions, visitor shares, or guest nights. Historical route baselines and visitor profiles are descriptive summaries, not independently held-out forecasts.", "المقاعد × نسبة الإشغال × نسبة من ينهون رحلتهم في أبوظبي × نسبة ثابتة للإقامة الفندقية مستخلصة من {period} فقط. يُطبَّق الحساب على الرحلات الفعلية لكل بلد وشهر مستبعَد من التدريب، ثم تُجمع التقديرات عبر البلدان. ولا يختبر جداول الرحلات المستقبلية أو توقعات الإشغال أو الافتراضات المعدّلة أو توزيع الزوار أو ليالي النزلاء. التقديرات المرجعية للمسارات وتوزيع الزوار ملخّصات تاريخية وليست توقعات اختُبرت على بيانات مستقلة."],
+    localized_seasonal_comparison: ["Seasonal comparison:", "المقارنة الموسمية:"],
+    localized_recorded_passengers_ending_here_70_tra: ["recorded passengers ending here × (70% training month-specific hotel-use rate + 30% overall training rate). Its weighted error is {value}. This is the optional seasonal assumption in Details, not the default.", "عدد الركاب الذين أنهوا رحلتهم هنا وفق السجلات × (70% من نسبة الإقامة الفندقية للشهر المقابل في بيانات التدريب + 30% من النسبة الإجمالية في بيانات التدريب). الخطأ المرجّح {value}. هذا هو الافتراض الموسمي الاختياري في التفاصيل."],
+    localized_hybrid_comparison: ["Hybrid comparison:", "المقارنة بالنموذج الهجين:"],
+    localized_55_regression_estimate_45_seasonal_fli: ["55% regression estimate + 45% seasonal flight estimate. The route planner does not run this aggregate regression.", "55% من تقدير الانحدار + 45% من التقدير الموسمي المستند إلى الرحلات. لا يستخدم مخطّط المسارات نموذج الانحدار الإجمالي هذا."],
+    localized_reproduce_the_scores: ["Reproduce the scores:", "إعادة حساب الدرجات:"],
+    localized_add_the_absolute_monthly_mistakes_and_: ["add the absolute monthly mistakes and divide by recorded hotel arrivals (WMAPE). Live default: {live} ÷ {total} × 100. Hybrid comparison: {hybrid} ÷ {actual} × 100. Scores use full-precision predictions; the table and totals round only for readability.", "اجمع القيم المطلقة للأخطاء الشهرية واقسم المجموع على التسجيلات الفندقية الفعلية (WMAPE). الحساب المباشر: {live} ÷ {total} × 100. النموذج الهجين: {hybrid} ÷ {actual} × 100. تستند الدرجات إلى التقديرات بكامل دقتها، وتُقرّب قيم الجدول والإجماليات لتسهيل القراءة."],
+    localized_daily_hotel_guests: ["Daily hotel guests:", "نزلاء الفنادق يوميًا:"],
+    localized_a_separate_check_over_period_with_coun: ["a separate check over {period}, with {count} held-out daily records. It tested daily hotel guest counts using hotel-arrival information, not route guest-night changes. Its underlying daily rows are not shown in this monthly table.", "اختبار منفصل خلال {period} باستخدام {count} سجلًا يوميًا مستبعَدًا من التدريب. اختبر أعداد نزلاء الفنادق اليومية باستخدام بيانات التسجيلات، ولا يقيس التغيّر في ليالي النزلاء حسب المسار. ولا تظهر السجلات اليومية في هذا الجدول الشهري."],
+    localized_range_multipliers_use_the_live_default: ["Range multipliers use the live default chain’s residuals on the same check months. The range has no separate coverage test and is not a guaranteed probability range.", "تستند معاملات النطاق إلى فروق الحساب المباشر في أشهر الاختبار نفسها. لم تُختبر تغطية النطاق على نحو مستقل ولا يمثّل مجالًا احتماليًا مضمونًا."],
+    localized_recorded_hotel_arrivals_compared_with_: ["Recorded hotel arrivals compared with Air2Stay estimates", "التسجيلات الفندقية الفعلية مقارنةً بتقديرات Air2Stay"],
+    localized_month_recorded_count_live_default_esti: ["{month}: recorded {count}, live default estimate {estimate}, comparison {value}", "{month}: الفعلي {count}، التقدير المباشر {estimate}، المقارنة {value}"],
+    localized_low_to_high: ["{low} to {high}", "من {low} إلى {high}"],
+    localized_showing_notes_for_this_country_and_mon: ["Showing notes for this country and month.", "تُعرض ملاحظات هذا البلد والشهر."],
+    localized_the_plan_changed_prepare_a_new_draft_w: ["The plan changed. Prepare a new draft with the updated numbers.", "تغيّرت الخطة. جهّز مسودة جديدة بالأرقام المحدّثة."],
+    localized_the_plan_changed_earlier_evidence_must: ["The plan changed. Earlier evidence must be checked against these assumptions.", "تغيّرت الخطة. راجع الأدلة السابقة في ضوء الافتراضات الجديدة."],
+    localized_due: ["Due", "موعد الاستحقاق"],
+    localized_due_date: ["due {date}", "موعد الاستحقاق {date}"],
+    localized_matches_the_current_assumptions: ["Matches the current assumptions.", "يتطابق مع الافتراضات الحالية."],
+    localized_saved_assumptions_differ_from_the_curr: ["Saved assumptions differ from the current plan.", "تختلف الافتراضات المحفوظة عن الخطة الحالية."],
+    localized_estimated_guest_nights_count: ["Estimated guest nights: {count}.", "ليالي النزلاء المقدّرة: {count}."],
+    localized_nights_per_hotel_stay: ["Nights per hotel stay", "ليالٍ لكل إقامة فندقية"],
+    localized_event_or_seasonal_increase: ["Event or seasonal increase", "زيادة الطلب بسبب فعالية أو موسم"],
+    localized_comparison_method: ["Comparison method", "طريقة المقارنة"],
+    localized_trip_purpose: ["Trip purpose", "غرض السفر"],
+    localized_purpose_assumptions_applied: ["Purpose assumptions applied", "طُبّقت افتراضات غرض السفر"],
+    localized_use_seasonal_hotel_estimate: ["Use seasonal hotel estimate", "استخدام التقدير الفندقي الموسمي"],
+    localized_the_snapshot_also_retains_the_visitor_: ["The snapshot also retains the visitor mix and comparison-country details for loading this version and downloading history.", "تحتفظ النسخة أيضًا بتوزيع الزوار وتفاصيل دول المقارنة لاستخدامها عند فتحها أو تنزيل السجل."],
+    localized_approval_requested: ["Approval requested", "طُلِبت الموافقة"],
+    localized_request_updated: ["Request updated", "حُدّث الطلب"],
+    localized_task_created: ["Task created", "أُنشئت المهمة"],
+    localized_message_saved_in_sent: ["Message saved in Sent", "حُفظت الرسالة في «المرسلة»"],
+    localized_attached_plan_opened: ["Attached plan opened.", "فُتحت الخطة المرفقة."],
+    localized_a_sample_plan_is_waiting_for_review: ["A sample plan is waiting for review.", "توجد خطة تجريبية بانتظار المراجعة."],
+    localized_example_a_sample_plan_is_waiting_for_r: ["Example · A sample plan is waiting for review.", "مثال · توجد خطة تجريبية بانتظار المراجعة."],
+    localized_december_room_availability_we_need_you: ["December room availability: we need your forecast", "توفر الغرف في ديسمبر: نحتاج إلى تقديركم"],
+    localized_load_factor_for_the_new_frequencies: ["Load factor for the new frequencies", "نسبة إشغال الرحلات الإضافية"],
+    localized_accuracy_results_for_the_2025_test_mon: ["Accuracy results for the 2025 test months", "نتائج الدقة لأشهر الاختبار في 2025"],
+    localized_hello_n_nseveral_hotels_are_planning_d: ["Hello,\n\nSeveral hotels are planning December room blocks this week. Could you share the expected extra guest nights for the proposed India flights?\n\nA rough range is enough for now.\n\nThank you,\nHotel partnerships", "السلام عليكم،\n\nتخطط عدة فنادق هذا الأسبوع لتخصيص غرف لشهر ديسمبر. هل يمكنكم مشاركة تقدير ليالي النزلاء الإضافية للرحلات المقترحة من الهند؟\n\nيكفي نطاق تقريبي في هذه المرحلة.\n\nمع الشكر،\nفريق الشراكات الفندقية"],
+    localized_hi_n_ncould_you_confirm_how_full_you_e: ["Hi,\n\nCould you confirm how full you expect the new flights to be and share any early booking data? We'll use it to review the flight occupancy assumption.", "مرحبًا،\n\nهل يمكنكم تأكيد نسبة الإشغال المتوقّعة للرحلات الجديدة ومشاركة بيانات الحجوزات الأولية؟ سنستخدمها لمراجعة افتراض إشغال الرحلات."],
+    localized_the_validation_page_has_the_measured_e: ["The validation page has the measured error, test months and monthly arrival totals for this model.", "تعرض صفحة التحقق الخطأ المقاس وأشهر الاختبار وإجمالي التسجيلات الفندقية لكل شهر لهذا النموذج."],
+    localized_review_the_room_capacity_estimate_befo: ["Review the room-capacity estimate before replying to Hotel partnerships.", "راجع تقدير سعة الغرف قبل الردّ على فريق الشراكات الفندقية."],
+    localized_approve_3_weekly_flights_india_abu_dha: ["Approve +3 weekly flights, India → Abu Dhabi, December", "الموافقة على +3 رحلات أسبوعيًا من الهند إلى أبوظبي في ديسمبر"],
+    localized_airline_partner_wants_a_go_ahead_befor: ["Airline partner wants a go-ahead before filing the winter schedule.", "تطلب شركة الطيران الشريكة الموافقة قبل تقديم جدول الرحلات الشتوي."],
+    localized_sign_off_the_hotel_capacity_check_for_: ["Sign off the hotel capacity check for December", "اعتماد التحقق من سعة الفنادق في ديسمبر"],
+    localized_confirm_hotels_can_take_the_extra_gues: ["Confirm hotels can take the extra guest nights in peak season.", "تحقّق من قدرة الفنادق على استيعاب ليالي النزلاء الإضافية في موسم الذروة."],
+    localized_tourism_strategy_lead: ["Tourism strategy lead", "مسؤول استراتيجية السياحة"],
+    localized_untitled_draft: ["Untitled draft", "مسودة بلا عنوان"],
+    localized_a_message_can_include_up_to_20_attachm: ["A message can include up to 20 attachments.", "يمكن إرفاق 20 ملفًا على الأكثر بالرسالة."],
+    localized_your_message_changed_while_gemini_was_: ["Your message changed while Gemini was working. Your edits are still here.", "تغيّرت الرسالة أثناء إعداد المسودة باستخدام Gemini. بقيت تعديلاتك محفوظة في الحقل."],
+    localized_could_not_reach_gemini_ai_assist_can_s: ["Could not reach Gemini. AI Assist can still draft offline.", "تعذّر الاتصال بـ Gemini. يمكن لمساعد الصياغة إعداد مسودة دون اتصال."],
+    localized_see_which_features_and_guides_are_used: ["See which features and guides are used on this browser. Counts cannot represent all users or explain why someone stopped a guide.", "اعرض الميزات والجولات المستخدمة في هذا المتصفح. ولا تمثّل الأعداد جميع المستخدمين أو تفسّر أسباب إنهاء جولة مبكرًا."],
+    localized_count_steps: ["{count} steps", "{count} خطوات"],
+    localized_step_count_of_total: ["Step {count} of {total}", "الخطوة {count} من {total}"],
+    localized_choose_the_country_your_flights_would_: ["Choose the country your flights would leave from. This guide points out the controls; it will not change your plan for you.", "اختر بلد مغادرة الرحلات. توضّح الجولة عناصر التحكم وتترك تعديل الخطة لك."],
+    localized_choose_the_month_you_want_to_investiga: ["Choose the month you want to investigate. The starting values use the available records for that country and month.", "اختر الشهر الذي تريد دراسته. تستند القيم الأولية إلى السجلات المتاحة لهذا البلد والشهر."],
+    localized_add_or_remove_weekly_flights_check_sea: ["Add or remove weekly flights. Check seats per flight and flight fullness too. Zero extra flights does not mean zero impact if you have changed other assumptions.", "أضف رحلات أسبوعية أو خفّضها. راجع أيضًا عدد المقاعد لكل رحلة ونسبة الإشغال. قد تتغيّر النتيجة عند تعديل افتراضات أخرى حتى مع عدم إضافة رحلات."],
+    localized_read_the_cards_then_adjust_one_control: ["Read the cards, then adjust one control to see how the estimate responds.", "اقرأ البطاقات، ثم غيّر قيمة واحدة لترى أثرها في التقدير."],
+    localized_review_the_estimated_extra_hotel_night: ["Review the estimated extra hotel nights, the assumption that matters most and the airline or hotel checks to complete before acting.", "راجع الليالي الفندقية الإضافية المقدّرة، والافتراض الأكثر تأثيرًا، وما ينبغي التحقق منه مع شركات الطيران أو الفنادق قبل اتخاذ القرار."],
+    localized_open_departure_country_and_choose_new_: ["Open Departure country and choose + New route. This reveals the new-country field. The guide does not select a country for you.", "افتح قائمة بلد المغادرة واختر «+ مسار جديد» لإظهار حقل البلد الجديد. اختر البلد بنفسك."],
+    localized_type_or_choose_a_country_from_the_list: ["Type or choose a country from the list, then press Confirm country. Suggestions are starting assumptions, not evidence of demand. If the field is not visible, choose + New route first.", "اكتب اسم البلد أو اختره من القائمة، ثم اضغط «تأكيد البلد». الاقتراحات افتراضات أولية ولا تثبت الطلب. إذا لم يظهر الحقل، اختر «+ مسار جديد» أولًا."],
+    localized_choose_the_flights_and_seats_you_want_: ["Choose the flights and seats you want to test. A new route starts from zero recorded seats; comparison countries supply adjustable assumptions.", "اختر الرحلات والمقاعد التي تريد اختبارها. يبدأ المسار الجديد من صفر مقعد مسجّل، وتوفّر دول المقارنة افتراضات قابلة للتعديل."],
+    localized_details_explains_which_countries_were_: ["Details explains which countries were used and why. Check the weights and limitations. If you kept an existing route, this section may not be shown.", "توضح التفاصيل دول المقارنة وأسباب اختيارها. راجع الأوزان والقيود. قد لا يظهر هذا القسم للمسارات القائمة."],
+    localized_compare_the_proposal_with_adding_fligh: ["Compare the proposal with adding flights on an existing route. Check that both options use assumptions you can justify before preferring one.", "قارن المقترح بإضافة رحلات إلى مسار قائم. تأكّد من أن افتراضات الخيارين قابلة للتبرير قبل ترجيح أحدهما."],
+    localized_read_the_baseline_note_before_interpre: ["Read the baseline note before interpreting the changes below.", "اقرأ ملاحظة التقدير المرجعي قبل تفسير التغيّرات أدناه."],
+    localized_expand_the_calculation_sections_to_see: ["Expand the calculation sections to see the starting values and each multiplication. Displayed values may be rounded; the calculation retains the underlying precision.", "وسّع أقسام الحساب للاطلاع على القيم الأولية وكل عملية ضرب. قد تُقرّب القيم المعروضة بينما يحتفظ الحساب بكامل الدقة."],
+    localized_use_the_longest_bar_to_find_the_input_: ["Use the longest bar to find the input to investigate first.", "انظر إلى أطول شريط لمعرفة الافتراض الذي ينبغي التحقق منه أولًا."],
+    localized_open_the_method_notes_for_the_training: ["Open the method notes for the training and test periods.", "افتح ملاحظات المنهجية للاطلاع على فترتي التدريب والاختبار."],
+    localized_select_the_existing_route_to_compare_r: ["Select the existing route to compare. Read which assumptions are shared. Identical inputs can produce identical added-seat effects; that is expected.", "اختر المسار القائم للمقارنة وراجع الافتراضات المشتركة. قد تؤدي المدخلات المتطابقة إلى الأثر نفسه لكل مقعد إضافي."],
+    localized_these_options_vary_the_number_of_weekl: ["These options vary the number of weekly flights. Cautious, standard and expanded describe capacity, not the likelihood of demand.", "تختلف الخيارات في عدد الرحلات الأسبوعية. وتصف الخيارات المتحفّظة والأساسية والموسّعة مستويات السعة."],
+    localized_lower_flight_fullness_hotel_use_and_st: ["Lower flight fullness, hotel use and stay length to see how the estimate changes. These are hypothetical stress trials.", "خفّض نسبة إشغال الرحلات والإقامة في الفنادق ومدة الإقامة لترى تغيّر التقدير. هذه اختبارات افتراضية."],
+    localized_enter_a_hotel_night_target_to_see_the_: ["Enter a hotel-night target to see the capacity implied by your assumptions. It does not prove enough passengers will book.", "أدخل هدفًا لليالي الفندقية لعرض السعة المطلوبة وفق افتراضاتك. ولا تثبت النتيجة توافر حجوزات كافية."],
+    localized_keep_the_estimated_impact_key_assumpti: ["Keep the estimated impact, key assumptions and next checks together. Review the note before sharing it with an airline, hotel or colleague.", "اجمع الأثر المقدّر والافتراضات الرئيسية وخطوات التحقق التالية. راجع المذكرة قبل مشاركتها مع شركة طيران أو فندق أو زميل."],
+    localized_choose_a_check_to_see_what_needs_to_be: ["Choose a check to see what needs to be confirmed.", "اختر بند تحقق لمعرفة ما ينبغي تأكيده."],
+    localized_use_add_task_on_the_check_you_want_to_: ["Use Add task on the check you want to follow up.", "اختر «إضافة مهمة» للبند الذي تريد متابعته."],
+    localized_give_the_action_a_clear_question_owner: ["Give the action a clear question, owner and due date. Update its status as responses arrive. Record the source, date and what was confirmed before marking it verified.", "أضف سؤالًا واضحًا ومسؤولًا وموعد استحقاق للمهمة. حدّث حالتها عند ورود الردود. سجّل المصدر والتاريخ والمعلومة المؤكدة قبل وضع علامة التحقق."],
+    localized_save_the_assumptions_and_result_when_y: ["Save the assumptions and result when you reach a useful milestone. Comments and decisions remain with this country and month. Download local history before clearing your browser.", "احفظ الافتراضات والنتيجة عند بلوغ مرحلة مهمّة. تبقى التعليقات والقرارات مرتبطة بهذا البلد والشهر. نزّل السجل المحلي قبل مسح بيانات المتصفح."],
+    localized_prepare_an_airline_inquiry_hotel_reque: ["Prepare an airline inquiry, hotel request or team summary from the proposal. Edit and review it before copying or downloading. Nothing is sent automatically.", "جهّز استفسارًا لشركة طيران أو طلبًا لفندق أو ملخّصًا للفريق استنادًا إلى المقترح. حرّر المسودة وراجعها قبل نسخها أو تنزيلها. يتم الإرسال يدويًا."],
     model_ready_csv: ["Model-ready CSV (.csv)", "ملف CSV جاهز للتدريب"],
     simulated_training_csv_description: ["Inputs and simulated targets for this route across 12 months", "مدخلات ونتائج محاكاة لهذا المسار على مدار 12 شهرًا"],
     simulated_training_csv_ready: ["Model-ready CSV with simulated outcomes is ready.", "ملف CSV بنتائج المحاكاة جاهز للتنزيل."],
@@ -4124,36 +4425,358 @@ const I18N = (() => {
 
 // Keep the language switch separate from the simulator's inputs and renders.
 let uiLanguage = "en";
+const AR_NAMES = {
+  "Afghanistan": "أفغانستان",
+  "Aland": "جزر آلاند",
+  "Albania": "ألبانيا",
+  "Algeria": "الجزائر",
+  "American Samoa": "ساموا الأمريكية",
+  "Andorra": "أندورا",
+  "Angola": "أنغولا",
+  "Anguilla": "أنغويلا",
+  "Antarctica": "أنتاركتيكا",
+  "Antigua and Barbuda": "أنتيغوا وبربودا",
+  "Argentina": "الأرجنتين",
+  "Armenia": "أرمينيا",
+  "Aruba": "أروبا",
+  "Ashmore and Cartier Islands": "جزر أشمور وكارتييه",
+  "Australia": "أستراليا",
+  "Austria": "النمسا",
+  "Azerbaijan": "أذربيجان",
+  "Bahrain": "البحرين",
+  "Bangladesh": "بنغلاديش",
+  "Barbados": "بربادوس",
+  "Belarus": "بيلاروس",
+  "Belgium": "بلجيكا",
+  "Belize": "بليز",
+  "Benin": "بنين",
+  "Bermuda": "برمودا",
+  "Bhutan": "بوتان",
+  "Bolivia": "بوليفيا",
+  "Bosnia and Herzegovina": "البوسنة والهرسك",
+  "Botswana": "بوتسوانا",
+  "Brazil": "البرازيل",
+  "British Indian Ocean Territory": "الإقليم البريطاني في المحيط الهندي",
+  "British Virgin Islands": "جزر فيرجن البريطانية",
+  "Brunei": "بروناي",
+  "Bulgaria": "بلغاريا",
+  "Burkina Faso": "بوركينا فاسو",
+  "Burundi": "بوروندي",
+  "Cabo Verde": "الرأس الأخضر",
+  "Cambodia": "كمبوديا",
+  "Cameroon": "الكاميرون",
+  "Canada": "كندا",
+  "Cayman Islands": "جزر كايمان",
+  "Central African Republic": "جمهورية أفريقيا الوسطى",
+  "Chad": "تشاد",
+  "Chile": "تشيلي",
+  "China": "الصين",
+  "Colombia": "كولومبيا",
+  "Comoros": "جزر القمر",
+  "Cook Islands": "جزر كوك",
+  "Costa Rica": "كوستاريكا",
+  "Croatia": "كرواتيا",
+  "Cuba": "كوبا",
+  "Curaçao": "كوراساو",
+  "Cyprus": "قبرص",
+  "Czechia": "التشيك",
+  "Democratic Republic of the Congo": "جمهورية الكونغو الديمقراطية",
+  "Denmark": "الدانمرك",
+  "Djibouti": "جيبوتي",
+  "Dominica": "دومينيكا",
+  "Dominican Republic": "جمهورية الدومينيكان",
+  "East Timor": "تيمور الشرقية",
+  "Ecuador": "الإكوادور",
+  "Egypt": "مصر",
+  "El Salvador": "السلفادور",
+  "Equatorial Guinea": "غينيا الاستوائية",
+  "Eritrea": "إريتريا",
+  "Estonia": "إستونيا",
+  "eSwatini": "إسواتيني",
+  "Ethiopia": "إثيوبيا",
+  "Falkland Islands": "جزر فوكلاند",
+  "Faroe Islands": "جزر فارو",
+  "Federated States of Micronesia": "ميكرونيزيا",
+  "Fiji": "فيجي",
+  "Finland": "فنلندا",
+  "France": "فرنسا",
+  "French Polynesia": "بولينيزيا الفرنسية",
+  "French Southern and Antarctic Lands": "الأقاليم الجنوبية الفرنسية",
+  "Gabon": "الغابون",
+  "Gambia": "غامبيا",
+  "Georgia": "جورجيا",
+  "Germany": "ألمانيا",
+  "Ghana": "غانا",
+  "Greece": "اليونان",
+  "Greenland": "غرينلاند",
+  "Grenada": "غرينادا",
+  "Guam": "غوام",
+  "Guatemala": "غواتيمالا",
+  "Guernsey": "غيرنزي",
+  "Guinea": "غينيا",
+  "Guinea-Bissau": "غينيا بيساو",
+  "Guyana": "غيانا",
+  "Haiti": "هايتي",
+  "Heard Island and McDonald Islands": "جزيرة هيرد وجزر ماكدونالد",
+  "Honduras": "هندوراس",
+  "Hong Kong S.A.R.": "هونغ كونغ الصينية (منطقة إدارية خاصة)",
+  "Hungary": "هنغاريا",
+  "Iceland": "آيسلندا",
+  "India": "الهند",
+  "Indian Ocean Territories": "أقاليم المحيط الهندي",
+  "Indonesia": "إندونيسيا",
+  "Iran": "إيران",
+  "Iraq": "العراق",
+  "Ireland": "أيرلندا",
+  "Isle of Man": "جزيرة مان",
+  "Israel": "إسرائيل",
+  "Italy": "إيطاليا",
+  "Ivory Coast": "ساحل العاج",
+  "Jamaica": "جامايكا",
+  "Japan": "اليابان",
+  "Jersey": "جيرسي",
+  "Jordan": "الأردن",
+  "Kazakhstan": "كازاخستان",
+  "Kenya": "كينيا",
+  "Kiribati": "كيريباتي",
+  "Kosovo": "كوسوفو",
+  "Kuwait": "الكويت",
+  "Kyrgyzstan": "قيرغيزستان",
+  "Laos": "لاوس",
+  "Latvia": "لاتفيا",
+  "Lebanon": "لبنان",
+  "Lesotho": "ليسوتو",
+  "Liberia": "ليبيريا",
+  "Libya": "ليبيا",
+  "Liechtenstein": "ليختنشتاين",
+  "Lithuania": "ليتوانيا",
+  "Luxembourg": "لوكسمبورغ",
+  "Macao S.A.R": "منطقة ماكاو الإدارية الخاصة",
+  "Madagascar": "مدغشقر",
+  "Malawi": "ملاوي",
+  "Malaysia": "ماليزيا",
+  "Maldives": "جزر المالديف",
+  "Mali": "مالي",
+  "Malta": "مالطا",
+  "Marshall Islands": "جزر مارشال",
+  "Mauritania": "موريتانيا",
+  "Mauritius": "موريشيوس",
+  "Mexico": "المكسيك",
+  "Moldova": "مولدوفا",
+  "Monaco": "موناكو",
+  "Mongolia": "منغوليا",
+  "Montenegro": "الجبل الأسود",
+  "Montserrat": "مونتسرات",
+  "Morocco": "المغرب",
+  "Mozambique": "موزمبيق",
+  "Myanmar": "ميانمار (بورما)",
+  "Namibia": "ناميبيا",
+  "Nauru": "ناورو",
+  "Nepal": "نيبال",
+  "Netherlands": "هولندا",
+  "New Caledonia": "كاليدونيا الجديدة",
+  "New Zealand": "نيوزيلندا",
+  "Nicaragua": "نيكاراغوا",
+  "Niger": "النيجر",
+  "Nigeria": "نيجيريا",
+  "Niue": "نيوي",
+  "Norfolk Island": "جزيرة نورفولك",
+  "North Korea": "كوريا الشمالية",
+  "North Macedonia": "مقدونيا الشمالية",
+  "Northern Cyprus": "شمال قبرص",
+  "Northern Mariana Islands": "جزر ماريانا الشمالية",
+  "Norway": "النرويج",
+  "Oman": "عُمان",
+  "Pakistan": "باكستان",
+  "Palau": "بالاو",
+  "Palestine": "فلسطين",
+  "Panama": "بنما",
+  "Papua New Guinea": "بابوا غينيا الجديدة",
+  "Paraguay": "باراغواي",
+  "Peru": "بيرو",
+  "Philippines": "الفلبين",
+  "Pitcairn Islands": "جزر بيتكيرن",
+  "Poland": "بولندا",
+  "Portugal": "البرتغال",
+  "Puerto Rico": "بورتوريكو",
+  "Qatar": "قطر",
+  "Republic of Serbia": "صربيا",
+  "Republic of the Congo": "جمهورية الكونغو",
+  "Romania": "رومانيا",
+  "Russia": "روسيا",
+  "Russian Federation": "روسيا",
+  "Rwanda": "رواندا",
+  "Saint Barthelemy": "سان بارتليمي",
+  "Saint Helena": "سانت هيلينا",
+  "Saint Kitts and Nevis": "سانت كيتس ونيفيس",
+  "Saint Lucia": "سانت لوسيا",
+  "Saint Martin": "سان مارتن",
+  "Saint Pierre and Miquelon": "سان بيير ومكويلون",
+  "Saint Vincent and the Grenadines": "سانت فنسنت وجزر غرينادين",
+  "Samoa": "ساموا",
+  "San Marino": "سان مارينو",
+  "São Tomé and Principe": "ساو تومي وبرينسيبي",
+  "Saudi Arabia": "السعودية",
+  "Senegal": "السنغال",
+  "Seychelles": "سيشل",
+  "Siachen Glacier": "نهر سياشين الجليدي",
+  "Sierra Leone": "سيراليون",
+  "Singapore": "سنغافورة",
+  "Sint Maarten": "سانت مارتن",
+  "Slovakia": "سلوفاكيا",
+  "Slovenia": "سلوفينيا",
+  "Solomon Islands": "جزر سليمان",
+  "Somalia": "الصومال",
+  "Somaliland": "أرض الصومال",
+  "South Africa": "جنوب أفريقيا",
+  "South Georgia and the Islands": "جورجيا الجنوبية وجزر ساندويتش الجنوبية",
+  "South Korea": "كوريا الجنوبية",
+  "South Sudan": "جنوب السودان",
+  "Spain": "إسبانيا",
+  "Sri Lanka": "سريلانكا",
+  "Sudan": "السودان",
+  "Suriname": "سورينام",
+  "Sweden": "السويد",
+  "Switzerland": "سويسرا",
+  "Syria": "سوريا",
+  "Taiwan": "تايوان",
+  "Tajikistan": "طاجيكستان",
+  "Thailand": "تايلاند",
+  "The Bahamas": "جزر البهاما",
+  "Togo": "توغو",
+  "Tonga": "تونغا",
+  "Trinidad and Tobago": "ترينيداد وتوباغو",
+  "Tunisia": "تونس",
+  "Turkey": "تركيا",
+  "Turkmenistan": "تركمانستان",
+  "Turks and Caicos Islands": "جزر توركس وكايكوس",
+  "Tuvalu": "توفالو",
+  "Uganda": "أوغندا",
+  "Ukraine": "أوكرانيا",
+  "United Arab Emirates": "الإمارات العربية المتحدة",
+  "United Kingdom": "المملكة المتحدة",
+  "United Republic of Tanzania": "تنزانيا",
+  "United States of America": "الولايات المتحدة الأمريكية",
+  "United States Of America": "الولايات المتحدة الأمريكية",
+  "United States Virgin Islands": "جزر فيرجن الأمريكية",
+  "Uruguay": "أورغواي",
+  "Uzbekistan": "أوزبكستان",
+  "Vanuatu": "فانواتو",
+  "Vatican": "الفاتيكان",
+  "Venezuela": "فنزويلا",
+  "Vietnam": "فيتنام",
+  "Wallis and Futuna": "جزر والس وفوتونا",
+  "Western Sahara": "الصحراء الغربية",
+  "Yemen": "اليمن",
+  "Zambia": "زامبيا",
+  "Zimbabwe": "زيمبابوي",
+  "January": "يناير",
+  "Jan": "يناير",
+  "February": "فبراير",
+  "Feb": "فبراير",
+  "March": "مارس",
+  "Mar": "مارس",
+  "April": "أبريل",
+  "Apr": "أبريل",
+  "May": "مايو",
+  "June": "يونيو",
+  "Jun": "يونيو",
+  "July": "يوليو",
+  "Jul": "يوليو",
+  "August": "أغسطس",
+  "Aug": "أغسطس",
+  "September": "سبتمبر",
+  "Sep": "سبتمبر",
+  "October": "أكتوبر",
+  "Oct": "أكتوبر",
+  "November": "نوفمبر",
+  "Nov": "نوفمبر",
+  "December": "ديسمبر",
+  "Dec": "ديسمبر",
+  "Abu Dhabi": "أبوظبي",
+  "New market": "سوق جديد",
+  "New route": "مسار جديد",
+};
+
 const labelKeys = new Map();
 const labelTemplates = [];
 const labelTokens = /\{(\w+)\}/g;
 const escapeLabelPattern = (text) => text.replace(/[.*+?^\${}()|[\]\\]/g, "\\$&");
+const arNameLookup = new Map(Object.entries(AR_NAMES).map(([name, arabic]) => [name.toLowerCase(), arabic]));
+const arNamePattern = new RegExp(
+  "(?<![\\p{L}])(?:" + Object.keys(AR_NAMES).sort((a, b) => b.length - a.length).map(escapeLabelPattern).join("|") + ")(?![\\p{L}])",
+  "giu",
+);
+
+function localizedName(key) {
+  return uiLanguage === "ar" ? arNameLookup.get(String(key).toLowerCase()) ?? key : key;
+}
+
+function localizedNamesIn(text) {
+  return uiLanguage === "ar" ? text.replace(arNamePattern, name => name === "may" ? name : localizedName(name)) : text;
+}
+
+function countryFromInput(value) {
+  const english = countryLocationLookup[normalizeCountryName(value)];
+  if (english) return english;
+  const comparable = text => text.trim().normalize("NFKD").replace(/\p{Mark}/gu, "");
+  const input = comparable(value);
+  return Object.values(countryLocationLookup).find(country => comparable(AR_NAMES[country.name] ?? country.name) === input);
+}
+
 for (const [key, text] of Object.entries(I18N.en)) {
   const parts = text.split(labelTokens);
   if (parts.length === 1) {
     labelKeys.set(text, key);
   } else {
     const names = parts.filter((_, index) => index % 2);
-    const numbers = /^(value|count|low|high|target|estimate|shortfall|uplift|share)$/;
+    const numbers = /^(value|count|low|high|target|estimate|shortfall|uplift|share|[a-e]|actual|hybrid|live|plan|total)$/;
     const pattern = parts.map((part, index) => {
       if (index % 2 === 0) return escapeLabelPattern(part);
-      return numbers.test(part) ? "([+−-]?[0-9][0-9,.%]*)" : "(.+?)";
+      if (numbers.test(part)) return "([+−-]?[0-9][0-9,.%]*(?:e[+-]?[0-9]+)?)";
+      if (part === "change" && text.includes("for a usual")) return "(no change|(?:minus|plus) [0-9,]+ with your plan)";
+      return "(.+?)";
     }).join("");
-    labelTemplates.push([new RegExp("^" + pattern + "$"), key, names]);
+    labelTemplates.push([new RegExp("^" + pattern + "$"), key, names, parts.filter((_, index) => index % 2 === 0).join("").length]);
   }
 }
+
+labelTemplates.sort((a, b) => b[3] - a[3]);
 
 function t(key, values = {}) {
   const text = I18N[uiLanguage][key] ?? I18N.en[key];
   return text.replace(labelTokens, (placeholder, name) => {
     if (!Object.hasOwn(values, name)) return placeholder;
     const value = values[name];
-    const nestedKey = labelKeys.get(value) ?? labelKeys.get(String(value).toLowerCase());
-    return uiLanguage === "ar" ? "\u2068" + (I18N.ar[nestedKey] ?? value) + "\u2069" : value;
+    if (uiLanguage === "en") return value;
+    const source = String(value);
+    const localized = name === "trials"
+      ? source.split("; ").map(trial => translateUiString(trial, undefined, false)).join("؛ ")
+      : translateUiString(source, undefined, false);
+    return "\u2068" + localized + "\u2069";
   });
 }
 
+function translateUiString(source, hint, split = true) {
+  const text = source.trim();
+  if (!text || uiLanguage === "en" || text.startsWith("Exact inputs and results: ")) return source;
+  const key = I18N.en[hint] === text ? hint : (labelKeys.get(text) ?? labelKeys.get(text.toLowerCase()));
+  if (key) return source.replace(text, () => t(key));
+  for (const [pattern, template, names] of labelTemplates) {
+    const match = pattern.exec(text);
+    if (!match || match.slice(1).includes(text)) continue;
+    if (["{month} estimate", "{month} · {series}: {value}"].includes(I18N.en[template]) && !arNameLookup.has(match[1].toLowerCase())) continue;
+    return source.replace(text, () => t(template, Object.fromEntries(names.map((name, index) => [name, match[index + 1]]))));
+  }
+  if (split) {
+    const parts = source.split(/(\n+| · | → |(?<=\.)\s+(?=[A-Z]))/);
+    if (parts.length > 1) return parts.map((part, index) => index % 2 ? part : translateUiString(part, undefined, false)).join("");
+  }
+  return localizedNamesIn(source);
+}
+
 const originalUiText = new WeakMap();
+let localizeUi = () => {};
 function englishUiText(element) {
   const node = element.firstChild;
   const previous = originalUiText.get(node);
@@ -4162,31 +4785,19 @@ function englishUiText(element) {
 
 function setupLanguage() {
   const originalAttributes = new WeakMap();
-  const attrs = ["aria-label", "aria-valuetext", "placeholder", "title"];
-  const skip = 'script, style, textarea, [data-i18n-ignore], .pw-history p, .pw-task h4, .pw-item-heading strong';
+  const attrs = ["aria-label", "aria-valuetext", "aria-description", "placeholder", "title"];
+  const skip = 'script, style, [download], textarea, [data-i18n-ignore], .pw-item-heading strong';
+  const generatedTaskText = new Set(["Confirm the flight demand", "Check hotel use and capacity", "Review the visitor mix", "No notes added."]);
   const root = document.documentElement;
-
-  function translate(source, hint) {
-    const text = source.trim();
-    if (!text || uiLanguage === "en") return source;
-    const key = I18N.en[hint] === text ? hint : labelKeys.get(text);
-    if (key) return source.replace(text, () => t(key));
-    // Dynamic labels use placeholders so figures and names keep their original spelling.
-    for (const [pattern, template, names] of labelTemplates) {
-      const match = pattern.exec(text);
-      if (match) {
-        return source.replace(text, () => t(template, Object.fromEntries(names.map((name, index) => [name, match[index + 1]]))));
-      }
-    }
-    return source;
-  }
 
   function localizeText(node) {
     const parent = node.parentElement;
     if (!parent || parent.closest(skip)) return;
     const previous = originalUiText.get(node);
     const source = previous?.localized === node.data ? previous.source : node.data;
-    const localized = translate(source, parent.dataset.i18n);
+    const protectedHistory = parent.closest(".pw-history p, .pw-task h4");
+    if (protectedHistory && !generatedTaskText.has(source.trim()) && !parent.closest(".pw-history li:has(.pw-assumptions)")) return;
+    const localized = translateUiString(source, parent.dataset.i18n);
     if (node.data === localized) return;
     // Some legacy options use their English label as the form value.
     if (parent.localName === "option" && !parent.hasAttribute("value")) parent.value = parent.textContent.trim();
@@ -4196,12 +4807,13 @@ function setupLanguage() {
 
   function localizeAttributes(element) {
     if (element.closest(skip)) return;
+    if (element.dataset.countryName) element.value = localizedName(element.dataset.countryName);
     const previous = originalAttributes.get(element) || {};
     for (const name of attrs) {
       const current = element.getAttribute(name);
       if (current === null) continue;
       const source = previous[name]?.localized === current ? previous[name].source : current;
-      const localized = translate(source, element.getAttribute("data-i18n-" + name));
+      const localized = translateUiString(source, element.getAttribute("data-i18n-" + name));
       if (current === localized) continue;
       previous[name] = {source, localized};
       originalAttributes.set(element, previous);
@@ -4218,18 +4830,31 @@ function setupLanguage() {
     }
   }
 
+  localizeUi = localizeSubtree;
+
   function setLanguage(language) {
+    const market = document.querySelector("#newMarketCountry");
+    const confirmed = confirmedNewMarketKey && countryLocationLookup[normalizeCountryName(confirmedNewMarketKey)];
+    const syncMarket = confirmed && market?.value === localizedName(confirmed.name);
     uiLanguage = language === "ar" ? "ar" : "en";
+    if (syncMarket) market.value = localizedName(confirmed.name);
     root.lang = uiLanguage;
     root.dir = uiLanguage === "ar" ? "rtl" : "ltr";
     $$("[data-lang]").forEach((button) => button.setAttribute("aria-pressed", String(button.dataset.lang === uiLanguage)));
     localizeSubtree(root);
+    refreshGlossaryLetters();
+    if ($("#glossarySearch").value) $("#glossarySearch").dispatchEvent(new Event("input"));
   }
 
   let stored;
   try { stored = localStorage.getItem("air2stay:lang"); } catch { /* Browser storage is optional. */ }
   setLanguage(stored);
   document.addEventListener("click", (event) => {
+    const draft = event.target.closest('#proposalWorkspace [data-pw-action="draft"]') && $("#proposalWorkspace [data-pw-draft]");
+    if (draft && uiLanguage === "ar") {
+      draft.value = translateUiString(draft.value);
+      draft.dir = "rtl";
+    }
     const button = event.target.closest("button[data-lang]");
     if (!button || button.dataset.lang === uiLanguage) return;
     setLanguage(button.dataset.lang);
