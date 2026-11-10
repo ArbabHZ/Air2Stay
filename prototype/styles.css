@@ -2216,7 +2216,7 @@ html[dir="rtl"] #scenarioName { text-align: end; }
 
 /* Assistant: gold "Ask Air2Stay" button in the bottom-right corner on every screen. */
 .help-chat-bubble { position:fixed; z-index:41; inset-inline-end:calc(var(--team-rail-width, 44px) + 16px); bottom:20px; display:grid; place-items:center; width:58px; height:58px; padding:0; border:1px solid #f6dc95; border-radius:50%; color:#15182b; background:linear-gradient(135deg,#f6dc95 0%,#f2c66d 55%,#e8a24f 100%); box-shadow:0 10px 28px #050a18cc, 0 0 0 1px #c9a84c55; cursor:pointer; animation:help-chat-glow 2.4s ease-out 3; transition:transform .15s ease, box-shadow .15s ease; }
-.help-chat-bubble:hover { transform:translateY(-2px); box-shadow:0 14px 32px #050a18cc, 0 0 0 4px #f2d58a40; }
+.help-chat-bubble:hover { box-shadow:0 14px 32px #050a18cc, 0 0 0 4px #f2d58a40; }
 .help-chat-bubble svg { width:27px; height:27px; }
 .help-chat-bubble:focus-visible { outline:3px solid #fff6da; outline-offset:3px; }
 body.help-chat-open .help-chat-bubble { display:none; }
@@ -2225,6 +2225,9 @@ body.help-chat-open .help-chat-bubble { display:none; }
 .help-chat { position:fixed; z-index:42; inset-inline-end:calc(var(--team-rail-width, 44px) + 16px); bottom:20px; display:flex; flex-direction:column; width:min(390px, calc(100vw - 32px)); height:min(600px, calc(100dvh - var(--header-height, 64px) - 32px)); border:1px solid #c9a84c99; border-radius:16px; background:#111933; box-shadow:0 18px 48px #03071299, 0 0 0 1px #f2d58a1f; overflow:hidden; color:#f5efe3; }
 .help-chat[hidden] { display:none; }
 .help-chat-header { display:flex; justify-content:space-between; align-items:flex-start; gap:10px; padding:14px 12px 12px 16px; background:linear-gradient(135deg,#f6dc95 0%,#f2c66d 55%,#e8a24f 100%); color:#15182b; }
+.help-chat-bubble, .help-chat-header { cursor:grab; touch-action:none; user-select:none; }
+.help-chat-tools #helpChatMove { cursor:grab; }
+.help-chat-dragging, .help-chat-dragging #helpChatMove { cursor:grabbing; }
 .help-chat-header h2 { margin:0; font-size:15px; color:#15182b; }
 .help-chat-header p { margin:3px 0 0; font-size:11.5px; color:#3b3220; line-height:1.4; }
 .help-chat-tools { display:flex; gap:4px; flex-shrink:0; }
@@ -2252,7 +2255,7 @@ body.help-chat-open .help-chat-bubble { display:none; }
 .help-chat-note { margin:0; padding:0 14px 12px; font-size:11px; line-height:1.45; color:#93a6c6; }
 @media (max-width:560px) {
   .help-chat-bubble { inset-inline-end:calc(var(--team-rail-width, 38px) + 10px); bottom:14px; width:54px; height:54px; }
-  .help-chat { inset-inline:8px; bottom:8px; width:auto; height:min(78dvh, calc(100dvh - 24px)); }
+  .help-chat { inset-inline:8px; bottom:8px; width:calc(100vw - 16px); height:min(78dvh, calc(100dvh - 24px)); }
 }
 
 /* Target view: work back from a hotel-night target to the flights needed. */

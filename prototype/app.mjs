@@ -1590,6 +1590,94 @@ function setHelpChatOpen(open, opener = null) {
   }
 }
 
+function setupHelpChatPosition(element, grip, keyboardGrip) {
+  const key = "air2stay:" + element.id + ":position";
+  let position = null;
+  let drag = null;
+  let suppressClick = false;
+
+  try {
+    const saved = JSON.parse(localStorage.getItem(key));
+    if (Number.isFinite(saved?.x) && Number.isFinite(saved?.y)) position = saved;
+  } catch { /* Positioning works without storage. */ }
+
+  function place({x, y}) {
+    const margin = 8;
+    const root = document.documentElement;
+    const bound = (value, size, limit) => Math.max(margin, Math.min(value, limit - size - margin));
+    const left = bound(x, element.offsetWidth, root.clientWidth);
+    const top = bound(y, element.offsetHeight, root.clientHeight);
+    element.style.inset = `${top}px auto auto ${left}px`;
+    return {x:left, y:top};
+  }
+
+  function remember() {
+    try {
+      if (position) localStorage.setItem(key, JSON.stringify(position));
+      else localStorage.removeItem(key);
+    } catch { /* Keep this visit's position. */ }
+  }
+
+  function restore() {
+    if (position && element.getClientRects().length) place(position);
+  }
+
+  grip.addEventListener("pointerdown", (event) => {
+    if (!event.isPrimary || event.button !== 0) return;
+    const button = event.target.closest("button");
+    if (button && button !== keyboardGrip) return;
+    const rect = element.getBoundingClientRect();
+    drag = {id:event.pointerId, x:event.clientX, y:event.clientY, left:rect.left, top:rect.top, moved:false};
+    suppressClick = false;
+    grip.setPointerCapture(event.pointerId);
+  });
+  grip.addEventListener("pointermove", (event) => {
+    if (drag?.id !== event.pointerId) return;
+    const dx = event.clientX - drag.x;
+    const dy = event.clientY - drag.y;
+    if (!drag.moved && Math.hypot(dx, dy) < 5) return;
+    drag.moved = true;
+    grip.classList.add("help-chat-dragging");
+    position = place({x:drag.left + dx, y:drag.top + dy});
+  });
+  const finish = (event) => {
+    if (drag?.id !== event.pointerId) return;
+    suppressClick = drag.moved;
+    drag = null;
+    grip.classList.remove("help-chat-dragging");
+    if (suppressClick) remember();
+  };
+  for (const event of ["pointerup", "pointercancel", "lostpointercapture"]) grip.addEventListener(event, finish);
+
+  if (grip === element) {
+    grip.addEventListener("click", (event) => {
+      if (!suppressClick || event.detail === 0) return;
+      suppressClick = false;
+      event.stopImmediatePropagation();
+    }, {capture:true});
+  }
+
+  keyboardGrip.addEventListener("keydown", (event) => {
+    const directions = {ArrowLeft:[-1,0], ArrowRight:[1,0], ArrowUp:[0,-1], ArrowDown:[0,1]};
+    if (event.key === "Home") {
+      position = null;
+      element.style.removeProperty("inset");
+    } else if (Object.hasOwn(directions, event.key)) {
+      const {left, top} = element.getBoundingClientRect();
+      const [x, y] = directions[event.key];
+      position = place({x:left + 20 * x, y:top + 20 * y});
+    } else {
+      return;
+    }
+    event.preventDefault();
+    remember();
+  });
+
+  restore();
+  window.addEventListener("resize", restore);
+  new ResizeObserver(restore).observe(element);
+}
+
 function setupHelpChat() {
   // Stored chat is untrusted: keep only well-formed, size-limited messages.
   try {
@@ -1600,6 +1688,10 @@ function setupHelpChat() {
       .map((item) => ({ role:item.role, text:(item.role === "user" ? helpChatClean(item.text) : item.text.replace(/[‪-‮]/g, "")).slice(0, HELP_CHAT_MAX_STORED), lang:item.lang === "ar" || item.lang === "en" ? item.lang : helpChatLanguageOf(item.text) }));
   } catch { helpChatMessages = []; }
   if (!helpChatMessages.length) helpChatMessages = [helpChatGreeting()];
+  const launcher = $("#helpChatBubble");
+  const panel = $("#helpChat");
+  setupHelpChatPosition(launcher, launcher, launcher);
+  setupHelpChatPosition(panel, panel.querySelector(".help-chat-header"), $("#helpChatMove"));
   $$("[data-assistant-open]").forEach((button) => button.addEventListener("click", () => setHelpChatOpen($("#helpChat").hidden, button)));
   $("#helpChatClose").addEventListener("click", () => setHelpChatOpen(false));
   $("#helpChatClear").addEventListener("click", () => { helpChatMessages = [helpChatGreeting()]; saveHelpChat(); renderHelpChat(); $("#helpChatInput").focus(); });
@@ -4875,6 +4967,10 @@ const I18N = (() => {
 
     // Ask Air2Stay assistant: window and its replies (one sentence per line).
     a2c_open: ["Open the Air2Stay assistant", "فتح مساعد Air2Stay"],
+    a2c_move: ["Move the assistant", "حرّك المساعد"],
+    a2c_drag: ["Drag to move", "اسحب للتحريك"],
+    a2c_drag_launch: ["Ask Air2Stay · Drag to move", "اسأل Air2Stay · اسحب للتحريك"],
+    a2c_move_help: ["Drag or use the arrow keys to move. Press Home to reset the position.", "اسحب أو استخدم مفاتيح الأسهم للتحريك. اضغط على مفتاح Home لإعادة الموضع."],
     a2c_title: ["Air2Stay assistant", "مساعد Air2Stay"],
     a2c_ask_about_plan: ["Ask about your plan", "اسأل عن خطتك"],
     a2c_new_conversation_label: ["Start a new conversation", "بدء محادثة جديدة"],
