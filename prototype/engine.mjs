@@ -25,10 +25,11 @@
    }
    if (/\b(why|explain|how did|where does)\b/.test(lower)) {
      let detail = `The plan has ${Math.round(whole).toLocaleString()} seats. At ${(loadFactor * 100).toFixed(1)}% full, about ${Math.round(passengers).toLocaleString()} passengers are expected. ${(p2pShare * 100).toFixed(1)}% are expected to finish their trip in Abu Dhabi, and ${(conversion * 100).toFixed(1)}% of those may check into a hotel. Their average stay gives the estimated hotel nights.${upliftNote}`;
-     if (/\b(flight|flights|seat|seats|capacity)\b/.test(lower)) {
-       detail = `More flights add seats. This plan has ${Math.round(whole).toLocaleString()} seats, so changing flights can change the number of passengers and hotel stays. ${plainResult}`;
-     } else if (/\b(load|full|occupancy)\b/.test(lower)) {
+     // "How full the flights are" mentions flights too, so check fullness first.
+     if (/\b(load|full|fullness|occupancy)\b/.test(lower)) {
        detail = `Flights are expected to be ${(loadFactor * 100).toFixed(1)}% full, or about ${Math.round(passengers).toLocaleString()} passengers out of ${Math.round(whole).toLocaleString()} seats. ${plainResult}`;
+     } else if (/\b(flight|flights|seat|seats|capacity)\b/.test(lower)) {
+       detail = `More flights add seats. This plan has ${Math.round(whole).toLocaleString()} seats, so changing flights can change the number of passengers and hotel stays. ${plainResult}`;
      } else if (/\b(p2p|point.to.point|arrival)\b/.test(lower)) {
        detail = `About ${(p2pShare * 100).toFixed(1)}% of passengers, or ${Math.round(result.scenario.p2p).toLocaleString()} people, are expected to finish their flight journey in Abu Dhabi. ${plainResult}`;
      } else if (/\b(conversion|hotel|check.in)\b/.test(lower)) {

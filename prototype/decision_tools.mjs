@@ -139,6 +139,72 @@ export function solveCapacityTarget(data, inputs, targetGuestNights, { maxWeekly
     interpretation: 'The target is not reached within the weekly-flight limit. Revise the target or investigate the assumptions; no result beyond the supported controls is claimed.' };
 }
 
+export const TARGET_FLIGHT_CONTROL_LIMIT = 20;
+
+/**
+ * Work a hotel-night target backwards through the same chain the plan uses:
+ * nights -> hotel check-ins -> visitors ending their trip here -> passengers
+ * -> seats -> weekly flights. The chain is linear in added flights, so each
+ * stage is the exact one-flight increment scaled by the flights needed.
+ * basis 'extra': nights on top of the plan with zero added flights.
+ * basis 'total': total nights for the month, including existing flights.
+ */
+export function reverseTargetPlan(data, inputs, target, { basis = 'extra' } = {}) {
+  const plan = checkedInputs(inputs);
+  if (!['extra', 'total'].includes(basis)) throw new RangeError('Choose an extra or total hotel-night target.');
+  if (typeof target !== 'number' || !Number.isFinite(target) || target < 0) throw new RangeError('Enter a hotel-night target of zero or more.');
+  const zero = runScenario(data, { ...plan, extraFlights: 0 });
+  const one = runScenario(data, { ...plan, extraFlights: 1 });
+  const startingNights = zero.scenario.guestNights;
+  const neededNights = basis === 'total' ? Math.max(0, target - startingNights) : target;
+  const perFlight = Object.fromEntries(['seats', 'passengers', 'p2p', 'hotelCheckins', 'guestNights']
+    .map((key) => [key, one.scenario[key] - zero.scenario[key]]));
+  if (!(perFlight.guestNights > 0)) throw new RangeError('These assumptions add no hotel nights per flight, so no flight count can reach the target.');
+  const tolerance = Math.max(1e-7, neededNights * 1e-9);
+  const exactWeeklyFlights = neededNights <= tolerance ? 0 : neededNights / perFlight.guestNights;
+  const requiredWeeklyFlights = exactWeeklyFlights === 0 ? 0 : Math.ceil(exactWeeklyFlights - 1e-9);
+  const at = (key) => perFlight[key] * exactWeeklyFlights;
+  const weeks = perFlight.seats / Number(plan.seatsPerFlight);
+  const uplift = Number(plan.eventUplift || 0);
+  const steps = [
+    { key: 'guestNights', label: 'Hotel nights needed', value: neededNights, operation: '' },
+    { key: 'hotelCheckins', label: 'Hotel check-ins', value: at('hotelCheckins'), operation: `÷ ${Number(plan.averageStay).toFixed(2)} nights per stay` },
+    { key: 'p2p', label: 'Visitors ending their trip in Abu Dhabi', value: at('p2p'),
+      operation: `÷ ${(Number(plan.conversionRate) * 100).toFixed(1)}% who use a hotel` + (uplift ? ` and +${(uplift * 100).toFixed(0)}% for an event or season` : '') },
+    { key: 'passengers', label: 'Passengers', value: at('passengers'), operation: `÷ ${(Number(plan.p2pShare) * 100).toFixed(1)}% whose trip ends here` },
+    { key: 'seats', label: 'Seats in the month', value: at('seats'), operation: `÷ ${(Number(plan.loadFactor) * 100).toFixed(1)}% of seats filled` },
+    { key: 'weeklyFlights', label: 'Extra flights each week', value: exactWeeklyFlights, operation: `÷ ${Math.round(Number(plan.seatsPerFlight))} seats per flight ÷ ${weeks.toFixed(2)} weeks` },
+  ];
+  const route = zero.route;
+  const existingWeeklyFlights = route.knownMarket ? Number(route.weeklyFrequency) || 0 : 0;
+  const increase = existingWeeklyFlights > 0 ? requiredWeeklyFlights / existingWeeklyFlights : null;
+  const realism = requiredWeeklyFlights === 0 ? { level: 'none', text: 'No extra flights are needed under these assumptions.' }
+    : !route.knownMarket || existingWeeklyFlights <= 0 ? { level: 'new-route', text: 'This is a new route with no current flights to compare against. Ask an airline whether this schedule is realistic.' }
+    : increase <= 0.1 ? { level: 'small', text: `A small addition: about ${Math.round(increase * 100)}% more than the roughly ${Math.round(existingWeeklyFlights)} flights a week this route usually has in this month.` }
+    : increase <= 0.5 ? { level: 'moderate', text: `A noticeable addition: about ${Math.round(increase * 100)}% more than the roughly ${Math.round(existingWeeklyFlights)} flights a week this route usually has. Check airline capacity and airport slots.` }
+    : increase <= 1 ? { level: 'large', text: `A large addition: about ${Math.round(increase * 100)}% more than the roughly ${Math.round(existingWeeklyFlights)} flights a week this route usually has. New flights may not fill as well as existing ones.` }
+    : { level: 'very-large', text: `More than doubles the route: about ${(1 + increase).toFixed(1)} times the roughly ${Math.round(existingWeeklyFlights)} flights a week it usually has. Treat this as unlikely without strong airline evidence.` };
+  const levers = [
+    { key: 'averageStay', label: 'Average nights per hotel stay', limit: LIMITS.averageStay[1], unit: 'nights' },
+    { key: 'conversionRate', label: 'Share of visitors using a hotel', limit: LIMITS.conversionRate[1], unit: 'share' },
+    { key: 'loadFactor', label: 'How full flights are', limit: LIMITS.loadFactor[1], unit: 'share' },
+  ];
+  const factor = startingNights > 0 ? (startingNights + neededNights) / startingNights : null;
+  const alternatives = factor == null || neededNights <= tolerance ? [] : levers.map((lever) => {
+    const from = Number(plan[lever.key]);
+    const to = from * factor;
+    return { ...lever, from, to, withinLimits: to <= lever.limit };
+  });
+  return {
+    basis, target, startingNights, neededNights, targetTotalNights: startingNights + neededNights,
+    alreadyMet: neededNights <= tolerance, exactWeeklyFlights, requiredWeeklyFlights,
+    extraFlightsPerMonth: requiredWeeklyFlights * weeks, nightsPerWeeklyFlight: perFlight.guestNights,
+    withinControlLimit: requiredWeeklyFlights <= TARGET_FLIGHT_CONTROL_LIMIT,
+    steps, route, existingWeeklyFlights, increaseOnExisting: increase, realism, alternatives,
+    interpretation: 'Capacity needed under these assumptions if every extra flight fills like the plan says. Not proof of passenger demand, airport slots, hotel rooms or route profitability.',
+  };
+}
+
 /** Show whether applying identical trial rules changes the assumed ranking. */
 export function rankingReversals(data, options, settings = {}) {
   const base = compareOptions(data, options, settings);
@@ -173,14 +239,14 @@ export function decisionNote(data, inputs, options = []) {
   ];
   const assumptions = [
     ['Route purpose', purpose.label], ['Extra flights per week', String(inputs.extraFlights)],
-    ['Seats per flight', String(inputs.seatsPerFlight)], ['Flight occupancy', pct(inputs.loadFactor)],
+    ['Seats per flight', String(Math.round(Number(inputs.seatsPerFlight)))], ['Flight occupancy', pct(inputs.loadFactor)],
     ['Passengers ending in Abu Dhabi', pct(inputs.p2pShare)], ['Hotel use', pct(inputs.conversionRate)],
     ['Nights per hotel stay', Number(inputs.averageStay).toFixed(2)], ['Extra event demand', pct(inputs.eventUplift || 0)],
   ].map(([label, value]) => ({ label, value }));
   const lowerCase = stress.trials.find((trial) => trial.id === 'combined');
   const comparisonDetails = reversals ? reversals.base.options.map((row) => [
     row.label + ' · ' + data.months[row.inputs.month - 1],
-    `Flights/week: ${row.inputs.extraFlights}; seats/flight: ${row.inputs.seatsPerFlight}; fullness: ${pct(row.inputs.loadFactor)}; ending-trip share: ${pct(row.inputs.p2pShare)}; hotel use: ${pct(row.inputs.conversionRate)}; nights/stay: ${Number(row.inputs.averageStay).toFixed(4)}; event assumption: ${pct(row.inputs.eventUplift || 0)}.`,
+    `Flights/week: ${row.inputs.extraFlights}; seats/flight: ${Math.round(Number(row.inputs.seatsPerFlight))}; fullness: ${pct(row.inputs.loadFactor)}; ending-trip share: ${pct(row.inputs.p2pShare)}; hotel use: ${pct(row.inputs.conversionRate)}; nights/stay: ${Number(row.inputs.averageStay).toFixed(4)}; event assumption: ${pct(row.inputs.eventUplift || 0)}.`,
     `Additional check-ins: ${fmt(row.incremental.hotelCheckins)}; additional guest nights: ${fmt(row.incremental.guestNights)}; guest nights/1,000 added seats: ${row.per1000AddedSeats == null ? 'not applicable' : fmt(row.per1000AddedSeats)}.`,
     row.inputs.peerProfile ? 'Starting comparison weights: ' + row.inputs.peerProfile.peers.map((peer) => `${peer.origin} ${pct(peer.weight)}`).join('; ') + '. Geographic assumptions only.' : 'Existing-market or explicitly selected single-market starting assumptions.',
     'Exact inputs and results: ' + JSON.stringify({originKey:row.inputs.originKey,month:row.inputs.month,extraFlights:row.inputs.extraFlights,seatsPerFlight:row.inputs.seatsPerFlight,loadFactor:row.inputs.loadFactor,p2pShare:row.inputs.p2pShare,conversionRate:row.inputs.conversionRate,averageStay:row.inputs.averageStay,eventUplift:row.inputs.eventUplift,incremental:row.incremental,per1000AddedSeats:row.per1000AddedSeats}),

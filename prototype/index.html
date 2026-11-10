@@ -76,6 +76,7 @@
            <button type="button" id="adjustControls" class="adjust-controls" aria-expanded="false" aria-controls="planControls"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16M13 9l3 3-3 3"/></svg><span id="adjustControlsLabel" data-i18n="adjust_plan">Adjust plan</span></button>
            <div class="view-mode-switch" role="group" aria-label="Planning view" data-i18n-aria-label="planning_view">
              <button type="button" class="view-mode active" data-mode="focus" aria-pressed="true" aria-controls="scenarioResults" data-i18n="focus">Focus</button>
+             <button type="button" class="view-mode" data-mode="target" aria-pressed="false" aria-controls="targetWorkspace">Target</button>
              <button type="button" class="view-mode" data-mode="decisions" aria-pressed="false" aria-controls="decisionWorkspace" data-i18n="compare">Compare</button>
              <button type="button" class="view-mode" data-mode="details" aria-pressed="false" aria-controls="scenarioResults" data-i18n="details">Details</button>
              <button type="button" class="view-mode" data-mode="chat" aria-pressed="false" aria-controls="assistantPanel" hidden disabled data-i18n="chat">Chat</button>
@@ -125,6 +126,22 @@
            <details class="content-block"><summary data-i18n="what_if_fewer_visitors">What if fewer visitors stay in hotels?</summary><p class="planning-note" data-i18n="stress_trials_scope">These hypothetical trials use lower assumptions within the control limits.</p><div id="stressChart" dir="ltr"></div><details class="chart-numbers"><summary data-i18n="show_the_numbers">Show the numbers</summary><div id="stressOptions" class="table-scroll"></div></details></details>
            <details class="content-block"><summary data-i18n="work_backwards_from_a">Work backwards from a hotel-night target</summary><div class="target-controls"><label class="planning-field"><span data-i18n="target_extra_guest_nights">Target extra guest nights in the selected month</span><input id="targetGuestNights" type="number" min="0" max="100000000" step="100" value="5000" lang="en" dir="ltr"></label><button id="calculateTarget" type="button" data-i18n="calculate_capacity">Calculate capacity</button></div><p id="targetResult" role="status" class="planning-callout"></p><button id="applyTarget" type="button" hidden data-i18n="apply_changes">Apply changes</button><p class="planning-note" data-i18n="assumes_every_extra_flight">Assumes every extra flight achieves the selected occupancy and visitor assumptions. This does not prove that enough passengers will book or that a route is financially viable.</p></details>
            <section class="content-block" id="planningDecision"><div class="section-heading"><div><p data-i18n="decision_note">Decision note</p><h2 id="planningDecisionTitle" tabindex="-1" data-i18n="the_planning_decision">The planning decision</h2></div><div class="decision-note-actions"><button type="button" id="printDecisionNote" data-i18n="save_as_pdf">Save as PDF</button><button type="button" id="exportDecisionNote" class="text-action" data-i18n="or_download_as_text">or download as text</button></div></div><div id="decisionNote" aria-live="polite"></div></section>
+         </section>
+         <section id="targetWorkspace" class="decision-workspace target-workspace" hidden aria-label="Reach a hotel-night target">
+           <div class="decision-intro"><h2>What would it take to reach a hotel-night target?</h2><p>Enter the hotel nights you want for this country and month. Air2Stay runs your plan backwards to the passengers, seats and weekly flights needed, using the same assumptions as the rest of the plan.</p></div>
+           <section class="content-block target-input-block">
+             <form id="targetAskForm" class="target-ask" novalidate><label class="planning-field">Ask in your own words<input id="targetAsk" type="text" autocomplete="off" placeholder="How many flights for 10,000 more nights from India in December?"></label><button type="submit">Ask</button></form>
+             <p id="targetAskStatus" class="planning-note" role="status"></p>
+             <div class="target-controls">
+               <label class="planning-field">I want hotel nights to<select id="targetBasis"><option value="extra">increase by</option><option value="total">reach a total of</option></select></label>
+               <label class="planning-field">Hotel nights in the month<input id="targetNights" type="number" min="0" max="100000000" step="500" value="10000"></label>
+             </div>
+             <p id="targetContext" class="planning-note"></p>
+           </section>
+           <section class="content-block target-answer" aria-live="polite"><div id="targetAnswer"></div></section>
+           <section class="content-block"><div class="section-heading"><div><p>Working backwards</p><h2>From hotel nights to flights</h2></div><small>Each step undoes one assumption in your plan</small></div><ol id="targetSteps" class="target-chain"></ol></section>
+           <section class="content-block"><div class="section-heading"><div><p>Other ways to get there</p><h2>The same target with no extra flights</h2></div><small>Changes one assumption across all current travellers</small></div><div id="targetAlternatives"></div></section>
+           <p class="planning-note">This assumes every extra flight fills like the plan says. In practice, extra flights often fill less well than existing ones. It does not prove passenger demand, airport slots, hotel rooms or route profitability.</p>
          </section>
          <div id="scenarioResults" style="display:contents">
          <section id="kpis" class="kpi-grid"></section>
@@ -299,6 +316,22 @@
      <button type="button" data-team-open="notifications" aria-label="Notifications" title="Notifications" data-i18n-aria-label="notifications" data-i18n-title="notifications"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9m-8 12a2 2 0 0 0 4 0"/></svg></button>
      <button type="button" data-team-open="stats" aria-label="Statistics" title="Statistics" data-i18n-aria-label="statistics" data-i18n-title="statistics"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M4 4v16h16M8 16v-4m5 4V7m5 9V9"/></svg></button>
    </nav>
+   <button type="button" id="helpChatBubble" class="help-chat-bubble" data-assistant-open aria-label="Open the Air2Stay assistant" title="Ask Air2Stay" aria-controls="helpChat" aria-expanded="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 5h16v11H9l-5 3z"/><path d="m12 7.6.8 1.7 1.7.8-1.7.8-.8 1.7-.8-1.7-1.7-.8 1.7-.8z" fill="currentColor" stroke-width="1"/></svg></button>
+   <section id="helpChat" class="help-chat" role="dialog" aria-modal="false" aria-labelledby="helpChatTitle" hidden>
+     <header class="help-chat-header">
+       <div><h2 id="helpChatTitle">Air2Stay assistant</h2><p id="helpChatContext">Ask about your plan</p></div>
+       <div class="help-chat-tools"><button type="button" id="helpChatClear" aria-label="Start a new conversation" title="New conversation"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 12a8 8 0 1 0 2.4-5.7M4 4v4h4"/></svg></button><button type="button" id="helpChatClose" aria-label="Close the assistant" title="Close">×</button></div>
+     </header>
+     <div id="helpChatLog" class="help-chat-log" data-i18n-ignore role="log" aria-live="polite" aria-label="Conversation with the assistant"></div>
+     <div class="help-chat-starters" aria-label="Suggested questions">
+       <button type="button" data-help-prompt="Explain the result">Explain the result</button>
+       <button type="button" data-help-prompt="How many flights for 10,000 more nights?">Reach a target</button>
+       <button type="button" data-help-prompt="What should I check next?">What to check</button>
+       <button type="button" data-help-prompt="What can you do?">What can you do?</button>
+     </div>
+     <form id="helpChatForm" class="help-chat-form" autocomplete="off"><input id="helpChatInput" type="text" maxlength="400" placeholder="Ask about your plan…" aria-label="Message the assistant"><button type="submit" aria-label="Send"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M5 12h13M13 6l6 6-6 6"/></svg></button></form>
+     <p class="help-chat-note">Works offline on this computer. It changes your plan only when you ask directly, like “Set extra flights to 5”.</p>
+   </section>
    <dialog id="teamDrawer" class="feature-dialog team-drawer" aria-labelledby="teamTitle">
      <header class="feature-dialog-header">
        <h2 id="teamTitle" data-i18n="approvals_and_tasks">Approvals and tasks</h2>

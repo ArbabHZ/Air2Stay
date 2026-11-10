@@ -1,10 +1,10 @@
  import { assistantReply, appliedPlanConfirmation, findRoute, getBridge, weeksInMonth, parseScenarioPrompt, runScenario, sensitivity, validateScenarioInputs } from "./engine.mjs";
 import { buildPeerProfile, validatePeerMethod } from "./route_planning.mjs";
-import { ROUTE_PURPOSES, applyRoutePurpose, planningMetrics, compareOptions, compareMonths, launchOptions, stressTest, solveCapacityTarget, rankingReversals, decisionNote } from "./decision_tools.mjs";
+import { ROUTE_PURPOSES, applyRoutePurpose, planningMetrics, compareOptions, compareMonths, launchOptions, stressTest, solveCapacityTarget, reverseTargetPlan, rankingReversals, decisionNote } from "./decision_tools.mjs";
 import { CONVERSION_EVIDENCE } from "./conversion_evidence.mjs";
 import { createProposalWorkspace } from "./proposal_workspace.mjs";
 import { createGuidedHelp } from "./guided_help.mjs";
-import { planningChatReply } from "./planning_chat.mjs";
+import { planningChatReply, parseTargetQuestion, arabicPromptToEnglish } from "./planning_chat.mjs";
   
  const chatEnabled = globalThis.__AIR2STAY_CHAT_ENABLED__ === true;
  const $ = (selector) => document.querySelector(selector);
@@ -33,6 +33,7 @@ let assistantBusy = false;
 let lastExportUrl = "";
 let peerValidationResult = null;
 let targetSolution = null;
+let targetAnswer = null;
  let assistantMessages = [
    { role: "bot", text: "Hi! Ask what changed, ask how a number was worked out, or tell me what you’d like to change." },
  ];
@@ -1316,6 +1317,301 @@ function renderPlanningEvidence(result) {
   $("#peerValidation").innerHTML = `<p>We hid one known market at a time and reconstructed its flight assumptions from other markets in the same month: ${validation.caseCount} market-month checks across ${validation.marketCount} markets.</p><div class="table-scroll">${planningTable(["Assumption","Three-market average error","Nearest-country average error"],Object.values(validation.metrics).map((row)=>[row.label,row.blendedMae.toFixed(2)+" "+row.unit,row.nearestMae.toFixed(2)+" "+row.unit]))}</div><ul>${validation.limitations.map((line)=>'<li>'+planningEscape(line)+'</li>').join('')}</ul>`;
 }
 
+const formatPercentPlain = (value) => Number(value).toLocaleString("en-US", { maximumFractionDigits: 2 }) + "%";
+
+function targetAnswerText(answer) {
+  if (answer.alreadyMet) return `The plan already reaches ${formatNumber(answer.target)} hotel nights without extra flights.`;
+  const goal = answer.basis === "total" ? `reach ${formatNumber(answer.target)} hotel nights in total` : `add ${formatNumber(answer.target)} hotel nights`;
+  return `To ${goal}: about ${answer.requiredWeeklyFlights} extra flights a week (${answer.exactWeeklyFlights.toFixed(2)} before rounding up). ${answer.realism.text}`;
+}
+
+function renderTargetWorkspace() {
+  if ($("#targetWorkspace").hidden || !$("#inputError").hidden || !state) return;
+  const field = $("#targetNights");
+  const value = Number(field.value);
+  const basis = $("#targetBasis").value;
+  const month = data.months[state.month - 1];
+  if (!field.value.trim() || !Number.isFinite(value) || value < 0 || value > 100000000) {
+    targetAnswer = null;
+    $("#targetAnswer").innerHTML = '<p class="planning-callout">Enter a number of hotel nights between 0 and 100,000,000.</p>';
+    $("#targetSteps").innerHTML = ""; $("#targetAlternatives").innerHTML = "";
+    return;
+  }
+  let answer;
+  try { answer = reverseTargetPlan(data, state, value, { basis }); }
+  catch (error) { targetAnswer = null; $("#targetAnswer").innerHTML = `<p class="planning-callout">${planningEscape(error.message)}</p>`; return; }
+  targetAnswer = answer;
+  $("#targetContext").textContent = `${answer.route.origin}, ${month}. Without extra flights this plan gives about ${formatNumber(answer.startingNights)} hotel nights` + (basis === "total" ? `, so the target needs ${formatNumber(answer.neededNights)} more.` : `, so the target total is about ${formatNumber(answer.targetTotalNights)}.`) + " Change the country or month in Adjust plan.";
+  const current = Number(state.extraFlights);
+  const canApply = !answer.alreadyMet && answer.withinControlLimit && answer.requiredWeeklyFlights !== current;
+  const headline = answer.alreadyMet
+    ? `<strong class="target-big">No extra flights needed</strong><p>The plan already reaches this many nights with its usual flights.</p>`
+    : `<strong class="target-big">${answer.requiredWeeklyFlights} extra flights a week</strong><p>${answer.exactWeeklyFlights.toFixed(2)} before rounding up · about ${formatNumber(answer.extraFlightsPerMonth)} more flights in ${planningEscape(month)} · each one adds about ${formatNumber(answer.nightsPerWeeklyFlight)} hotel nights a month</p>`;
+  $("#targetAnswer").innerHTML = `<div class="target-headline"><div>${headline}</div>
+    <div class="target-actions">${canApply ? `<button type="button" id="applyTargetPlan" class="feature-primary">Use ${answer.requiredWeeklyFlights} flights in my plan</button>` : ""}<small>${answer.alreadyMet ? "" : !answer.withinControlLimit ? `Above the planner's limit of 20 extra flights a week, so it can't be applied as one route.` : answer.requiredWeeklyFlights === current ? "Your plan already uses this many extra flights." : `Your plan currently has ${formatSigned(current)} a week.`}</small></div></div>
+    ${answer.alreadyMet ? "" : `<p class="target-realism target-${answer.realism.level}">${planningEscape(answer.realism.text)}</p>`}`;
+  const unit = (key, v) => key === "weeklyFlights" ? v.toFixed(2) : formatNumber(v);
+  $("#targetSteps").innerHTML = answer.alreadyMet ? '<li class="target-step"><span>Nothing to work back: the target is already met.</span></li>'
+    : answer.steps.map((step) => `<li class="target-step${step.key === "weeklyFlights" ? " target-step-final" : ""}"><span class="target-op">${planningEscape(step.operation || "Start")}</span><span class="target-label">${planningEscape(step.label)}</span><strong>${unit(step.key, step.value)}</strong></li>`).join("");
+  $("#targetAlternatives").innerHTML = !answer.alternatives.length
+    ? `<p class="planning-note">${answer.alreadyMet ? "Not needed: the target is already met." : "This route has no current flights, so only new flights can add hotel nights here."}</p>`
+    : `<div class="launch-grid">${answer.alternatives.map((lever) => {
+        const show = (v) => lever.unit === "nights" ? `${v.toFixed(2)} nights` : formatPercent(v, 1);
+        return `<article class="launch-card"><h3>${planningEscape(lever.label)}</h3><strong>${show(lever.from)} → ${show(lever.to)}</strong><p>${lever.withinLimits ? "Within the planner's limits." : `Beyond the planner's limit of ${show(lever.limit)}, so not reachable this way alone.`}</p></article>`;
+      }).join("")}</div><p class="planning-note">Each card changes one assumption for everyone already flying this route, with no extra flights. They suggest where campaigns could help, for example longer stays or more hotel bookings; they are not measured effects.</p>`;
+}
+
+function setupTargetWorkspace() {
+  const rerender = () => renderTargetWorkspace();
+  $("#targetNights").addEventListener("input", () => { $("#targetAskStatus").textContent = ""; rerender(); });
+  $("#targetBasis").addEventListener("input", () => { $("#targetAskStatus").textContent = ""; rerender(); });
+  $("#targetAnswer").addEventListener("click", (event) => {
+    if (!event.target.closest("#applyTargetPlan") || !targetAnswer?.withinControlLimit || targetAnswer.alreadyMet) return;
+    state.extraFlights = targetAnswer.requiredWeeklyFlights;
+    setFormFromState(); renderAll();
+    $("#targetAskStatus").textContent = `Your plan now has ${targetAnswer.requiredWeeklyFlights} extra flights a week. Open Focus to see the full result.`;
+  });
+  $("#targetAskForm").addEventListener("submit", (event) => {
+    event.preventDefault();
+    const status = $("#targetAskStatus");
+    if (!$("#inputError").hidden) { status.textContent = "Please fix the highlighted plan input first, then ask again."; return; }
+    const question = parseTargetQuestion(data, arabicPromptToEnglish(data, $("#targetAsk").value.slice(0, HELP_CHAT_MAX_INPUT)));
+    if (!question) { status.textContent = "I couldn't find a number of hotel nights. Try “How many flights for 10,000 more nights from India in December?”"; return; }
+    if (question.decrease) { status.textContent = "I work out the extra flights needed to increase hotel nights. To test fewer flights, set a negative change, like “Set extra flights to -2”."; return; }
+    if (question.tooLarge) { status.textContent = "That target is too large for this planner. Use fewer than 1,000,000,000 hotel nights, or an increase of up to 100,000%."; return; }
+    const switched = [];
+    if (question.originKey && question.originKey !== state.originKey && [...$("#origin").options].some((option) => option.value === question.originKey)) {
+      $("#origin").value = question.originKey; $("#origin").dispatchEvent(new Event("input", { bubbles: true })); switched.push("country");
+    }
+    if (question.month && question.month !== state.month) {
+      $("#month").value = String(question.month); $("#month").dispatchEvent(new Event("input", { bubbles: true })); switched.push("month");
+    }
+    const switchedNote = switched.length ? [" ", `I switched the plan's ${switched.join(" and ")} to match your question.`] : [];
+    if (!$("#inputError").hidden) { status.textContent = "Please fix the highlighted plan input first, then ask again."; return; }
+    let nights = question.target;
+    if (question.percent != null) {
+      // A percentage is applied to the nights this plan gives without extra flights.
+      const usual = reverseTargetPlan(data, state, 0);
+      if (!(usual.startingNights > 0)) {
+        status.replaceChildren(`${usual.route.origin} in ${data.months[state.month - 1]} has no hotel nights without extra flights, so a percentage increase cannot be worked out. Give a number of nights instead, like “How many flights for 5,000 more nights?”`, ...switchedNote);
+        return;
+      }
+      nights = Math.round(usual.startingNights * question.percent / 100);
+    }
+    $("#targetBasis").value = question.percent != null ? "extra" : question.basis;
+    $("#targetNights").value = String(Math.round(nights));
+    renderTargetWorkspace();
+    const route = targetAnswer?.route?.origin || state.originKey;
+    const answering = question.percent != null
+      ? `Answering for ${route}, ${data.months[state.month - 1]}: a ${formatPercentPlain(question.percent)} increase, about ${formatNumber(nights)} more hotel nights.`
+      : `Answering for ${route}, ${data.months[state.month - 1]}: ${question.basis === "total" ? "reach a total of" : "add"} ${formatNumber(nights)} hotel nights.`;
+    status.replaceChildren(answering, ...switchedNote);
+  });
+}
+
+// Floating "Ask Air2Stay" assistant in the bottom-right corner.
+// Answers come from the local chat engine only: no network.
+const HELP_CHAT_KEY = "air2stay.assistant.v1";
+let helpChatMessages = [];
+let helpChatOpener = null;
+
+const HELP_CHAT_MAX_INPUT = 400;
+const HELP_CHAT_MAX_STORED = 4000;
+
+// Typed text: drop control and direction-override characters that could hide
+// or visually reverse what was written.
+function helpChatClean(text) {
+  return String(text ?? "").replace(/[\u0000-\u0008\u000B-\u001F\u007F‪-‮⁦-⁩]/g, "").trim();
+}
+
+function helpChatLanguageOf(text) {
+  return /[؀-ۿ]/.test(String(text)) ? "ar" : "en";
+}
+
+// Replies are written once, in the language the question was asked in, and
+// stored as final text. Switching the page language never rewrites the chat.
+function helpChatInLanguage(text, lang) {
+  if (lang !== "ar") return text;
+  return String(text).split("\n").map((line) => {
+    const bullet = line.match(/^(\s*[-*•]\s+)(.+)$/);
+    if (bullet) return bullet[1] + helpChatLocalize(bullet[2]);
+    return line.trim() ? helpChatLocalize(line) : line;
+  }).join("\n");
+}
+
+function helpChatGreeting(lang = uiLanguage) {
+  const english = "Hi, I’m the Air2Stay assistant. I run on this computer, so no internet is needed.\n\n- Ask how a number was worked out.\n- Ask what it takes to reach a hotel-night target.\n- Tell me a change, like “Set extra flights to 5”.";
+  return { role:"bot", lang, text:helpChatInLanguage(english, lang) };
+}
+
+function saveHelpChat() {
+  try { localStorage.setItem(HELP_CHAT_KEY, JSON.stringify(helpChatMessages.slice(-40))); } catch { /* Storage unavailable: keep this visit only. */ }
+}
+
+function helpChatElement(message) {
+  const element = document.createElement("div");
+  element.className = `help-chat-message ${message.role === "user" ? "user" : "bot"}`;
+  // Each message keeps the direction of its own language.
+  element.lang = message.lang === "ar" ? "ar" : "en";
+  element.dir = message.role === "user" ? "auto" : message.lang === "ar" ? "rtl" : "ltr";
+  if (message.role === "user") { element.textContent = message.text; return element; }
+  let list = null, paragraph = null;
+  for (const raw of String(message.text).split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line) { list = null; paragraph = null; continue; }
+    const bullet = line.match(/^(?:[-*•]|\d+[.)])\s+(.+)$/);
+    let target;
+    if (bullet) {
+      paragraph = null;
+      if (!list) { list = document.createElement("ul"); element.append(list); }
+      target = document.createElement("li"); list.append(target);
+    } else {
+      list = null;
+      if (!paragraph) { paragraph = document.createElement("p"); element.append(paragraph); }
+      else paragraph.append(document.createTextNode(" "));
+      target = paragraph;
+    }
+    target.append(document.createTextNode(bullet ? bullet[1] : line));
+  }
+  return element;
+}
+
+function renderHelpChat() {
+  const log = $("#helpChatLog");
+  log.replaceChildren(...helpChatMessages.map(helpChatElement));
+  log.scrollTop = log.scrollHeight;
+}
+
+function updateHelpChatContext() {
+  const label = $("#helpChatContext");
+  if (!label || !state) return;
+  if (!$("#inputError").hidden) { label.textContent = "Your plan has an input to fix"; return; }
+  const origin = currentProposalContext?.result?.route?.origin || $("#origin").selectedOptions[0]?.textContent || state.originKey;
+  const flights = Number(state.extraFlights);
+  label.textContent = `About your plan: ${origin} · ${data.months[state.month - 1]} · ${flights ? formatSigned(flights) + " flights a week" : "usual flights"}`;
+}
+
+function helpChatAnswer(prompt) {
+  const plain = prompt.trim().toLowerCase().replace(/[!.?,]+$/g, "");
+  if (/^(?:hi|hello|hey|hiya|salam|salaam|assalamu? ?alaikum|marhaba|good (?:morning|afternoon|evening))(?: there| air2stay)?$/.test(plain)) {
+    return "Hello! I can explain your plan, work out what it takes to reach a hotel-night target, or change an assumption for you.\n\nTry “How were hotel nights calculated?” or tap one of the suggestions below.";
+  }
+  if (/^(?:thanks|thank you|thx|shukran|great|perfect|ok(?:ay)?|cool|nice)(?: (?:a lot|so much|very much))?$/.test(plain)) {
+    return "You’re welcome. Ask me anything else about this plan whenever you need.";
+  }
+  if (/^(?:help|what can you do|what can i ask(?: you)?|how (?:do|can) i use you|what are your capabilities)$/.test(plain)) {
+    return "I can help with the plan you have open.\n\n- Explain: “How were hotel nights calculated?” or “Where does the baseline come from?”\n- Targets: “How many flights for 10,000 more nights from India in December?”\n- Changes: “Set flight occupancy to 80%” or “Add 5 flights from France in December”.\n- Next steps: “What should I check next?”\n\nI work out numbers with the same calculator as the rest of the app, and I only change your plan when you ask directly.";
+  }
+  if (!$("#inputError").hidden) return "Please fix the highlighted plan input first, then ask again.";
+  readForm();
+  const result = runScenario(data, state);
+  const reply = planningChatReply(data, prompt, state, result, proposalWorkspace?.contextSummary());
+  const onPlanPage = $("#scenarioView").classList.contains("active");
+  const seeIt = onPlanPage ? "" : "\n\nOpen Plan a route to see the updated result.";
+  if (reply.type === "reset") {
+    state = defaultState("INDIA", 12); bridgeOverride = null; setFormFromState(); renderAll();
+    return reply.text + seeIt;
+  }
+  if (reply.type === "apply" && reply.parsed.understood) {
+    try { const text = applyAssistantPlan(reply.parsed); renderAll(); return helpChatAppliedLines(text) + seeIt; }
+    catch (error) { return `The plan was not changed.\n${friendlyPlanError(error)}`; }
+  }
+  if (reply.type === "apply") return "I can’t answer that one on this computer yet. Try one of these:\n\n- “How were hotel nights calculated?”\n- “How many flights for 10,000 more nights?”\n- “Set flight occupancy to 80%”\n- “What should I check next?”";
+  return reply.text;
+}
+
+// Split "Applied to X in Y: a, b." into one line per change for translation.
+function helpChatAppliedLines(text) {
+  const match = String(text).match(/^(Applied to .+?:) (.+)\.$/);
+  return match ? match[1] + "\n" + match[2].split(", ").map((item) => "- " + item).join("\n") : text;
+}
+
+// Translate one English line to Arabic from the app's dictionary. Lines with
+// no dictionary entry stay in English rather than being guessed.
+const helpChatTemplates = [];
+const helpChatLowerKeys = new Map();
+function helpChatLocalize(text, depth = 0) {
+  if (!text) return text;
+  if (!helpChatTemplates.length) {
+    for (const [pattern, key, names] of helpChatOwnTemplates) helpChatTemplates.push([pattern, key, names]);
+    for (const [pattern, key, names] of labelTemplates) if (key.startsWith("tgt_")) helpChatTemplates.push([pattern, key, names]);
+    for (const [pattern, key, names] of labelTemplates) if (!key.startsWith("tgt_")) helpChatTemplates.push([pattern, key, names]);
+    for (const [english, key] of labelKeys) helpChatLowerKeys.set(english.toLowerCase(), key);
+  }
+  const trimmed = String(text).trim();
+  const key = labelKeys.get(trimmed) ?? helpChatLowerKeys.get(trimmed.toLowerCase());
+  if (key) return I18N.ar[key] ?? text;
+  // Country and month names use the app's own Arabic name list.
+  const name = arNameLookup.get(trimmed.toLowerCase());
+  if (name) return name;
+  if (depth > 2) return text;
+  for (const [pattern, template, names] of helpChatTemplates) {
+    const match = pattern.exec(trimmed);
+    if (!match) continue;
+    let out = I18N.ar[template] ?? I18N.en[template];
+    names.forEach((name, index) => {
+      const value = match[index + 1];
+      const localized = /^[+−-]?[0-9][0-9,.%]*$/.test(value) ? value : helpChatLocalize(value, depth + 1);
+      out = out.split("{" + name + "}").join("⁨" + localized + "⁩");
+    });
+    return out;
+  }
+  return text;
+}
+
+function sendHelpChat(prompt, { lang } = {}) {
+  const text = helpChatClean(prompt).slice(0, HELP_CHAT_MAX_INPUT);
+  if (!text) return;
+  // Reply in the language the message is written in. Suggestion buttons have
+  // English prompts, so they follow the page language instead.
+  const language = lang === "ar" || lang === "en" ? lang : helpChatLanguageOf(text);
+  const shown = language === "ar" && helpChatLanguageOf(text) === "en" ? helpChatLocalize(text) : text;
+  helpChatMessages.push({ role:"user", lang:language, text:shown });
+  let answer;
+  try { answer = helpChatAnswer(arabicPromptToEnglish(data, text)); }
+  catch (error) { answer = "Something went wrong, and your plan was not changed."; }
+  helpChatMessages.push({ role:"bot", lang:language, text:helpChatInLanguage(answer, language) });
+  if (helpChatMessages.length > 40) helpChatMessages = helpChatMessages.slice(-40);
+  saveHelpChat(); renderHelpChat(); updateHelpChatContext();
+}
+
+function setHelpChatOpen(open, opener = null) {
+  const panel = $("#helpChat");
+  panel.hidden = !open;
+  document.body.classList.toggle("help-chat-open", open);
+  $$("[data-assistant-open]").forEach((button) => button.setAttribute("aria-expanded", String(open)));
+  if (open) {
+    helpChatOpener = opener || helpChatOpener;
+    updateHelpChatContext(); renderHelpChat();
+    $("#helpChatInput").focus({ preventScroll:true });
+  } else {
+    const back = helpChatOpener && helpChatOpener.getClientRects().length ? helpChatOpener : null;
+    back?.focus({ preventScroll:true });
+  }
+}
+
+function setupHelpChat() {
+  // Stored chat is untrusted: keep only well-formed, size-limited messages.
+  try {
+    const saved = JSON.parse(localStorage.getItem(HELP_CHAT_KEY) || "[]");
+    if (Array.isArray(saved)) helpChatMessages = saved
+      .filter((item) => item && typeof item === "object" && typeof item.text === "string" && ["user", "bot"].includes(item.role))
+      .slice(-40)
+      .map((item) => ({ role:item.role, text:(item.role === "user" ? helpChatClean(item.text) : item.text.replace(/[‪-‮]/g, "")).slice(0, HELP_CHAT_MAX_STORED), lang:item.lang === "ar" || item.lang === "en" ? item.lang : helpChatLanguageOf(item.text) }));
+  } catch { helpChatMessages = []; }
+  if (!helpChatMessages.length) helpChatMessages = [helpChatGreeting()];
+  $$("[data-assistant-open]").forEach((button) => button.addEventListener("click", () => setHelpChatOpen($("#helpChat").hidden, button)));
+  $("#helpChatClose").addEventListener("click", () => setHelpChatOpen(false));
+  $("#helpChatClear").addEventListener("click", () => { helpChatMessages = [helpChatGreeting()]; saveHelpChat(); renderHelpChat(); $("#helpChatInput").focus(); });
+  $("#helpChatForm").addEventListener("submit", (event) => {
+    event.preventDefault();
+    const input = $("#helpChatInput");
+    sendHelpChat(input.value); input.value = ""; input.focus();
+  });
+  $$("[data-help-prompt]").forEach((button) => button.addEventListener("click", () => { sendHelpChat(button.dataset.helpPrompt, { lang:uiLanguage }); $("#helpChatInput").focus(); }));
+  $("#helpChat").addEventListener("keydown", (event) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); setHelpChatOpen(false); } });
+}
+
 function decisionNoteText() {
   const note = decisionNote(data,state,decisionOptions());
   const peerText=state.peerProfile ? "\n\nComparison-country starting weights\n"+state.peerProfile.peers.map((peer)=>peer.origin+": "+formatPercent(peer.weight,1)).join("\n")+"\nGeographic assumptions only; not measured route demand." : "";
@@ -1327,9 +1623,11 @@ function printDecisionNote() {
   if (!$("#inputError").hidden) return;
   const sheet = document.createElement("section");
   sheet.id = "decisionPrintSheet";
+  sheet.setAttribute("data-i18n-ignore", "");
+  sheet.lang = exportLanguage;
+  sheet.dir = exportLanguage === "ar" ? "rtl" : "ltr";
   const body = document.createElement("pre");
-  body.textContent = decisionNoteText();
-  localizeUi(body);
+  body.textContent = translateExportText(decisionNoteText(), exportLanguage);
   sheet.append(body);
   document.body.append(sheet);
   document.body.classList.add("printing-decision-note");
@@ -1364,7 +1662,7 @@ function setupDecisionTools() {
   $("#applySeasonalConversion").addEventListener("click",()=>{state.conversionRate=CONVERSION_EVIDENCE.monthlyRates[state.month];state.seasonalConversion=true;setFormFromState();renderAll();$("#conversionStatus").textContent="Optional training-season assumption applied to your plan. The baseline is unchanged; the test did not show an accuracy improvement.";});
   $("#exportDecisionNote").addEventListener("click",()=>{
     if(!$("#inputError").hidden)return;
-    downloadPlan(new Blob([decisionNoteText()],{type:"text/plain;charset=utf-8"}),"Air2Stay-decision-note.txt");
+    downloadPlan(new Blob([translateExportText(decisionNoteText(), exportLanguage)],{type:"text/plain;charset=utf-8"}),exportFileName("Air2Stay-decision-note.txt", exportLanguage));
     guidedHelp?.track("export_decision");
     $("#planActionStatus").textContent="Decision note exported with assumptions, stress trials and next checks.";
   });
@@ -1378,6 +1676,7 @@ function setupDecisionTools() {
    $("#scenarioResults").hidden = Boolean(invalid);
    $("#chatResults").hidden = Boolean(invalid);
    $("#decisionWorkspace").classList.toggle("invalid-plan", Boolean(invalid));
+   $("#targetWorkspace").classList.toggle("invalid-plan", Boolean(invalid));
    if (invalid) {
      currentProposalContext = null;
      refreshPackStatistics(null);
@@ -1398,6 +1697,8 @@ function setupDecisionTools() {
    renderBridge(result);
    renderRecommendation();
    renderDecisionWorkspace();
+   renderTargetWorkspace();
+   updateHelpChatContext();
    renderPlanningEvidence(result);
    $("#scenarioName").textContent = `${result.route.origin}, ${data.months[state.month - 1]}`;
    $("#headerScenario").textContent = `${result.route.origin} · ${data.months[state.month - 1]}`;
@@ -1825,14 +2126,17 @@ function setControlsOpen(open) {
      const focus = mode === "focus";
      const chat = mode === "chat";
      const decisions = mode === "decisions";
+     const target = mode === "target";
      const proposal = mode === "proposal";
      document.body.classList.toggle("focus-mode", focus);
      document.body.classList.toggle("details-mode", mode === "details");
      document.body.classList.toggle("chat-mode", chat);
      document.body.classList.toggle("decisions-mode", decisions);
+     document.body.classList.toggle("target-mode", target);
      document.body.classList.toggle("proposal-mode", proposal);
      $("#assistantPanel").hidden = !chat;
      $("#decisionWorkspace").hidden = !decisions;
+     $("#targetWorkspace").hidden = !target;
      $("#proposalWorkspace").hidden = !proposal;
      // Keep one set of results synchronized across all three views.
      if (chat) $("#chatResults").append($("#kpis"));
@@ -1846,10 +2150,12 @@ function setControlsOpen(open) {
        ? "The outcome, the main drivers, and what to check next."
        : proposal ? "Review a check, add a task, and log what you find."
        : decisions ? "Compare added capacity, test the assumptions, and prepare a decision note."
+       : target ? "Start from the hotel nights you want and work back to the flights needed."
        : chat ? "Describe a change or ask a question. The current result stays beside your conversation."
        : "Trace the assumptions, calculations, flight history, and limits behind this plan.";
      if (decisions && state && $("#inputError").hidden) renderDecisionWorkspace();
-     guidedHelp?.track(({focus:"view_focus",details:"view_details",chat:"view_chat",decisions:"view_compare",proposal:"view_actions"})[mode]);
+     if (target && state && $("#inputError").hidden) renderTargetWorkspace();
+     guidedHelp?.track(({focus:"view_focus",details:"view_details",chat:"view_chat",decisions:"view_compare",target:"view_target",proposal:"view_actions"})[mode]);
    };
    setMode("focus");
    setControlsOpen(window.matchMedia("(min-width: 1051px)").matches);
@@ -2135,12 +2441,14 @@ const reportFormats = {
   low: '#,##0" low"',
   high: '#,##0" high"',
 };
+// Arabic units inside Excel number formats; same keys and order as reportFormats.
+const reportFormatsAr = { ...reportFormats, stay: '0.0" ليلة"', low: '#,##0" (أدنى)"', high: '#,##0" (أعلى)"' };
 const reportStyles = {
   plain: [0, 0], header: [1, 2], title: [2, 0], accent: [1, 3], card: [3, 3],
 };
 
-function reportCellStyles() {
-  const formats = Object.values(reportFormats);
+function reportCellStyles(lang = "en") {
+  const formats = Object.values(lang === "ar" ? reportFormatsAr : reportFormats);
   const font = (size, color, bold = false) =>
     '<font>' + (bold ? '<b/>' : '') + '<sz val="' + size + '"/><color rgb="FF' + color + '"/><name val="Calibri"/></font>';
   const fill = color => '<fill><patternFill patternType="solid"><fgColor rgb="FF' + color + '"/><bgColor indexed="64"/></patternFill></fill>';
@@ -2156,7 +2464,7 @@ function reportCellStyles() {
     '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>';
 }
 
-function reportWorksheet({ rows, widths, freeze = 3, merges = [], bars = [], scales = [], filter = "" }) {
+function reportWorksheet({ rows, widths, freeze = 3, merges = [], bars = [], scales = [], filter = "", rtl = false }) {
   const cellRef = (index, row) => String.fromCharCode(65 + index) + row;
   const formatNames = Object.keys(reportFormats);
   const styleNames = Object.keys(reportStyles);
@@ -2177,7 +2485,7 @@ function reportWorksheet({ rows, widths, freeze = 3, merges = [], bars = [], sca
   const colorScales = scales.map((range, i) => '<conditionalFormatting sqref="' + range + '"><cfRule type="colorScale" priority="' + (bars.length + i + 1) + '">' +
     '<colorScale><cfvo type="min"/><cfvo type="max"/><color rgb="FFFFFAEB"/><color rgb="FFDDB151"/></colorScale></cfRule></conditionalFormatting>');
   return reportXmlHeader + '<worksheet xmlns="' + reportSpreadsheetNs + '">' +
-    '<sheetViews><sheetView showGridLines="0" workbookViewId="0"><pane ySplit="' + freeze + '" topLeftCell="A' + (freeze + 1) +
+    '<sheetViews><sheetView showGridLines="0"' + (rtl ? ' rightToLeft="1"' : '') + ' workbookViewId="0"><pane ySplit="' + freeze + '" topLeftCell="A' + (freeze + 1) +
     '" activePane="bottomLeft" state="frozen"/><selection pane="bottomLeft" activeCell="A' + (freeze + 1) + '" sqref="A' + (freeze + 1) + '"/></sheetView></sheetViews>' +
     '<sheetFormatPr defaultRowHeight="20"/><cols>' + cols + '</cols><sheetData>' + sheetData + '</sheetData>' +
     (filter ? '<autoFilter ref="' + filter + '"/>' : '') +
@@ -2185,7 +2493,11 @@ function reportWorksheet({ rows, widths, freeze = 3, merges = [], bars = [], sca
     dataBars.join("") + colorScales.join("") + '</worksheet>';
 }
 
-function buildPlanWorkbook(report) {
+function buildPlanWorkbook(report, lang = exportLanguage) {
+  return withLanguage(lang, () => buildPlanWorkbookContent(report, lang));
+}
+
+function buildPlanWorkbookContent(report, lang) {
   const { title, subtitle, result, steps, assumptions, annual, visitors, launch, trials, comparedMonths, notes } = report;
   const number = value => [value, "integer"];
   const change = value => [value, "change"];
@@ -2260,7 +2572,7 @@ function buildPlanWorkbook(report) {
   }];
   const typesNs = "http://schemas.openxmlformats.org/package/2006/content-types";
   const packageNs = "http://schemas.openxmlformats.org/package/2006/relationships";
-  const parts = sheets.map((sheet, i) => ["xl/worksheets/sheet" + (i + 1) + ".xml", reportWorksheet(sheet)]);
+  const parts = sheets.map((sheet, i) => ["xl/worksheets/sheet" + (i + 1) + ".xml", reportWorksheet({ ...sheet, rtl: lang === "ar" })]);
   const officeTypes = "application/vnd.openxmlformats-officedocument.spreadsheetml.";
   const override = (path, type) => '<Override PartName="/' + path + '" ContentType="' + officeTypes + type + '+xml"/>';
   const relation = (id, type, target) => '<Relationship Id="' + id + '" Type="' + reportRelationshipsNs + '/' + type + '" Target="' + target + '"/>';
@@ -2271,11 +2583,11 @@ function buildPlanWorkbook(report) {
     ["_rels/.rels", reportXmlHeader + '<Relationships xmlns="' + packageNs + '">' + relation("rId1", "officeDocument", "xl/workbook.xml") + '</Relationships>'],
     ["xl/workbook.xml", reportXmlHeader + '<workbook xmlns="' + reportSpreadsheetNs + '" xmlns:r="' + reportRelationshipsNs +
       '"><bookViews><workbookView activeTab="0"/></bookViews><sheets>' + sheets.map((sheet, i) =>
-        '<sheet name="' + reportXml(sheet.name) + '" sheetId="' + (i + 1) + '" r:id="rId' + (i + 1) + '"/>').join("") + '</sheets></workbook>'],
+        '<sheet name="' + reportXml(exportSheetName(sheet.name)) + '" sheetId="' + (i + 1) + '" r:id="rId' + (i + 1) + '"/>').join("") + '</sheets></workbook>'],
     ["xl/_rels/workbook.xml.rels", reportXmlHeader + '<Relationships xmlns="' + packageNs + '">' +
       parts.map(([path], i) => relation("rId" + (i + 1), "worksheet", path.slice(3))).join("") +
       relation("rId" + (parts.length + 1), "styles", "styles.xml") + '</Relationships>'],
-    ["xl/styles.xml", reportCellStyles()],
+    ["xl/styles.xml", reportCellStyles(lang)],
     ...parts,
   ]);
 }
@@ -2330,10 +2642,45 @@ function planReportMarkup(report) {
     '</ul></section></div>';
 }
 
-function printPlanReport(report) {
+// Exports are built in English, then translated into the chosen export
+// language. This is independent of the page language.
+let exportLanguage = "en";
+let switchingLanguageForPrint = false;
+
+function withLanguage(lang, build) {
+  const previous = uiLanguage;
+  uiLanguage = lang === "ar" ? "ar" : "en";
+  try { return build(); } finally { uiLanguage = previous; }
+}
+
+// Translate an exported text block line by line; "- " bullets keep their marker.
+function translateExportText(text, lang) {
+  if (lang !== "ar") return text;
+  return withLanguage("ar", () => String(text).split("\n").map((line) => {
+    const bullet = line.match(/^(\s*-\s+)(.+)$/);
+    if (bullet) return bullet[1] + translateUiString(bullet[2]);
+    return line.trim() ? translateUiString(line) : line;
+  }).join("\n"));
+}
+
+function exportFileName(name, lang) {
+  return lang === "ar" ? name.replace(/(\.[a-z]+)$/, "-ar$1") : name;
+}
+
+function exportSheetName(name) {
+  return translateUiString(name).replace(/[:\\/?*[\]]/g, " ").slice(0, 31);
+}
+
+function printPlanReport(report, lang = exportLanguage) {
   const sheet = $("#planPrintSheet");
-  sheet.innerHTML = planReportMarkup(report);
-  localizeUi(sheet);
+  const holder = document.createElement("div");
+  holder.innerHTML = planReportMarkup(report);
+  if (lang === "ar") withLanguage("ar", () => localizeUi(holder));
+  // The page translator must not change the report after it is built.
+  sheet.setAttribute("data-i18n-ignore", "");
+  sheet.lang = lang;
+  sheet.dir = lang === "ar" ? "rtl" : "ltr";
+  sheet.replaceChildren(...holder.childNodes);
   document.body.classList.add("printing-plan-report");
   const finish = () => {
     sheet.replaceChildren();
@@ -2348,9 +2695,53 @@ function printPlanReport(report) {
   }
 }
 
+// Print the current page (Term guide) in the chosen language, then switch back.
+function printInLanguage(lang) {
+  const original = uiLanguage;
+  if (lang === original) { window.print(); return; }
+  const switchTo = (language) => {
+    switchingLanguageForPrint = true;
+    try { $(`button[data-lang="${language}"]`)?.click(); } finally { switchingLanguageForPrint = false; }
+  };
+  let restored = false;
+  const restore = () => { if (restored) return; restored = true; switchTo(original); };
+  switchTo(lang);
+  window.addEventListener("afterprint", restore, { once: true });
+  try { window.print(); }
+  catch (error) { window.removeEventListener("afterprint", restore); restore(); throw error; }
+}
+
+function setupExportLanguage() {
+  exportLanguage = uiLanguage;
+  const picker = () => {
+    const group = document.createElement("div");
+    group.className = "export-language";
+    group.setAttribute("role", "group");
+    group.setAttribute("aria-label", "Export language");
+    group.innerHTML = '<span class="export-language-label">Export language</span>' +
+      '<span class="export-language-options">' +
+      '<button type="button" data-export-lang="en" lang="en" dir="ltr" data-i18n-ignore>English</button>' +
+      '<button type="button" data-export-lang="ar" lang="ar" dir="rtl" data-i18n-ignore>العربية</button></span>';
+    return group;
+  };
+  $(".export-menu .export-choices")?.prepend(picker());
+  $("#planningDecision .decision-note-actions")?.prepend(picker());
+  $("#printGuide")?.before(picker());
+  const sync = () => $$("[data-export-lang]").forEach((button) => button.setAttribute("aria-pressed", String(button.dataset.exportLang === exportLanguage)));
+  document.addEventListener("click", (event) => {
+    const choice = event.target.closest("[data-export-lang]");
+    if (choice) { exportLanguage = choice.dataset.exportLang === "ar" ? "ar" : "en"; sync(); return; }
+    // A new page language becomes the default export language.
+    if (event.target.closest("button[data-lang]") && !switchingLanguageForPrint) setTimeout(() => { exportLanguage = uiLanguage; sync(); }, 0);
+  });
+  sync();
+}
 
 
-function buildModelCsv(inputs) {
+
+function buildModelCsv(inputs, lang = "en") {
+  // Column names and codes stay in English so model tools can read them.
+  const exportLabel = (text) => lang === "ar" ? withLanguage("ar", () => translateUiString(String(text))) : text;
   const header = [
     "meta_data_kind", "meta_scenario", "meta_is_current_plan", "meta_departure_country", "meta_has_route_history",
     "feature_calendar_month", "feature_weeks_in_month", "feature_usual_monthly_flight_seats",
@@ -2378,7 +2769,7 @@ function buildModelCsv(inputs) {
       if (seen.has(key)) return [];
       seen.add(key);
       return [[
-        "simulation", label, Number(variant === 0 && month === inputs.month), result.route.origin, Number(result.route.knownMarket),
+        "simulation", exportLabel(label), Number(variant === 0 && month === inputs.month), exportLabel(result.route.origin), Number(result.route.knownMarket),
         ...features, result.scenario.hotelCheckins, result.scenario.guestNights,
       ]];
     });
@@ -2386,7 +2777,7 @@ function buildModelCsv(inputs) {
   const csvValue = value => typeof value === "string" && /[",\r\n]/.test(value)
     ? '"' + value.replaceAll('"', '""') + '"'
     : value;
-  return [header, ...rows].map(row => row.map(csvValue).join(",")).join("\r\n") + "\r\n";
+  return (lang === "ar" ? String.fromCharCode(0xFEFF) : "") + [header, ...rows].map(row => row.map(csvValue).join(",")).join("\r\n") + "\r\n";
 }
 
 
@@ -2394,7 +2785,7 @@ function buildModelCsv(inputs) {
 function setupPlanActions() {
   const exportMenu = $(".export-menu");
   document.addEventListener("click", (event) => {
-    if (!exportMenu.contains(event.target) || event.target.closest(".export-menu button")) exportMenu.open = false;
+    if (!exportMenu.contains(event.target) || event.target.closest(".export-menu button:not([data-export-lang])")) exportMenu.open = false;
   });
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && exportMenu.open) {
@@ -2421,16 +2812,16 @@ function setupPlanActions() {
     }
   };
   $("#exportWorkbook").addEventListener("click", () => exportReport(report => {
-    downloadPlan(buildPlanWorkbook(report), report.filename + ".xlsx");
+    downloadPlan(buildPlanWorkbook(report, exportLanguage), exportFileName(report.filename + ".xlsx", exportLanguage));
     $("#planActionStatus").textContent = "Excel report ready.";
   }));
   $("#exportReportPdf").addEventListener("click", () => exportReport(report => {
-    printPlanReport(report);
+    printPlanReport(report, exportLanguage);
     $("#planActionStatus").textContent = "Choose Save as PDF in the print window.";
   }));
   $("#exportCsv").addEventListener("click", () => {
     if (!ready()) return;
-    downloadPlan(new Blob([buildModelCsv(state)], { type: "text/csv;charset=utf-8" }), "Air2Stay-simulated-training-data.csv");
+    downloadPlan(new Blob([buildModelCsv(state, exportLanguage)], { type: "text/csv;charset=utf-8" }), exportFileName("Air2Stay-simulated-training-data.csv", exportLanguage));
     guidedHelp?.track("export_csv");
     $("#planActionStatus").textContent = "Model-ready CSV with simulated outcomes is ready.";
   });
@@ -2481,7 +2872,7 @@ function refreshGlossaryLetters() {
      const link = event.target.closest("a"); if (!link) return;
      event.preventDefault(); $(link.getAttribute("href")).scrollIntoView({block:"start"});
    });
-   $("#printGuide").addEventListener("click", () => window.print());
+   $("#printGuide").addEventListener("click", () => printInLanguage(exportLanguage));
  }
   
 function setupTeamDock() {
@@ -4416,6 +4807,604 @@ const I18N = (() => {
     four_matching_records_describe: ["Four matching records describe the data available, not four successful predictions.", "تشير 4 سجلات مطابقة إلى البيانات المتاحة ولا تعني وجود 4 توقعات ناجحة."],
     count_definitions: ["{count} definitions", "عدد التعريفات: {count}"],
     no_matching_term_try: ["No matching term. Try a word such as flights, hotel or nights.", "لا يوجد مصطلح مطابق. جرّب كلمة مثل الرحلات أو الفندق أو الليالي."],
+
+    // Target view (work back from a hotel-night target).
+    tgt_tab: ["Target", "الهدف"],
+    tgt_view_description: ["Start from the hotel nights you want and work back to the flights needed.", "ابدأ بعدد الليالي الفندقية الذي تريده واحسب عكسيًا الرحلات اللازمة."],
+    tgt_title: ["What would it take to reach a hotel-night target?", "ما الذي يلزم لتحقيق هدف من الليالي الفندقية؟"],
+    tgt_intro: ["Enter the hotel nights you want for this country and month. Air2Stay runs your plan backwards to the passengers, seats and weekly flights needed, using the same assumptions as the rest of the plan.", "أدخل عدد الليالي الفندقية الذي تريده لهذا البلد والشهر. يحسب Air2Stay خطتك عكسيًا للوصول إلى الركاب والمقاعد والرحلات الأسبوعية اللازمة، باستخدام افتراضات الخطة نفسها."],
+    tgt_ask_label: ["Ask in your own words", "اسأل بأسلوبك"],
+    tgt_ask_placeholder: ["How many flights for 10,000 more nights from India in December?", "كم رحلة نحتاج لإضافة 10,000 ليلة من الهند في ديسمبر؟"],
+    tgt_ask_button: ["Ask", "اسأل"],
+    tgt_basis_label: ["I want hotel nights to", "أريد أن تكون الليالي الفندقية"],
+    tgt_basis_extra: ["increase by", "أعلى بمقدار"],
+    tgt_basis_total: ["reach a total of", "بإجمالي"],
+    tgt_nights_label: ["Hotel nights in the month", "الليالي الفندقية في الشهر"],
+    tgt_working_back: ["Working backwards", "الحساب العكسي"],
+    tgt_nights_to_flights: ["From hotel nights to flights", "من الليالي الفندقية إلى الرحلات"],
+    tgt_each_step: ["Each step undoes one assumption in your plan", "كل خطوة تعكس افتراضًا واحدًا من خطتك"],
+    tgt_other_ways: ["Other ways to get there", "طرق أخرى للوصول"],
+    tgt_same_target: ["The same target with no extra flights", "الهدف نفسه دون رحلات إضافية"],
+    tgt_one_assumption: ["Changes one assumption across all current travellers", "تغيير افتراض واحد لجميع المسافرين الحاليين"],
+    tgt_disclaimer: ["This assumes every extra flight fills like the plan says. In practice, extra flights often fill less well than existing ones. It does not prove passenger demand, airport slots, hotel rooms or route profitability.", "يفترض هذا أن كل رحلة إضافية تمتلئ كما تفترض الخطة. وفي الواقع، كثيرًا ما تمتلئ الرحلات الإضافية بدرجة أقل من الرحلات الحالية. ولا يثبت ذلك وجود طلب من الركاب أو فترات هبوط في المطار أو غرف فندقية أو ربحية المسار."],
+    tgt_enter_number: ["Enter a number of hotel nights between 0 and 100,000,000.", "أدخل عددًا من الليالي الفندقية بين 0 و100,000,000."],
+    tgt_context_extra: ["{route}, {month}. Without extra flights this plan gives about {estimate} hotel nights, so the target total is about {target}. Change the country or month in Adjust plan.", "{route}، {month}. دون رحلات إضافية تعطي هذه الخطة نحو {estimate} ليلة فندقية، لذا يبلغ إجمالي الهدف نحو {target}. يمكنك تغيير البلد أو الشهر من «تعديل الخطة»."],
+    tgt_context_total: ["{route}, {month}. Without extra flights this plan gives about {estimate} hotel nights, so the target needs {shortfall} more. Change the country or month in Adjust plan.", "{route}، {month}. دون رحلات إضافية تعطي هذه الخطة نحو {estimate} ليلة فندقية، لذا يحتاج الهدف إلى {shortfall} ليلة إضافية. يمكنك تغيير البلد أو الشهر من «تعديل الخطة»."],
+    tgt_no_flights_needed: ["No extra flights needed", "لا حاجة إلى رحلات إضافية"],
+    tgt_already_reaches: ["The plan already reaches this many nights with its usual flights.", "تصل الخطة بالفعل إلى هذا العدد من الليالي برحلاتها المعتادة."],
+    tgt_flights_a_week: ["{count} extra flights a week", "{count} رحلة إضافية أسبوعيًا"],
+    tgt_headline_detail: ["{value} before rounding up · about {count} more flights in {month} · each one adds about {estimate} hotel nights a month", "{value} قبل التقريب للأعلى · نحو {count} رحلة إضافية في {month} · تضيف كل رحلة أسبوعية نحو {estimate} ليلة فندقية شهريًا"],
+    tgt_use_flights: ["Use {count} flights in my plan", "استخدم {count} رحلة في خطتي"],
+    tgt_above_limit: ["Above the planner's limit of 20 extra flights a week, so it can't be applied as one route.", "يتجاوز الحد الأقصى في المخطِّط وهو 20 رحلة إضافية أسبوعيًا، لذلك لا يمكن تطبيقه كمسار واحد."],
+    tgt_already_uses: ["Your plan already uses this many extra flights.", "تستخدم خطتك هذا العدد من الرحلات الإضافية بالفعل."],
+    tgt_currently_has: ["Your plan currently has {value} a week.", "تتضمن خطتك حاليًا {value} أسبوعيًا."],
+    tgt_realism_none: ["No extra flights are needed under these assumptions.", "لا حاجة إلى رحلات إضافية وفق هذه الافتراضات."],
+    tgt_realism_new: ["This is a new route with no current flights to compare against. Ask an airline whether this schedule is realistic.", "هذا مسار جديد لا توجد له رحلات حالية للمقارنة. اسأل شركة الطيران عمّا إذا كان هذا الجدول واقعيًا."],
+    tgt_realism_small: ["A small addition: about {share} more than the roughly {count} flights a week this route usually has in this month.", "إضافة صغيرة: نحو {share} أكثر من قرابة {count} رحلة أسبوعيًا يشهدها هذا المسار عادةً في هذا الشهر."],
+    tgt_realism_moderate: ["A noticeable addition: about {share} more than the roughly {count} flights a week this route usually has. Check airline capacity and airport slots.", "إضافة ملحوظة: نحو {share} أكثر من قرابة {count} رحلة أسبوعيًا يشهدها هذا المسار عادةً. تحقّق من سعة شركات الطيران وفترات الهبوط المتاحة في المطار."],
+    tgt_realism_large: ["A large addition: about {share} more than the roughly {count} flights a week this route usually has. New flights may not fill as well as existing ones.", "إضافة كبيرة: نحو {share} أكثر من قرابة {count} رحلة أسبوعيًا يشهدها هذا المسار عادةً. قد لا تمتلئ الرحلات الجديدة بقدر الرحلات الحالية."],
+    tgt_realism_very_large: ["More than doubles the route: about {value} times the roughly {count} flights a week it usually has. Treat this as unlikely without strong airline evidence.", "أكثر من ضعف المسار: نحو {value} أضعاف قرابة {count} رحلة أسبوعيًا يشهدها عادةً. اعتبر ذلك غير مرجّح دون أدلة قوية من شركات الطيران."],
+    tgt_step_start: ["Start", "البداية"],
+    tgt_step_nights: ["Hotel nights needed", "الليالي الفندقية المطلوبة"],
+    tgt_step_visitors: ["Visitors ending their trip in Abu Dhabi", "الزوار الذين تنتهي رحلتهم في أبوظبي"],
+    tgt_step_seats: ["Seats in the month", "المقاعد خلال الشهر"],
+    tgt_op_stay: ["÷ {value} nights per stay", "÷ {value} ليلة لكل إقامة"],
+    tgt_op_hotel: ["÷ {share} who use a hotel", "÷ {share} يقيمون في فندق"],
+    tgt_op_hotel_event: ["÷ {share} who use a hotel and +{uplift} for an event or season", "÷ {share} يقيمون في فندق و+{uplift} لفعالية أو موسم"],
+    tgt_op_trip: ["÷ {share} whose trip ends here", "÷ {share} تنتهي رحلتهم هنا"],
+    tgt_op_seats: ["÷ {share} of seats filled", "÷ {share} من المقاعد مشغولة"],
+    tgt_op_flights: ["÷ {count} seats per flight ÷ {value} weeks", "÷ {count} مقعدًا لكل رحلة ÷ {value} أسابيع"],
+    tgt_nothing_to_work_back: ["Nothing to work back: the target is already met.", "لا حاجة إلى الحساب العكسي: الهدف متحقق بالفعل."],
+    tgt_lever_hotel: ["Share of visitors using a hotel", "نسبة الزوار المقيمين في الفنادق"],
+    tgt_lever_nights: ["{low} nights → {high} nights", "من {low} إلى {high} ليلة"],
+    tgt_lever_share: ["{low} → {high}", "من {low} إلى {high}"],
+    tgt_within_limits: ["Within the planner's limits.", "ضمن حدود المخطِّط."],
+    tgt_beyond_nights: ["Beyond the planner's limit of {value} nights, so not reachable this way alone.", "يتجاوز حد المخطِّط البالغ {value} ليلة، لذلك لا يمكن الوصول إليه بهذه الطريقة وحدها."],
+    tgt_beyond_share: ["Beyond the planner's limit of {value}, so not reachable this way alone.", "يتجاوز حد المخطِّط البالغ {value}، لذلك لا يمكن الوصول إليه بهذه الطريقة وحدها."],
+    tgt_not_needed: ["Not needed: the target is already met.", "غير مطلوب: الهدف متحقق بالفعل."],
+    tgt_no_current_flights: ["This route has no current flights, so only new flights can add hotel nights here.", "لا توجد رحلات حالية على هذا المسار، لذلك لا يمكن إضافة ليالٍ فندقية هنا إلا برحلات جديدة."],
+    tgt_cards_note: ["Each card changes one assumption for everyone already flying this route, with no extra flights. They suggest where campaigns could help, for example longer stays or more hotel bookings; they are not measured effects.", "تغيّر كل بطاقة افتراضًا واحدًا لجميع من يسافرون على هذا المسار حاليًا دون رحلات إضافية. وهي تشير إلى المجالات التي قد تفيد فيها الحملات، مثل إطالة الإقامة أو زيادة الحجوزات الفندقية، وليست آثارًا مقيسة."],
+    tgt_ask_not_found: ["I couldn't find a number of hotel nights. Try “How many flights for 10,000 more nights from India in December?”", "لم أجد عددًا من الليالي الفندقية. جرّب «كم رحلة نحتاج لإضافة 10,000 ليلة من الهند في ديسمبر؟»"],
+    tgt_answering_extra: ["Answering for {route}, {month}: add {target} hotel nights.", "الإجابة عن {route}، {month}: إضافة {target} ليلة فندقية."],
+    tgt_answering_total: ["Answering for {route}, {month}: reach a total of {target} hotel nights.", "الإجابة عن {route}، {month}: الوصول إلى إجمالي {target} ليلة فندقية."],
+    tgt_answering_percent: ["Answering for {route}, {month}: a {share} increase, about {target} more hotel nights.", "الإجابة عن {route}، {month}: زيادة بنسبة {share}، أي نحو {target} ليلة فندقية إضافية."],
+    tgt_switched_country: ["I switched the plan's country to match your question.", "غيّرت بلد الخطة ليتوافق مع سؤالك."],
+    tgt_switched_month: ["I switched the plan's month to match your question.", "غيّرت شهر الخطة ليتوافق مع سؤالك."],
+    tgt_switched_both: ["I switched the plan's country and month to match your question.", "غيّرت بلد الخطة وشهرها ليتوافقا مع سؤالك."],
+    tgt_applied: ["Your plan now has {count} extra flights a week. Open Focus to see the full result.", "أصبحت خطتك تتضمن {count} رحلة إضافية أسبوعيًا. افتح «ملخص» لعرض النتيجة كاملة."],
+
+    // Ask Air2Stay assistant: window and its replies (one sentence per line).
+    a2c_open: ["Open the Air2Stay assistant", "فتح مساعد Air2Stay"],
+    a2c_title: ["Air2Stay assistant", "مساعد Air2Stay"],
+    a2c_ask_about_plan: ["Ask about your plan", "اسأل عن خطتك"],
+    a2c_new_conversation_label: ["Start a new conversation", "بدء محادثة جديدة"],
+    a2c_new_conversation: ["New conversation", "محادثة جديدة"],
+    a2c_close: ["Close the assistant", "إغلاق المساعد"],
+    a2c_conversation: ["Conversation with the assistant", "المحادثة مع المساعد"],
+    a2c_suggested: ["Suggested questions", "أسئلة مقترحة"],
+    a2c_message: ["Message the assistant", "رسالة إلى المساعد"],
+    a2c_chip_explain: ["Explain the result", "اشرح النتيجة"],
+    a2c_chip_target: ["Reach a target", "تحقيق هدف"],
+    a2c_chip_check: ["What to check", "ما الذي يجب التحقق منه"],
+    a2c_chip_can_do: ["What can you do?", "ماذا يمكنك أن تفعل؟"],
+    a2c_prompt_nights: ["How were hotel nights calculated?", "كيف حُسبت الليالي الفندقية؟"],
+    a2c_prompt_target: ["How many flights for 10,000 more nights?", "كم رحلة نحتاج لإضافة 10,000 ليلة؟"],
+    a2c_prompt_check: ["What should I check next?", "ما الذي يجب أن أتحقق منه بعد ذلك؟"],
+    a2c_note: ["Works offline on this computer. It changes your plan only when you ask directly, like “Set extra flights to 5”.", "يعمل دون إنترنت على هذا الجهاز، ولا يغيّر خطتك إلا عندما تطلب ذلك مباشرةً، مثل «اضبط الرحلات الإضافية على 5»."],
+    a2c_context: ["About your plan: {route} · {month} · {value} flights a week", "عن خطتك: {route} · {month} · {value} رحلة أسبوعيًا"],
+    a2c_context_usual: ["About your plan: {route} · {month} · usual flights", "عن خطتك: {route} · {month} · الرحلات المعتادة"],
+    a2c_context_invalid: ["Your plan has an input to fix", "في خطتك قيمة تحتاج إلى تصحيح"],
+    a2c_greeting: ["Hi, I’m the Air2Stay assistant. I run on this computer, so no internet is needed.", "مرحبًا، أنا مساعد Air2Stay. أعمل على هذا الجهاز، لذلك لا حاجة إلى الإنترنت."],
+    a2c_greeting_explain: ["Ask how a number was worked out.", "اسأل كيف حُسب أي رقم."],
+    a2c_greeting_target: ["Ask what it takes to reach a hotel-night target.", "اسأل عمّا يلزم لتحقيق هدف من الليالي الفندقية."],
+    a2c_greeting_change: ["Tell me a change, like “Set extra flights to 5”.", "اطلب تغييرًا، مثل «اضبط الرحلات الإضافية على 5»."],
+    a2c_hello: ["Hello! I can explain your plan, work out what it takes to reach a hotel-night target, or change an assumption for you.", "أهلًا! يمكنني شرح خطتك، وحساب ما يلزم لتحقيق هدف من الليالي الفندقية، أو تغيير أحد الافتراضات لك."],
+    a2c_hello_try: ["Try “How were hotel nights calculated?” or tap one of the suggestions below.", "جرّب «كيف حُسبت الليالي الفندقية؟» أو اختر أحد الاقتراحات أدناه."],
+    a2c_thanks: ["You’re welcome. Ask me anything else about this plan whenever you need.", "على الرحب والسعة. اسألني عن أي شيء آخر في هذه الخطة متى احتجت."],
+    a2c_can_help: ["I can help with the plan you have open.", "يمكنني المساعدة في الخطة المفتوحة لديك."],
+    a2c_can_explain: ["Explain: “How were hotel nights calculated?” or “Where does the baseline come from?”", "الشرح: «كيف حُسبت الليالي الفندقية؟» أو «من أين يأتي التقدير المرجعي؟»"],
+    a2c_can_target: ["Targets: “How many flights for 10,000 more nights from India in December?”", "الأهداف: «كم رحلة نحتاج لإضافة 10,000 ليلة من الهند في ديسمبر؟»"],
+    a2c_can_change: ["Changes: “Set flight occupancy to 80%” or “Add 5 flights from France in December”.", "التغييرات: «اضبط نسبة إشغال الرحلات على 80%» أو «أضف 5 رحلات من فرنسا في ديسمبر»."],
+    a2c_can_next: ["Next steps: “What should I check next?”", "الخطوات التالية: «ما الذي يجب أن أتحقق منه بعد ذلك؟»"],
+    a2c_can_calculator: ["I work out numbers with the same calculator as the rest of the app, and I only change your plan when you ask directly.", "أحسب الأرقام بالحاسبة نفسها المستخدمة في بقية التطبيق، ولا أغيّر خطتك إلا عندما تطلب ذلك مباشرةً."],
+    a2c_fix_input: ["Please fix the highlighted plan input first, then ask again.", "يُرجى تصحيح القيمة المظلّلة في الخطة أولًا، ثم اسأل مجددًا."],
+    a2c_open_plan: ["Open Plan a route to see the updated result.", "افتح «تخطيط المسار» لعرض النتيجة المحدّثة."],
+    a2c_cannot_answer: ["I can’t answer that one on this computer yet. Try one of these:", "لا يمكنني الإجابة عن ذلك على هذا الجهاز بعد. جرّب أحد هذه الأسئلة:"],
+    a2c_try_nights: ["“How were hotel nights calculated?”", "«كيف حُسبت الليالي الفندقية؟»"],
+    a2c_try_target: ["“How many flights for 10,000 more nights?”", "«كم رحلة نحتاج لإضافة 10,000 ليلة؟»"],
+    a2c_try_occupancy: ["“Set flight occupancy to 80%”", "«اضبط نسبة إشغال الرحلات على 80%»"],
+    a2c_try_check: ["“What should I check next?”", "«ما الذي يجب أن أتحقق منه بعد ذلك؟»"],
+    a2c_not_changed: ["The plan was not changed.", "لم تتغير الخطة."],
+    a2c_went_wrong: ["Something went wrong, and your plan was not changed.", "حدث خطأ، ولم تتغير خطتك."],
+    a2c_err_whole: ["Use a whole number for flights each week and seats per flight.", "استخدم عددًا صحيحًا للرحلات الأسبوعية وعدد المقاعد لكل رحلة."],
+    a2c_applied: ["Applied to {route} in {month}:", "تم التطبيق على {route} في {month}:"],
+    a2c_applied_flights: ["{count} extra flights each week", "{count} رحلة إضافية أسبوعيًا"],
+    a2c_applied_seats: ["{count} seats per flight", "{count} مقعدًا لكل رحلة"],
+    a2c_applied_occupancy: ["{share} flight occupancy", "نسبة إشغال الرحلات {share}"],
+    a2c_applied_p2p: ["{share} finishing their trip in Abu Dhabi", "{share} تنتهي رحلتهم في أبوظبي"],
+    a2c_applied_hotel: ["{share} hotel use", "الإقامة الفندقية {share}"],
+    a2c_applied_stay: ["{value} nights per hotel stay", "{value} ليلة لكل إقامة فندقية"],
+    a2c_applied_event: ["{share} extra event or seasonal demand", "{share} طلب إضافي لفعالية أو موسم"],
+    a2c_applied_starting: ["the starting assumptions shown in the controls", "الافتراضات الأولية المعروضة في أدوات التحكم"],
+    a2c_reset: ["I’ve reset the plan to India in December. You can change the country, month, and numbers on the left.", "أعدت ضبط الخطة إلى الهند في ديسمبر. يمكنك تغيير البلد والشهر والأرقام من لوحة «تعديل الخطة»."],
+    a2c_target_open_extra: ["To add {target} hotel nights from {route} in {month}, you would need about {count} extra flights a week ({value} before rounding up).", "لإضافة {target} ليلة فندقية من {route} في {month}، ستحتاج إلى نحو {count} رحلة إضافية أسبوعيًا ({value} قبل التقريب للأعلى)."],
+    a2c_target_open_total: ["To reach {target} hotel nights in total from {route} in {month}, you would need about {count} extra flights a week ({value} before rounding up).", "للوصول إلى إجمالي {target} ليلة فندقية من {route} في {month}، ستحتاج إلى نحو {count} رحلة إضافية أسبوعيًا ({value} قبل التقريب للأعلى)."],
+    a2c_target_met: ["{route} in {month} already reaches about {estimate} hotel nights without extra flights, so no extra flights are needed.", "تصل خطة {route} في {month} بالفعل إلى نحو {estimate} ليلة فندقية دون رحلات إضافية، لذلك لا حاجة إلى رحلات إضافية."],
+    a2c_target_working_back: ["Working back: {target} nights → {low} hotel check-ins → {high} visitors ending their trip here → {estimate} passengers → {value} seats in the month.", "بالحساب العكسي: {target} ليلة ← {low} تسجيلًا فندقيًا ← {high} زائرًا تنتهي رحلتهم هنا ← {estimate} راكبًا ← {value} مقعدًا خلال الشهر."],
+    a2c_target_or_stay: ["Or, with no extra flights: average stay {low} → {high} nights.", "أو دون رحلات إضافية: رفع متوسط الإقامة من {low} إلى {high} ليلة."],
+    a2c_target_or_hotel: ["Or, with no extra flights: hotel use {low} → {high}.", "أو دون رحلات إضافية: رفع نسبة الإقامة الفندقية من {low} إلى {high}."],
+    a2c_target_or_full: ["Or, with no extra flights: flights {low} → {high} full.", "أو دون رحلات إضافية: رفع نسبة إشغال الرحلات من {low} إلى {high}."],
+    a2c_target_above_limit: ["That is above the planner's limit of 20 extra flights a week, so it can't be applied to the plan as one route.", "هذا يتجاوز الحد الأقصى في المخطِّط وهو 20 رحلة إضافية أسبوعيًا، لذلك لا يمكن تطبيقه على الخطة كمسار واحد."],
+    a2c_target_try_switch: ["Your plan has not changed. To try it, switch to {route} in {month}, then say “Set extra flights to {count}”.", "لم تتغير خطتك. لتجربة ذلك، انتقل إلى {route} في {month} ثم اكتب «اضبط الرحلات الإضافية على {count}»."],
+    a2c_target_try: ["To try it, say “Set extra flights to {count}”, or open the Target tab.", "لتجربة ذلك، اكتب «اضبط الرحلات الإضافية على {count}» أو افتح تبويب «الهدف»."],
+    a2c_target_assumes: ["This assumes every extra flight fills like the plan says. It does not prove passenger demand or hotel capacity.", "يفترض هذا أن كل رحلة إضافية تمتلئ كما تفترض الخطة، ولا يثبت وجود طلب من الركاب أو سعة فندقية كافية."],
+    a2c_nights_formula: ["Hotel nights are estimated hotel arrivals multiplied by average nights per stay.", "الليالي الفندقية = عدد الوافدين المقدّر إلى الفنادق × متوسط الليالي لكل إقامة."],
+    a2c_nights_this_plan: ["This plan: about {count} hotel arrivals × {value} nights = {estimate} guest nights. Displayed values are rounded.", "في هذه الخطة: نحو {count} وافدًا إلى الفنادق × {value} ليلة = {estimate} من ليالي النزلاء. القيم المعروضة مقرّبة."],
+    a2c_nights_compared: ["That is {value} guest nights compared with the baseline estimate based on past flight records.", "أي {value} من ليالي النزلاء مقارنةً بالتقدير المرجعي المبني على سجلات الرحلات السابقة."],
+    a2c_nights_compared_new: ["That is {value} guest nights compared with the baseline estimate based on past flight records. The new route starts from zero.", "أي {value} من ليالي النزلاء مقارنةً بالتقدير المرجعي المبني على سجلات الرحلات السابقة. يبدأ المسار الجديد من الصفر."],
+    a2c_nights_people: ["Guest nights count nights spent by people, not hotel rooms.", "تحسب ليالي النزلاء الليالي التي يقضيها الأشخاص، لا الغرف الفندقية."],
+    a2c_nights_people_event: ["Guest nights count nights spent by people, not hotel rooms. The arrivals and nights already include your {share} event assumption.", "تحسب ليالي النزلاء الليالي التي يقضيها الأشخاص، لا الغرف الفندقية. ويشمل عدد الوافدين والليالي بالفعل افتراض الفعالية البالغ {share}."],
+    a2c_baseline: ["The baseline is an estimate from past flight records for {route} in {month}, combined with hotel-use and stay-length assumptions.", "التقدير المرجعي مبني على سجلات الرحلات السابقة لـ{route} في {month}، مع افتراضات الإقامة الفندقية ومدة الإقامة."],
+    a2c_baseline_not_observed: ["It is not an observed count of hotel stays from this route.", "وهو ليس عددًا مرصودًا للإقامات الفندقية من هذا المسار."],
+    a2c_baseline_not_rewritten: ["Editing your proposal or visitor mix does not rewrite that baseline.", "تعديل المقترح أو توزيع الزوار لا يغيّر هذا التقدير المرجعي."],
+    a2c_baseline_compared: ["The current plan is compared with it to show the change.", "وتُقارن الخطة الحالية به لإظهار التغيّر."],
+    a2c_baseline_new: ["This new route has no matching flight records in the supplied data, so its baseline starts at zero. Comparison countries supply starting assumptions only; they do not prove demand or confirmed hotel bookings.", "لا توجد لهذا المسار الجديد سجلات رحلات مطابقة في البيانات المقدّمة، لذلك يبدأ تقديره المرجعي من الصفر. وتوفّر البلدان المقارنة افتراضات أولية فقط، ولا تثبت وجود طلب أو حجوزات فندقية مؤكدة."],
+    a2c_fullness: ["Flights are expected to be {share} full, or about {count} passengers out of {value} seats. The plan estimates {estimate} hotel arrivals and {target} hotel nights ({low} nights compared with the original plan).", "يُتوقع أن تبلغ نسبة إشغال الرحلات {share}، أي نحو {count} راكبًا من أصل {value} مقعدًا. وتقدّر الخطة {estimate} وافدًا إلى الفنادق و{target} ليلة فندقية ({low} ليلة مقارنةً بالخطة الأصلية)."],
+    a2c_fullness_event: ["Flights are expected to be {share} full, or about {count} passengers out of {value} seats. The plan estimates {estimate} hotel arrivals and {target} hotel nights ({low} nights compared with the original plan). The estimate includes your chosen +{uplift} increase for an event or season. This was not measured from past events.", "يُتوقع أن تبلغ نسبة إشغال الرحلات {share}، أي نحو {count} راكبًا من أصل {value} مقعدًا. وتقدّر الخطة {estimate} وافدًا إلى الفنادق و{target} ليلة فندقية ({low} ليلة مقارنةً بالخطة الأصلية). ويشمل التقدير زيادة +{uplift} اخترتها لفعالية أو موسم، ولم تُقَس من فعاليات سابقة."],
+    a2c_more_flights: ["More flights add seats. This plan has {count} seats, so changing flights can change the number of passengers and hotel stays. The plan estimates {estimate} hotel arrivals and {target} hotel nights ({low} nights compared with the original plan).", "تضيف الرحلات الإضافية مقاعد. تتضمن هذه الخطة {count} مقعدًا، لذلك قد يغيّر تعديل الرحلات عدد الركاب والإقامات الفندقية. وتقدّر الخطة {estimate} وافدًا إلى الفنادق و{target} ليلة فندقية ({low} ليلة مقارنةً بالخطة الأصلية)."],
+    a2c_assumptions_title: ["The current proposal is {route} in {month}.", "المقترح الحالي: {route} في {month}."],
+    a2c_assumptions_flights: ["Flights: {count} extra each week, about {value} seats per flight, {share} full.", "الرحلات: {count} إضافية أسبوعيًا، بنحو {value} مقعدًا لكل رحلة، ونسبة إشغال {share}."],
+    a2c_assumptions_visitors: ["Visitors: {low} end their trip here; {high} of those use hotels.", "الزوار: {low} تنتهي رحلتهم هنا، ويقيم {high} منهم في الفنادق."],
+    a2c_assumptions_stay: ["Stay: {value} nights on average; event uplift {uplift}. These are planning assumptions. See Details for the calculation and source records.", "الإقامة: {value} ليلة في المتوسط، وزيادة الفعاليات {uplift}. هذه افتراضات تخطيطية؛ راجع «التفاصيل» لمعرفة طريقة الحساب والسجلات المصدرية."],
+    a2c_accuracy: ["The accuracy test checks monthly hotel-arrival totals across the included markets—not this individual route or a new route.", "يفحص اختبار الدقة إجماليات الوافدين الشهرية إلى الفنادق عبر الأسواق المشمولة، لا هذا المسار تحديدًا ولا مسارًا جديدًا."],
+    a2c_accuracy_open: ["Open Check past results to see the held-out months, scores and test limits.", "افتح «التحقق من النتائج السابقة» لعرض الأشهر المستبعدة من المعايرة والنتائج وحدود الاختبار."],
+    a2c_accuracy_records: ["Matching flight records show available history, not forecast certainty.", "تُظهر سجلات الرحلات المطابقة البيانات التاريخية المتاحة، لا يقين التوقع."],
+    a2c_accuracy_check: ["Check the proposal’s occupancy, hotel use and stay assumptions before relying on the result.", "راجع افتراضات الإشغال والإقامة الفندقية ومدة الإقامة في المقترح قبل الاعتماد على النتيجة."],
+    a2c_check_first: ["Check this first: {item}.", "تحقّق من هذا أولًا: {item}."],
+    a2c_why: ["Why: {item}", "السبب: {item}"],
+    a2c_who: ["Who can help: {item}.", "من يمكنه المساعدة: {item}."],
+    a2c_keep_response: ["Keep the response with this proposal so the next person can see what was checked.", "احفظ الرد مع هذا المقترح ليعرف الشخص التالي ما الذي تم التحقق منه."],
+    a2c_check_with: ["Check {item} with {owner}.", "تحقّق من {item} مع {owner}."],
+    a2c_reason_driver: ["{item} has the largest effect in the individual lower-assumption trials tested: about {value} guest nights. The trial sizes differ. Checking this assumption first could change the decision.", "{item} له أكبر أثر في التجارب الفردية للافتراضات الأدنى: نحو {value} من ليالي النزلاء. وتختلف أحجام التجارب، وقد يغيّر التحقق من هذا الافتراض أولًا القرار."],
+    a2c_reason_overdue: ["Start here because this check is overdue.", "ابدأ من هنا لأن موعد هذا التحقق قد فات."],
+    a2c_owner_airline: ["an airline planner", "مخطط في شركة طيران"],
+    a2c_owner_hotel: ["the hotel or tourism team", "فريق الفنادق أو السياحة"],
+    a2c_spread: ["It has the largest guest-night spread in the one-at-a-time trials shown in Details. The trial sizes differ.", "لهذا الافتراض أكبر أثر في ليالي النزلاء ضمن التجارب الفردية المعروضة في «التفاصيل». وتختلف أحجام التجارب."],
+    a2c_ask_hotels: ["Ask hotels about available capacity for {month} and typical stay length. Guest nights count people’s nights, not rooms.", "اسأل الفنادق عن السعة المتاحة في {month} ومدة الإقامة المعتادة. تحسب ليالي النزلاء ليالي الأشخاص، لا الغرف."],
+    a2c_record_source: ["Record the source, owner and response in Proposal before making a decision.", "سجّل المصدر والمسؤول والرد في المقترح قبل اتخاذ القرار."],
+    a2c_new_route_history: ["This new route has no matching flight history. Ask an airline planner about expected bookings and the proposed schedule first.", "لا يوجد لهذا المسار الجديد سجل رحلات مطابق. اسأل مخططًا في شركة طيران أولًا عن الحجوزات المتوقعة والجدول المقترح."],
+    a2c_comparison_only: ["Comparison countries only provide starting assumptions; they do not prove demand for this route.", "توفّر البلدان المقارنة افتراضات أولية فقط، ولا تثبت وجود طلب على هذا المسار."],
+    a2c_final_value: ["Please give the final value you want, so I don’t guess. For example: “Set extra flights to 5” or “Set flight occupancy to 80%.” The plan has not changed.", "يُرجى ذكر القيمة النهائية التي تريدها حتى لا أخمّن، مثل «اضبط الرحلات الإضافية على 5» أو «اضبط نسبة إشغال الرحلات على 80%». لم تتغير الخطة."],
+    a2c_clear_value: ["I couldn’t match every requested change to a clear value. Use digits and units, for example: “Set hotel use to 40% and average stay to 4 nights.” Nothing has changed.", "لم أتمكن من ربط كل تغيير مطلوب بقيمة واضحة. استخدم الأرقام والوحدات، مثل «اضبط الإقامة الفندقية على 40% ومتوسط الإقامة على 4 ليالٍ». لم يتغير شيء."],
+    a2c_what_if: ["I can try that as a scenario. To apply it, give a direct instruction such as “Set flight occupancy to 80%.” Your current plan has not changed.", "يمكنني تجربة ذلك كسيناريو. لتطبيقه، اكتب تعليمة مباشرة مثل «اضبط نسبة إشغال الرحلات على 80%». لم تتغير خطتك الحالية."],
+    a2c_one_route: ["Choose one departure country and one month for this change. Use Compare to examine alternatives. The plan has not changed.", "اختر بلد مغادرة واحدًا وشهرًا واحدًا لهذا التغيير، واستخدم «المقارنة» لدراسة البدائل. لم تتغير الخطة."],
+    a2c_name_value: ["Please name the value to change. I can set the route, month, extra flights, seats, flight occupancy, trip-ending share, hotel use, average stay, or event uplift. Use the country picker to create a new route.", "يُرجى تحديد القيمة المراد تغييرها. يمكنني ضبط المسار أو الشهر أو الرحلات الإضافية أو المقاعد أو نسبة إشغال الرحلات أو نسبة من تنتهي رحلتهم هنا أو الإقامة الفندقية أو متوسط الإقامة أو زيادة الفعاليات. استخدم قائمة البلدان لإنشاء مسار جديد."],
+    // Percentage and other target replies.
+    a2c_decrease: ["I work out the extra flights needed to increase hotel nights. To test fewer flights, set a negative change, like “Set extra flights to -2”.", "أحسب الرحلات الإضافية اللازمة لزيادة الليالي الفندقية. لتجربة رحلات أقل، اضبط تغييرًا سالبًا، مثل «اضبط الرحلات الإضافية على -2»."],
+    a2c_too_large: ["That target is too large for this planner. Use fewer than 1,000,000,000 hotel nights, or an increase of up to 100,000%.", "هذا الهدف أكبر مما يستطيع المخطِّط حسابه. استخدم أقل من 1,000,000,000 ليلة فندقية، أو زيادة لا تتجاوز 100,000%."],
+    a2c_too_long: ["That message is too long. Please ask one short question at a time.", "هذه الرسالة طويلة جدًا. يُرجى طرح سؤال قصير واحد في كل مرة."],
+    a2c_no_percent_base: ["{route} in {month} has no hotel nights without extra flights, so a percentage increase cannot be worked out. Give a number of nights instead, like “How many flights for 5,000 more nights?”", "لا توجد لـ{route} في {month} ليالٍ فندقية دون رحلات إضافية، لذلك لا يمكن حساب زيادة بنسبة مئوية. اذكر عددًا من الليالي بدلًا من ذلك، مثل «كم رحلة نحتاج لإضافة 5,000 ليلة؟»"],
+    a2c_percent_intro: ["A {share} increase on the {estimate} hotel nights this plan gives without extra flights ({route}, {month}) is about {target} more nights.", "زيادة بنسبة {share} على {estimate} ليلة فندقية تعطيها هذه الخطة دون رحلات إضافية ({route}، {month}) تعني نحو {target} ليلة إضافية."],
+
+    // Result summary.
+    a2c_sum_title: ["Here is your current result for {route} in {month}.", "هذه نتيجتك الحالية لـ{route} في {month}."],
+    a2c_sum_checkins: ["Extra hotel check-ins: {value} compared with a usual {month}.", "التسجيلات الفندقية الإضافية: {value} مقارنةً بشهر {month} المعتاد."],
+    a2c_sum_nights: ["Extra guest nights: {value} compared with a usual {month}.", "ليالي النزلاء الإضافية: {value} مقارنةً بشهر {month} المعتاد."],
+    a2c_sum_total: ["Total guest nights: {estimate} (usual: {target}).", "إجمالي ليالي النزلاء: {estimate} (المعتاد: {target})."],
+    a2c_sum_range: ["Possible range: {low} – {high}. This is a history-based guide, not a guarantee.", "النطاق المحتمل: {low} – {high}. وهو دليل مبني على البيانات السابقة، لا ضمان."],
+    a2c_sum_records: ["Matching past records: {item}.", "السجلات السابقة المطابقة: {item}."],
+    a2c_sum_settings: ["Your settings: {count} extra flights a week, about {value} seats per flight and {share} of seats filled.", "إعداداتك: {count} رحلة إضافية أسبوعيًا، بنحو {value} مقعدًا لكل رحلة، ونسبة إشغال المقاعد {share}."],
+    a2c_sum_visitors: ["Visitors: {low} end their trip in Abu Dhabi, {high} of those use a hotel, staying {value} nights on average.", "الزوار: {low} تنتهي رحلتهم في أبوظبي، ويقيم {high} منهم في فندق، لمدة {value} ليلة في المتوسط."],
+    a2c_sum_event: ["It also includes a +{uplift} increase for an event or season, which you chose.", "وتشمل أيضًا زيادة +{uplift} لفعالية أو موسم اخترتها."],
+    a2c_sum_new_route: ["This is a new route, so the usual month starts at zero.", "هذا مسار جديد، لذلك يبدأ الشهر المعتاد من الصفر."],
+    a2c_sum_more: ["Ask “How were hotel nights calculated?” for the formula, or open Details for every step.", "اسأل «كيف حُسبت الليالي الفندقية؟» لمعرفة المعادلة، أو افتح «التفاصيل» لعرض كل خطوة."],
+
+    // App guide: overview.
+    a2c_ov_1: ["Air2Stay estimates how changes to flights into Abu Dhabi could change hotel check-ins and guest nights.", "يقدّر Air2Stay كيف يمكن أن تغيّر التعديلات على الرحلات القادمة إلى أبوظبي التسجيلات الفندقية وليالي النزلاء."],
+    a2c_ov_2: ["The pages along the top:", "الصفحات في الأعلى:"],
+    a2c_ov_plan: ["Plan a route: build and test a plan for one departure country and month.", "تخطيط المسار: إنشاء خطة واختبارها لبلد مغادرة وشهر واحد."],
+    a2c_ov_mix: ["Visitor mix: see which nationalities may make up the hotel guests.", "توزيع الزوار: معرفة الجنسيات التي قد يتكوّن منها نزلاء الفنادق."],
+    a2c_ov_past: ["Check past results: see how close past estimates were to real hotel arrivals.", "التحقق من النتائج السابقة: معرفة مدى قرب التقديرات السابقة من الوافدين الفعليين إلى الفنادق."],
+    a2c_ov_terms: ["Term guide: plain-language definitions of the words and numbers.", "دليل المصطلحات: تعريفات مبسّطة للكلمات والأرقام."],
+    a2c_ov_stats: ["Statistics: charts that put your plan in context.", "الإحصاءات: رسوم بيانية تضع خطتك في سياقها."],
+    a2c_ov_messages: ["Messages: write and keep track of messages to your team.", "الرسائل: كتابة الرسائل إلى فريقك ومتابعتها."],
+    a2c_ov_start: ["To start, open Adjust plan on Plan a route, choose a country and month, and change the flights.", "للبدء، افتح «تعديل الخطة» في «تخطيط المسار»، واختر بلدًا وشهرًا، ثم غيّر الرحلات."],
+    a2c_ov_ask: ["Ask me about any page or view, for example “What does Compare do?”", "اسألني عن أي صفحة أو عرض، مثل «ماذا تفعل المقارنة؟»"],
+
+    // App guide: Plan a route controls.
+    a2c_gd_adjust_1: ["Plan a route is where you build a plan.", "في «تخطيط المسار» تنشئ خطتك."],
+    a2c_gd_adjust_2: ["Open Adjust plan to change it. The controls are in four groups:", "افتح «تعديل الخطة» لتغييرها. أدوات التحكم في أربع مجموعات:"],
+    a2c_gd_adjust_market: ["Market: the departure country and month. Choose + New route for a country without past flights.", "السوق: بلد المغادرة والشهر. اختر «+ مسار جديد» لبلد لا توجد له رحلات سابقة."],
+    a2c_gd_adjust_flights: ["Flights: extra flights each week, seats on each flight and how full flights are.", "الرحلات: الرحلات الإضافية أسبوعيًا، والمقاعد لكل رحلة، ونسبة إشغال الرحلات."],
+    a2c_gd_adjust_event: ["Event or disruption: extra hotel demand for an event or season, from 0% to 50%.", "فعالية أو اضطراب: طلب فندقي إضافي لفعالية أو موسم، من 0% إلى 50%."],
+    a2c_gd_adjust_visitors: ["Hotel visitors: travel purpose, passengers ending their trip in Abu Dhabi, the share checking into a hotel and average nights per stay.", "زوار الفنادق: غرض السفر، والركاب الذين تنتهي رحلتهم في أبوظبي، ونسبة التسجيل في الفنادق، ومتوسط الليالي لكل إقامة."],
+    a2c_gd_adjust_reset: ["The results update as you change any value. Reset puts the starting values back.", "تتحدّث النتائج عند تغيير أي قيمة، ويعيد زر «إعادة الضبط» القيم الأولية."],
+    // Focus.
+    a2c_gd_focus_1: ["Focus shows the outcome of your plan:", "يعرض «ملخص» نتيجة خطتك:"],
+    a2c_gd_focus_cards: ["Four result cards: extra hotel check-ins, extra guest nights, total guest nights and the possible range.", "أربع بطاقات للنتائج: التسجيلات الفندقية الإضافية، وليالي النزلاء الإضافية، وإجمالي ليالي النزلاء، والنطاق المحتمل."],
+    a2c_gd_focus_chart: ["A chart of how your plan flows from seats to guest nights.", "رسم بياني يوضح انتقال خطتك من المقاعد إلى ليالي النزلاء."],
+    a2c_gd_focus_next: ["Next steps to check before relying on the result.", "الخطوات التالية التي يجب التحقق منها قبل الاعتماد على النتيجة."],
+    // Target.
+    a2c_gd_target_1: ["Target works backwards from the hotel nights you want.", "يحسب «الهدف» عكسيًا انطلاقًا من عدد الليالي الفندقية الذي تريده."],
+    a2c_gd_target_enter: ["Enter nights to add, or a total to reach, or ask in your own words.", "أدخل عدد الليالي المراد إضافتها، أو الإجمالي المراد الوصول إليه، أو اسأل بأسلوبك."],
+    a2c_gd_target_shows: ["It shows the extra weekly flights needed, each step from nights back to seats, and whether that is realistic for the route.", "يعرض الرحلات الأسبوعية الإضافية اللازمة، وكل خطوة من الليالي وصولًا إلى المقاعد، ومدى واقعية ذلك للمسار."],
+    a2c_gd_target_other: ["It also shows how the same target could be reached with no extra flights.", "كما يعرض كيف يمكن تحقيق الهدف نفسه دون رحلات إضافية."],
+    a2c_gd_target_button: ["A button there puts the flights into your plan.", "ويضيف زر هناك هذه الرحلات إلى خطتك."],
+    // Compare.
+    a2c_gd_compare_1: ["Compare helps you decide which route option to investigate. Each option is compared with zero extra flights under the same assumptions.", "تساعدك «المقارنة» على اختيار خيار المسار الذي تدرسه. ويُقارن كل خيار بعدم إضافة رحلات وفق الافتراضات نفسها."],
+    a2c_gd_compare_route: ["Current proposal versus an existing route.", "المقترح الحالي مقابل مسار قائم."],
+    a2c_gd_compare_launch: ["Three launch sizes: cautious, standard and expanded.", "ثلاثة أحجام للإطلاق: حذر وقياسي وموسّع."],
+    a2c_gd_compare_months: ["Compare months: the same plan across the year.", "مقارنة الأشهر: الخطة نفسها على مدار العام."],
+    a2c_gd_compare_stress: ["What if fewer visitors stay in hotels? Tests with lower assumptions.", "ماذا لو أقام عدد أقل من الزوار في الفنادق؟ اختبارات بافتراضات أدنى."],
+    a2c_gd_compare_target: ["Work backwards from a hotel-night target.", "الحساب العكسي من هدف للّيالي الفندقية."],
+    a2c_gd_compare_note: ["The planning decision: a note you can save as a PDF or download as text.", "قرار التخطيط: مذكرة يمكنك حفظها بصيغة PDF أو تنزيلها كنص."],
+    a2c_gd_compare_limit: ["These are planning comparisons, not airline profitability or booking forecasts.", "هذه مقارنات تخطيطية، وليست توقعات لربحية شركات الطيران أو للحجوزات."],
+    // Details.
+    a2c_gd_details_1: ["Details traces the assumptions, calculations, flight history and limits behind your plan, in four levels:", "تعرض «التفاصيل» الافتراضات والحسابات وسجل الرحلات والحدود التي تستند إليها خطتك، في أربعة مستويات:"],
+    a2c_gd_details_calc: ["How the result is calculated.", "كيف تُحسب النتيجة."],
+    a2c_gd_details_moves: ["What moves the result most.", "ما الذي يؤثر في النتيجة أكثر."],
+    a2c_gd_details_source: ["Where the starting numbers come from.", "من أين تأتي الأرقام الأولية."],
+    a2c_gd_details_checks: ["Checks on the method.", "فحوص المنهجية."],
+    // Follow-ups.
+    a2c_gd_follow_1: ["Follow-ups helps you check a plan before acting on it. It is saved in this browser.", "تساعدك «المتابعات» على التحقق من الخطة قبل العمل بها، وتُحفظ في هذا المتصفح."],
+    a2c_gd_follow_checks: ["What needs checking: flight demand, hotel capacity and visitor mix.", "ما يحتاج إلى تحقق: الطلب على الرحلات، والسعة الفندقية، وتوزيع الزوار."],
+    a2c_gd_follow_tasks: ["Tasks with an owner or team and a due date.", "مهام لها مسؤول أو فريق وتاريخ استحقاق."],
+    a2c_gd_follow_notes: ["Notes, and a draft email to review and copy into your email app.", "ملاحظات، ومسودة بريد إلكتروني تراجعها وتنسخها إلى تطبيق البريد."],
+    a2c_gd_follow_decision: ["A decision log: Investigate, Hold or Ready for review.", "سجل قرارات: دراسة، أو تعليق، أو جاهز للمراجعة."],
+    a2c_gd_follow_owner: ["Assigning an owner does not send a notification.", "تعيين مسؤول لا يرسل إشعارًا."],
+    // Visitor mix.
+    a2c_gd_mix_1: ["Visitor mix estimates which nationalities may make up the hotel guests on this route.", "يقدّر «توزيع الزوار» الجنسيات التي قد يتكوّن منها نزلاء الفنادق على هذا المسار."],
+    a2c_gd_mix_2: ["It uses past patterns, not a list of confirmed guests.", "ويعتمد على الأنماط السابقة، لا على قائمة بنزلاء مؤكدين."],
+    a2c_gd_mix_3: ["Flight records show where a trip started; hotel records show a guest’s nationality. Air2Stay uses both.", "تُظهر سجلات الرحلات مكان بدء الرحلة، وتُظهر سجلات الفنادق جنسية النزيل، ويستخدم Air2Stay كليهما."],
+    a2c_gd_mix_4: ["It splits the same hotel estimate across nationalities, so the total does not change.", "ويوزّع التقدير الفندقي نفسه على الجنسيات، لذلك لا يتغير الإجمالي."],
+    a2c_gd_mix_5: ["Choose Edit mix to change the shares, then Update visitor mix. Reset to estimate puts the original shares back.", "اختر «تعديل التوزيع» لتغيير النسب ثم «تحديث توزيع الزوار»، ويعيد «العودة إلى التقدير» النسب الأصلية."],
+    // Check past results.
+    a2c_gd_past_1: ["Check past results shows how close Air2Stay’s estimates were to real hotel arrivals.", "تعرض «التحقق من النتائج السابقة» مدى قرب تقديرات Air2Stay من الوافدين الفعليين إلى الفنادق."],
+    a2c_gd_past_2: ["It learned from {count} months of older records, then estimated {value} later months it had not used ({item}) and compared them with the actual totals.", "تعلّم من {count} شهرًا من السجلات الأقدم، ثم قدّر {value} أشهر لاحقة لم يستخدمها ({item}) وقارنها بالإجماليات الفعلية."],
+    a2c_gd_past_3: ["The overall weighted error was {share} of recorded hotel arrivals. Lower is better.", "بلغ الخطأ المرجّح الإجمالي {share} من الوافدين المسجّلين إلى الفنادق، وكلما قلّ كان أفضل."],
+    a2c_gd_past_4: ["The page also shows a longer test and a month-by-month chart.", "وتعرض الصفحة أيضًا اختبارًا أطول ورسمًا بيانيًا لكل شهر."],
+    // Term guide.
+    a2c_gd_terms_1: ["Term guide explains the words and numbers in Air2Stay in plain language.", "يشرح «دليل المصطلحات» كلمات Air2Stay وأرقامه بلغة مبسّطة."],
+    a2c_gd_terms_2: ["You can search for a term, and print or save the guide as a PDF.", "يمكنك البحث عن مصطلح، وطباعة الدليل أو حفظه بصيغة PDF."],
+    a2c_gd_terms_3: ["It also lists what the records don’t tell us, and how privacy and sharing work.", "ويوضح أيضًا ما لا تخبرنا به السجلات، وكيف تعمل الخصوصية والمشاركة."],
+    // Statistics.
+    a2c_gd_stats_1: ["Statistics puts your plan in context with charts:", "تضع «الإحصاءات» خطتك في سياقها من خلال رسوم بيانية:"],
+    a2c_gd_stats_year: ["Guest nights through the year: your plan against each month’s baseline estimate.", "ليالي النزلاء على مدار العام: خطتك مقابل التقدير المرجعي لكل شهر."],
+    a2c_gd_stats_markets: ["Largest departure markets in the selected month.", "أكبر أسواق المغادرة في الشهر المختار."],
+    a2c_gd_stats_seats: ["Total seats by month across the included markets.", "إجمالي المقاعد حسب الشهر في الأسواق المشمولة."],
+    a2c_gd_stats_share: ["The share of guests outside the 5 largest nationality groups.", "نسبة النزلاء من خارج أكبر 5 فئات للجنسيات."],
+    // Messages.
+    a2c_gd_msg_1: ["Messages lets you write, prioritise and keep track of messages to your team and partners.", "تتيح لك «الرسائل» كتابة الرسائل إلى فريقك وشركائك وترتيب أولويتها ومتابعتها."],
+    a2c_gd_msg_2: ["Messages are saved in this browser and not emailed.", "تُحفظ الرسائل في هذا المتصفح ولا تُرسل بالبريد الإلكتروني."],
+    a2c_gd_msg_3: ["Use Inbox, Sent and Drafts, filter by priority, or search.", "استخدم الوارد والمرسل والمسودات، أو صفِّ حسب الأولوية، أو ابحث."],
+    a2c_gd_msg_4: ["When writing, AI Assist is a built-in drafting aid. No external AI service is called; review the text before sending.", "أثناء الكتابة، «المساعدة الذكية» أداة صياغة مدمجة لا تستدعي أي خدمة ذكاء اصطناعي خارجية؛ راجع النص قبل الإرسال."],
+    // Export.
+    a2c_gd_export_1: ["Export, on Plan a route, saves your plan as:", "يحفظ «تصدير» في «تخطيط المسار» خطتك بالصيغ التالية:"],
+    a2c_gd_export_xlsx: ["An Excel report: dashboard, results, visitors, months and scenarios.", "تقرير Excel: لوحة ملخص ونتائج وزوار وأشهر وسيناريوهات."],
+    a2c_gd_export_pdf: ["A PDF report with charts, ready to print or share.", "تقرير PDF مع رسوم بيانية، جاهز للطباعة أو المشاركة."],
+    a2c_gd_export_csv: ["A model-ready CSV: inputs and simulated targets for this route across 12 months.", "ملف CSV جاهز للتدريب: مدخلات ونتائج محاكاة لهذا المسار على مدار 12 شهرًا."],
+    a2c_gd_export_note: ["In Compare, the planning decision note can be saved as a PDF or downloaded as text.", "وفي «المقارنة» يمكن حفظ مذكرة قرار التخطيط بصيغة PDF أو تنزيلها كنص."],
+    // New route, language, search, shortcuts.
+    a2c_gd_new_1: ["To plan a country without past flights, open Adjust plan, choose + New route under Departure country, then choose and confirm the country.", "لتخطيط بلد لا توجد له رحلات سابقة، افتح «تعديل الخطة» واختر «+ مسار جديد» ضمن بلد المغادرة، ثم اختر البلد وأكّده."],
+    a2c_gd_new_2: ["A new route starts from zero. Comparison countries supply starting assumptions only; they do not prove demand.", "يبدأ المسار الجديد من الصفر، وتوفّر البلدان المقارنة افتراضات أولية فقط ولا تثبت وجود طلب."],
+    a2c_gd_lang_1: ["Use the English and العربية buttons at the top to switch the page language.", "استخدم زرَّي English والعربية في الأعلى لتغيير لغة الصفحة."],
+    a2c_gd_lang_2: ["I reply in the language you write in, whatever the page language is.", "أرد باللغة التي تكتب بها، أيًّا كانت لغة الصفحة."],
+    a2c_gd_search_1: ["Search at the top finds pages, plan views, controls, countries, months and terms. Press / to jump to it.", "يجد البحث في الأعلى الصفحات وعروض الخطة وأدوات التحكم والبلدان والأشهر والمصطلحات. اضغط / للانتقال إليه."],
+    a2c_gd_search_2: ["Guide me, the book icon, opens Help & learning with short guides and plain-language answers.", "يفتح «أرشدني» (أيقونة الكتاب) قسم المساعدة والتعلّم، وفيه أدلة قصيرة وإجابات مبسّطة."],
+    a2c_gd_rail_1: ["The shortcuts on the right edge open Tasks, Messages, Notifications and Statistics. Drag the dotted handle to move them up or down.", "تفتح الاختصارات على حافة الشاشة المهام والرسائل والإشعارات والإحصاءات، ويمكنك سحب المقبض المنقّط لتحريكها لأعلى أو لأسفل."],
+    a2c_gd_rail_2: ["The bell at the top shows notifications and checks that need attention.", "يعرض الجرس في الأعلى الإشعارات وعمليات التحقق التي تحتاج إلى انتباه."],
+
+    // Definitions.
+    a2c_def_guest_1: ["A guest night is one guest staying for one night. One guest staying three nights counts as three guest nights.", "ليلة النزيل تعني نزيلًا واحدًا يقيم ليلة واحدة؛ فالنزيل الذي يقيم ثلاث ليالٍ يُحسب ثلاث ليالٍ."],
+    a2c_def_guest_2: ["Guest nights count people, not hotel rooms.", "تُحسب ليالي النزلاء بعدد الأشخاص، لا بعدد الغرف الفندقية."],
+    a2c_def_checkin: ["A hotel check-in is a guest arriving to begin a stay at a hotel.", "التسجيل الفندقي هو وصول نزيل لبدء إقامته في فندق."],
+    a2c_def_range_1: ["The possible range gives lower and higher guides around the main estimate. Read it as a planning guide, not a guaranteed outcome.", "يعطي النطاق المحتمل حدًّا أدنى وأعلى حول التقدير الرئيسي، فاقرأه كدليل للتخطيط لا كنتيجة مضمونة."],
+    a2c_def_range_2: ["For your plan it is {low} – {high}.", "وهو في خطتك {low} – {high}."],
+    a2c_def_records_1: ["Matching past records shows how much flight history exists for this country and month.", "تُظهر السجلات السابقة المطابقة حجم سجل الرحلات المتاح لهذا البلد والشهر."],
+    a2c_def_records_several: ["Several records: three or more.", "عدة سجلات: ثلاثة أو أكثر."],
+    a2c_def_records_few: ["A few records: one or two.", "سجلات قليلة: سجل أو سجلان."],
+    a2c_def_records_none: ["No route records: a new route that starts from fallback assumptions.", "لا توجد سجلات للمسار: مسار جديد يبدأ من افتراضات بديلة."],
+    a2c_def_records_2: ["It describes the data available, not forecast accuracy.", "وهي تصف البيانات المتاحة، لا دقة التوقع."],
+    a2c_def_load_1: ["How full a flight is: if 160 of 200 seats are filled, the flight is 80% full.", "نسبة إشغال الرحلة: إذا شُغل 160 مقعدًا من 200، فالرحلة ممتلئة بنسبة 80%."],
+    a2c_def_your_plan: ["Your plan uses {share}.", "تستخدم خطتك {share}."],
+    a2c_def_p2p: ["Passengers ending their trip in Abu Dhabi arrive here and do not continue to another destination. A traveller staying here is included; one changing planes is not.", "الركاب الذين تنتهي رحلتهم في أبوظبي يصلون إليها ولا يكملون إلى وجهة أخرى؛ فيُحتسب المسافر المقيم هنا، ولا يُحتسب من يغيّر الطائرة."],
+    a2c_def_hotel: ["Hotel use is the share of passengers ending their trip in Abu Dhabi who check into a hotel.", "الإقامة الفندقية هي نسبة الركاب الذين تنتهي رحلتهم في أبوظبي ويسجّلون في فندق."],
+    a2c_def_event: ["The event or season control adds extra hotel demand from 0% to 50%. It is your planning assumption, not measured from past events.", "يضيف إعداد الفعالية أو الموسم طلبًا فندقيًا إضافيًا من 0% إلى 50%، وهو افتراض تخطيطي من عندك وليس مقيسًا من فعاليات سابقة."],
+
+    // Exports: plan report, Excel workbook, CSV and decision note.
+    exp_export_language: ["Export language", "لغة التصدير"],
+    exp_source_records: ["Past flight records and training-based hotel assumptions", "سجلات الرحلات السابقة وافتراضات فندقية مبنية على فترة التدريب"],
+    exp_source_weighted: ["Weighted comparison countries: {item}", "بلدان مقارنة مرجّحة: {item}"],
+    exp_source_single: ["Comparison country: {item}", "بلد المقارنة: {item}"],
+    exp_available_markets: ["available markets", "الأسواق المتاحة"],
+    exp_mixed_visitors: ["Mixed visitors", "زوار متنوعون"],
+    exp_holiday_visitors: ["Holiday visitors", "زوار لقضاء العطلات"],
+    exp_business_visitors: ["Business visitors", "زوار لأغراض العمل"],
+    exp_usual_schedule: ["Usual weekly flight schedule", "الجدول الأسبوعي المعتاد للرحلات"],
+    exp_schedule_change: ["{value} flights/week vs usual", "{value} رحلة أسبوعيًا مقارنةً بالمعتاد"],
+    exp_plain_more: ["The plan estimates {value} more guest nights than usual in {month}.", "تقدّر الخطة {value} ليلة نزلاء أكثر من المعتاد في {month}."],
+    exp_plain_fewer: ["The plan estimates {value} fewer guest nights than usual in {month}.", "تقدّر الخطة {value} ليلة نزلاء أقل من المعتاد في {month}."],
+    exp_plain_none: ["The plan shows no change in estimated guest nights for {month} at the displayed precision.", "لا تُظهر الخطة أي تغيّر في ليالي النزلاء المقدّرة لشهر {month} بالدقة المعروضة."],
+    exp_extra_flights_week: ["Extra flights per week", "الرحلات الإضافية أسبوعيًا"],
+    exp_seats_per_flight: ["Seats per flight", "المقاعد لكل رحلة"],
+    exp_flight_fullness: ["Flight fullness", "إشغال الرحلة"],
+    exp_event_impact: ["Event impact", "أثر الفعالية"],
+    exp_note_schedule: ["Relative to the usual schedule.", "مقارنةً بالجدول المعتاد."],
+    exp_note_capacity: ["Aircraft capacity used for added or removed flights.", "سعة الطائرة المستخدمة للرحلات المضافة أو المحذوفة."],
+    exp_note_occupied: ["Share of aircraft seats occupied.", "نسبة مقاعد الطائرة المشغولة."],
+    exp_note_seasonal: ["Optional training-season aggregate rate.", "معدل موسمي إجمالي اختياري من فترة التدريب."],
+    exp_note_hotel: ["Hotel-use assumption.", "افتراض الإقامة الفندقية."],
+    exp_note_nights: ["Nights per hotel guest.", "الليالي لكل نزيل فندقي."],
+    exp_note_event: ["User estimate of the effect on hotel demand.", "تقدير المستخدم لأثرها على الطلب الفندقي."],
+    exp_limit_usual: ["Usual values estimate the baseline from past flights and hotel assumptions. Route-level hotel totals were not observed.", "تقدّر القيم المعتادة التقدير المرجعي من الرحلات السابقة وافتراضات الفنادق، ولم تُرصد إجماليات الفنادق على مستوى المسار."],
+    exp_limit_new_route: ["The proposed route starts from zero. Comparison countries supply starting assumptions only, with no direct evidence of demand.", "يبدأ المسار المقترح من الصفر. وتوفّر البلدان المقارنة افتراضات أولية فقط، دون دليل مباشر على الطلب."],
+    exp_limit_rooms: ["Guest nights count people staying overnight. Use guests per room and occupancy to translate guest nights into room needs.", "تحسب ليالي النزلاء الأشخاص الذين يبيتون ليلتهم. استخدم عدد النزلاء لكل غرفة ونسبة الإشغال لتحويل ليالي النزلاء إلى احتياج من الغرف."],
+    exp_limit_nationality: ["Visitor nationality shares are estimated allocations. Departure country and guest nationality describe different things.", "نِسب جنسيات الزوار توزيعات تقديرية، وبلد المغادرة وجنسية النزيل أمران مختلفان."],
+    exp_limit_range: ["The possible range is a history-based planning guide. It carries no guaranteed probability or route-level coverage.", "النطاق المحتمل دليل تخطيطي مبني على البيانات السابقة، ولا يحمل احتمالًا مضمونًا أو تغطية على مستوى المسار."],
+    exp_limit_purpose: ["Travel purpose changes the model only when its assumptions are applied. The scenario does not predict bookings.", "لا يغيّر غرض السفر النموذج إلا عند تطبيق افتراضاته، والسيناريو لا يتنبأ بالحجوزات."],
+    exp_limit_trials: ["Launch and lower-assumption trials illustrate what could happen under chosen inputs. Check demand and capacity before committing.", "توضح اختبارات الإطلاق والافتراضات الأدنى ما قد يحدث وفق المدخلات المختارة. تحقّق من الطلب والسعة قبل الالتزام."],
+    exp_month_refreshed: ["Monthly starting assumptions refreshed as in Compare.", "تُحدَّث الافتراضات الأولية لكل شهر كما في «المقارنة»."],
+    exp_month_fixed: ["Selected assumptions held fixed as in Compare.", "تبقى الافتراضات المختارة ثابتة كما في «المقارنة»."],
+    exp_usual: ["Usual", "المعتاد"],
+    exp_assumption: ["Assumption", "الافتراض"],
+    exp_yes: ["Yes", "نعم"],
+    exp_no: ["No", "لا"],
+    exp_step: ["Step", "الخطوة"],
+    exp_change: ["Change", "التغيّر"],
+    exp_plan_scale: ["Plan scale", "مقياس الخطة"],
+    exp_nationality: ["Nationality", "الجنسية"],
+    exp_share_checkins: ["Share of check-ins", "نسبة التسجيلات"],
+    exp_plan_guest_nights: ["Plan guest nights", "ليالي النزلاء في الخطة"],
+    exp_plan_summary: ["Plan summary", "ملخص الخطة"],
+    exp_plan_detail: ["Plan detail", "تفاصيل الخطة"],
+    exp_selected_value: ["Selected value", "القيمة المختارة"],
+    exp_weekly_schedule: ["Weekly flight schedule", "جدول الرحلات الأسبوعي"],
+    exp_travel_purpose: ["Travel purpose", "غرض السفر"],
+    exp_starting_values: ["Starting values", "القيم الأولية"],
+    exp_prepared_by: ["Prepared by", "أعدّه"],
+    exp_name_missing: ["Name not supplied", "لم يُذكر الاسم"],
+    exp_result: ["Result", "النتيجة"],
+    exp_change_percent: ["Change %", "نسبة التغيّر"],
+    exp_plain_words: ["In plain words", "بعبارة مبسّطة"],
+    exp_starting_defaults: ["Starting values are the defaults for this route and month.", "القيم الأولية هي القيم الافتراضية لهذا المسار والشهر."],
+    exp_your_plan_value: ["Your plan value", "قيمة خطتك"],
+    exp_visitors: ["Visitors", "الزوار"],
+    exp_visitors_sorted: ["Nationality groups sorted by planned guest nights.", "فئات الجنسيات مرتّبة حسب ليالي النزلاء في الخطة."],
+    exp_usual_nights: ["Usual nights", "الليالي المعتادة"],
+    exp_plan_nights: ["Plan nights", "ليالي الخطة"],
+    exp_share_scale: ["Share scale", "مقياس النسبة"],
+    exp_total: ["Total", "الإجمالي"],
+    exp_by_month_title: ["Guest nights by month", "ليالي النزلاء حسب الشهر"],
+    exp_by_month_note: ["Uses the current plan inputs with each month's usual baseline, as in Statistics.", "تستخدم مدخلات الخطة الحالية مع التقدير المرجعي المعتاد لكل شهر، كما في «الإحصاءات»."],
+    exp_usual_guest_nights: ["Usual guest nights", "ليالي النزلاء المعتادة"],
+    exp_compare_scenarios: ["Compare scenarios", "مقارنة السيناريوهات"],
+    exp_flight_impact_note: ["Flight impact compares each option with zero extra flights at the same assumptions.", "يقارن أثر الرحلات كل خيار بعدم إضافة رحلات وفق الافتراضات نفسها."],
+    exp_launch_size: ["Launch size", "حجم الإطلاق"],
+    exp_flights_week: ["Extra flights / week", "الرحلات الإضافية / أسبوع"],
+    exp_same_flights: ["The same flights in every month", "الرحلات نفسها في كل شهر"],
+    exp_guest_night_scale: ["Guest-night scale", "مقياس ليالي النزلاء"],
+    exp_yield_scale: ["Yield scale", "مقياس العائد"],
+    exp_dashboard: ["Dashboard", "لوحة المؤشرات"],
+    exp_summary: ["Summary", "الملخص"],
+    exp_by_month: ["By month", "حسب الشهر"],
+    exp_current_settings: ["Current plan settings", "إعدادات الخطة الحالية"],
+    exp_no_flight_change: ["No weekly flight change", "دون تغيير في الرحلات الأسبوعية"],
+    exp_current_proposal: ["Current proposal", "المقترح الحالي"],
+    exp_extra_flights: ["Extra flights", "رحلات إضافية"],
+    exp_current_proposal_country: ["Current proposal · {country}", "المقترح الحالي · {country}"],
+    exp_extra_flights_country: ["Extra flights · {country}", "رحلات إضافية · {country}"],
+    exp_your_month: ["◀ your month", "▶ شهرك"],
+    exp_created_on: ["Created by Air2Stay on {date}", "أنشأه Air2Stay في {date}"],
+    // Decision note.
+    exp_dn_title: ["Air2Stay planning decision note", "مذكرة قرار التخطيط من Air2Stay"],
+    exp_dn_summary: ["{route} in {month}: {count} extra weekly flights produce an estimated {value} additional hotel check-ins and {estimate} additional guest nights, compared with zero extra flights using the same assumptions.", "{route} في {month}: تنتج {count} رحلة أسبوعية إضافية نحو {value} تسجيلًا فندقيًا إضافيًا و{estimate} ليلة نزلاء إضافية، مقارنةً بعدم إضافة رحلات وفق الافتراضات نفسها."],
+    exp_dn_plan_for: ["Plan for about {value} extra guest nights in {month} under the selected assumptions.", "خطّط لنحو {value} ليلة نزلاء إضافية في {month} وفق الافتراضات المختارة."],
+    exp_dn_reduction: ["The flight reduction implies about {value} fewer guest nights in {month} under the selected assumptions.", "يعني خفض الرحلات نحو {value} ليلة نزلاء أقل في {month} وفق الافتراضات المختارة."],
+    exp_dn_no_added: ["No added guest nights are estimated because this plan adds no flight capacity.", "لا تُقدَّر ليالي نزلاء إضافية لأن هذه الخطة لا تضيف سعة رحلات."],
+    exp_dn_lower_trial: ["The combined lower-assumption trial gives {value} guest nights from the flight change. This is an illustrative check, not a probability bound.", "يعطي اختبار الافتراضات الأدنى مجتمعةً {value} ليلة نزلاء من تغيير الرحلات. وهذا فحص توضيحي، وليس حدًّا احتماليًا."],
+    exp_dn_driver: ["{item} has the largest effect in the individual lower-assumption trials tested: about {value} guest nights. The trial sizes differ.", "{item} له أكبر أثر في التجارب الفردية للافتراضات الأدنى: نحو {value} ليلة نزلاء. وتختلف أحجام التجارب."],
+    exp_dn_check_airline: ["Ask the airline for expected bookings and flight occupancy for the proposed schedule.", "اطلب من شركة الطيران الحجوزات المتوقعة ونسبة إشغال الرحلات للجدول المقترح."],
+    exp_dn_check_hotels: ["Check with tourism and hotel teams how many visitors are likely to choose hotels rather than other accommodation.", "تحقّق مع فرق السياحة والفنادق من عدد الزوار المرجّح أن يختاروا الفنادق بدلًا من أماكن الإقامة الأخرى."],
+    exp_dn_check_stay: ["Check the assumed stay length with hotels and comparable visitor records for the selected month.", "تحقّق من مدة الإقامة المفترضة مع الفنادق وسجلات الزوار المماثلة للشهر المختار."],
+    exp_dn_choose_positive: ["Choose a positive added-flight schedule before comparing which visitor assumption changes its result most.", "اختر جدولًا بعدد موجب من الرحلات المضافة قبل مقارنة افتراضات الزوار الأكثر تأثيرًا في النتيجة."],
+    exp_dn_at_limits: ["The assumptions are at the trial limits; review the selected values with airlines and hotels before acting.", "الافتراضات عند حدود الاختبار؛ راجع القيم المختارة مع شركات الطيران والفنادق قبل اتخاذ أي إجراء."],
+    exp_dn_caution: ["Guest nights count nights spent by people, not rooms. Confirm passenger demand and hotel capacity before committing to the proposal.", "تحسب ليالي النزلاء الليالي التي يقضيها الأشخاص، لا الغرف. تأكّد من طلب الركاب والسعة الفندقية قبل الالتزام بالمقترح."],
+    exp_dn_no_option: ["No option has positive added seats, so there is no added-seat yield ranking.", "لا يتضمن أي خيار مقاعد مضافة موجبة، لذلك لا يوجد ترتيب للعائد لكل مقعد مضاف."],
+    exp_dn_tie: ["The leading options tie on guest nights per 1,000 added seats under the supplied assumptions.", "تتساوى الخيارات المتصدّرة في ليالي النزلاء لكل 1,000 مقعد مضاف وفق الافتراضات المقدّمة."],
+    exp_dn_highest: ["{item} has the highest assumed guest nights per 1,000 added seats.", "يحقق {item} أعلى عدد مفترض من ليالي النزلاء لكل 1,000 مقعد مضاف."],
+    exp_dn_lead_holds: ["Its lead holds across the lower-assumption trials tested; this does not establish which route will perform best in practice.", "يبقى متصدّرًا في اختبارات الافتراضات الأدنى؛ ولا يثبت ذلك أي مسار سيحقق أفضل أداء فعليًا."],
+    exp_dn_ranking_changes: ["The ranking changes in these trials: {trials}. Check the assumptions behind those reversals before advancing an option.", "يتغيّر الترتيب في هذه الاختبارات: {trials}. تحقّق من الافتراضات وراء هذا التغيّر قبل المضي في أي خيار."],
+    exp_dn_route_purpose: ["Route purpose: {item}", "غرض المسار: {item}"],
+    exp_dn_extra_flights: ["Extra flights per week: {value}", "الرحلات الإضافية أسبوعيًا: {value}"],
+    exp_dn_seats: ["Seats per flight: {value}", "المقاعد لكل رحلة: {value}"],
+    exp_dn_occupancy: ["Flight occupancy: {share}", "نسبة إشغال الرحلات: {share}"],
+    exp_dn_p2p: ["Passengers ending in Abu Dhabi: {share}", "الركاب الذين تنتهي رحلتهم في أبوظبي: {share}"],
+    exp_dn_hotel_use: ["Hotel use: {share}", "الإقامة الفندقية: {share}"],
+    exp_dn_stay: ["Nights per hotel stay: {value}", "الليالي لكل إقامة فندقية: {value}"],
+    exp_dn_event: ["Extra event demand: {share}", "الطلب الإضافي للفعاليات: {share}"],
+    exp_dn_compared: ["Compared options (each versus zero extra flights)", "الخيارات المقارنة (كل منها مقابل عدم إضافة رحلات)"],
+    exp_dn_option_inputs: ["Flights/week: {count}; seats/flight: {value}; fullness: {share}; ending-trip share: {low}; hotel use: {high}; nights/stay: {estimate}; event assumption: {uplift}.", "الرحلات/أسبوع: {count}؛ المقاعد/رحلة: {value}؛ الإشغال: {share}؛ نسبة من تنتهي رحلتهم: {low}؛ الإقامة الفندقية: {high}؛ الليالي/إقامة: {estimate}؛ افتراض الفعالية: {uplift}."],
+    exp_dn_option_results: ["Additional check-ins: {count}; additional guest nights: {value}; guest nights/1,000 added seats: {estimate}.", "التسجيلات الإضافية: {count}؛ ليالي النزلاء الإضافية: {value}؛ ليالي النزلاء/1,000 مقعد مضاف: {estimate}."],
+    exp_dn_option_results_na: ["Additional check-ins: {count}; additional guest nights: {value}; guest nights/1,000 added seats: not applicable.", "التسجيلات الإضافية: {count}؛ ليالي النزلاء الإضافية: {value}؛ ليالي النزلاء/1,000 مقعد مضاف: غير منطبق."],
+    exp_dn_peer_weights: ["Starting comparison weights: {item}. Geographic assumptions only.", "الأوزان الأولية للبلدان المقارنة: {item}. افتراضات جغرافية فقط."],
+    exp_dn_existing_market: ["Existing-market or explicitly selected single-market starting assumptions.", "افتراضات أولية من سوق قائم أو من سوق واحد محدّد صراحةً."],
+    exp_dn_stress: ["With flights 10 percentage points less full, hotel use 5 points lower and stays 0.5 nights shorter, within the allowed controls, the capacity effect becomes {value} extra guest nights.", "مع خفض إشغال الرحلات 10 نقاط مئوية، والإقامة الفندقية 5 نقاط، وتقصير الإقامات 0.5 ليلة، ضمن الحدود المسموح بها، يصبح أثر السعة {value} ليلة نزلاء إضافية."],
+    exp_dn_driver_summary: ["Of the individual trials tested, “{item}” changes the capacity effect most, by {value} guest nights. Trial sizes differ; this is a reason to check that assumption, not a ranking of real-world certainty.", "من بين التجارب الفردية، يغيّر «{item}» أثر السعة أكثر من غيره، بمقدار {value} ليلة نزلاء. وتختلف أحجام التجارب؛ وهذا سبب للتحقق من ذلك الافتراض، وليس ترتيبًا ليقين واقعي."],
+    exp_dn_no_driver: ["The individual lower-assumption trials do not change the added-flight result at this setting. There is no leading assumption to report from these trials.", "لا تغيّر اختبارات الافتراضات الأدنى الفردية نتيجة الرحلات المضافة عند هذا الإعداد، ولا يوجد افتراض متصدّر يمكن الإبلاغ عنه من هذه الاختبارات."],
+    exp_dn_next_checks: ["Next checks", "عمليات التحقق التالية"],
+    exp_dn_limits: ["Limits", "الحدود"],
+    exp_dn_step_airline: ["With the airline or airport, confirm weekly flights, aircraft seats, expected bookings and flight occupancy; check how many arrivals will finish their journey in Abu Dhabi and how many will be residents returning home.", "مع شركة الطيران أو المطار، أكّد الرحلات الأسبوعية ومقاعد الطائرات والحجوزات المتوقعة ونسبة إشغال الرحلات؛ وتحقّق من عدد الواصلين الذين ستنتهي رحلتهم في أبوظبي وعدد المقيمين العائدين إلى ديارهم."],
+    exp_dn_step_hotels: ["With hotels, check expected hotel use, typical stay length and available capacity in the selected month. Confirm guests per occupied room before translating guest nights into rooms or staffing.", "مع الفنادق، تحقّق من الإقامة الفندقية المتوقعة ومدة الإقامة المعتادة والسعة المتاحة في الشهر المختار. وأكّد عدد النزلاء لكل غرفة مشغولة قبل تحويل ليالي النزلاء إلى غرف أو احتياجات توظيف."],
+    exp_dn_limit_scenario: ["These are scenario estimates, not observed route-level hotel outcomes or an independent forecast of passenger demand.", "هذه تقديرات سيناريو، وليست نتائج فندقية مرصودة على مستوى المسار ولا توقعًا مستقلًا لطلب الركاب."],
+    exp_dn_limit_new_route: ["A new route starts from zero. Comparison markets provide starting assumptions only.", "يبدأ المسار الجديد من الصفر، وتوفّر الأسواق المقارنة افتراضات أولية فقط."],
+    exp_dn_limit_assumptions: ["The event increase and route purpose are planner assumptions. Purpose has no automatic numerical preset.", "زيادة الفعالية وغرض المسار افتراضات يضعها المخطِّط، ولا يرتبط الغرض بأي قيم رقمية تلقائية."],
+    exp_dn_limit_trials: ["Lower-assumption trials are illustrative tests, not statistical probabilities or commercial break-even tests.", "اختبارات الافتراضات الأدنى اختبارات توضيحية، وليست احتمالات إحصائية ولا اختبارات لنقطة التعادل التجارية."],
+    exp_dn_peer_heading: ["Comparison-country starting weights", "الأوزان الأولية للبلدان المقارنة"],
+    exp_dn_peer_note: ["Geographic assumptions only; not measured route demand.", "افتراضات جغرافية فقط؛ وليست طلبًا مقاسًا على المسار."],
+    exp_dn_capacity_check: ["Capacity target check", "فحص هدف السعة"],
+    // Remaining interface text found by the audit.
+    ui_reach_target_label: ["Reach a hotel-night target", "تحقيق هدف الليالي الفندقية"],
+    ui_search_help: ["Search help", "البحث في المساعدة"],
+    ui_next_action: ["Next action", "الإجراء التالي"],
+    ui_chart_guest_nights: ["Guest nights.", "ليالي النزلاء."],
+    ui_chart_flight_seats: ["Flight seats.", "مقاعد الرحلات."],
+    ui_chart_baseline: ["Baseline estimate: {item}", "التقدير المرجعي: {item}"],
+    ui_chart_your_plan: ["Your plan: {item}", "خطتك: {item}"],
+    ui_chart_past_seats: ["Past flight seats: {item}", "مقاعد الرحلات السابقة: {item}"],
+    ui_chart_usual: ["Usual: {item}", "المعتاد: {item}"],
+    ui_unit_seats: ["{value} seats", "{value} مقعدًا"],
+    ui_period_training: ["2022-01 to 2024-12", "2022-01 إلى 2024-12"],
+    ui_period_validation: ["2025-01 to 2025-07", "2025-01 إلى 2025-07"],
+    ui_period_daily: ["2025-05-01 to 2025-07-31", "2025-05-01 إلى 2025-07-31"],
+    ui_assignment: ["{from} → {to}", "{from} → {to}"],
+    ui_tip_p2p: ["Trip-ending share: passengers ending their air journey in Abu Dhabi, rather than connecting to another flight.", "نسبة من تنتهي رحلتهم: الركاب الذين تنتهي رحلتهم الجوية في أبوظبي بدلًا من مواصلة السفر على رحلة أخرى."],
+    ui_tip_hotel: ["Hotel use: the assumed share of trip-ending passengers who check into a hotel. It is not directly measured for each proposed route.", "الإقامة الفندقية: النسبة المفترضة من الركاب الذين تنتهي رحلتهم ويسجّلون في فندق، ولا تُقاس مباشرةً لكل مسار مقترح."],
+    ui_tip_stay: ["Average nights per hotel guest. Guest nights are different from occupied rooms because people may share a room.", "متوسط الليالي لكل نزيل فندقي. تختلف ليالي النزلاء عن الغرف المشغولة لأن الأشخاص قد يتشاركون الغرفة."],
+    ui_tip_event: ["A demand increase you assume for an event or season. It is not a measured effect from event data.", "زيادة في الطلب تفترضها لفعالية أو موسم، وليست أثرًا مقيسًا من بيانات الفعاليات."],
+    ui_tip_purpose: ["Choosing a purpose labels the proposal; it does not change results until separate assumptions are applied.", "اختيار الغرض يصنّف المقترح فقط، ولا يغيّر النتائج حتى تُطبَّق افتراضات منفصلة."],
+
+    // Audit fixes: guide panel, comparison-country notes and status messages.
+    aud_1: ["Focus opened", "فتح «ملخص»"],
+    aud_2: ["Details opened", "فتح «التفاصيل»"],
+    aud_3: ["Chat opened", "فتح المحادثة"],
+    aud_4: ["Compare opened", "فتح «المقارنة»"],
+    aud_5: ["Proposal actions opened", "فتح إجراءات المقترح"],
+    aud_6: ["Plan adjusted", "تعديل الخطة"],
+    aud_7: ["Chat question sent", "إرسال سؤال في المحادثة"],
+    aud_8: ["Spreadsheet exported", "تصدير جدول البيانات"],
+    aud_9: ["Full plan exported", "تصدير الخطة كاملة"],
+    aud_10: ["Decision note exported", "تصدير مذكرة القرار"],
+    aud_11: ["Proposal saved", "حفظ المقترح"],
+    aud_12: ["Proposal comment added", "إضافة تعليق على المقترح"],
+    aud_13: ["Proposal action updated", "تحديث إجراء في المقترح"],
+    aud_14: ["Stakeholder update drafted", "صياغة تحديث لأصحاب المصلحة"],
+    aud_15: ["Proposal version restored", "استعادة نسخة من المقترح"],
+    aud_16: ["Plan a route opened", "فتح «تخطيط المسار»"],
+    aud_17: ["Visitor mix opened", "فتح «توزيع الزوار»"],
+    aud_18: ["Past results opened", "فتح «النتائج السابقة»"],
+    aud_19: ["Term guide opened", "فتح «دليل المصطلحات»"],
+    aud_20: ["Help opened", "فتح المساعدة"],
+    aud_21: ["Proposal workspace opened", "فتح مساحة عمل المقترح"],
+    aud_22: ["Plan exported", "تصدير الخطة"],
+    aud_23: ["How do I create a new route?", "كيف أنشئ مسارًا جديدًا؟"],
+    aud_24: ["Choose + New route under Departure country, then choose and confirm the country.", "اختر «+ مسار جديد» ضمن بلد المغادرة، ثم اختر البلد وأكّده."],
+    aud_25: ["What does the baseline mean?", "ماذا يعني التقدير المرجعي؟"],
+    aud_26: ["What is a guest night?", "ما ليلة النزيل؟"],
+    aud_27: ["How are hotel nights worked out?", "كيف تُحسب الليالي الفندقية؟"],
+    aud_28: ["Why these comparison countries?", "لماذا هذه البلدان المقارنة؟"],
+    aud_29: ["What does Matching past records mean?", "ماذا تعني «السجلات السابقة المطابقة»؟"],
+    aud_30: ["What does the possible range mean?", "ماذا يعني النطاق المحتمل؟"],
+    aud_31: ["What did the accuracy score test?", "ماذا اختبرت درجة الدقة؟"],
+    aud_32: ["What does Compare help me decide?", "بماذا تساعدني «المقارنة» في اتخاذ القرار؟"],
+    aud_33: ["What are the event and travel-purpose controls?", "ما إعدادات الفعالية وغرض السفر؟"],
+    aud_34: ["What does Visitor mix show?", "ماذا يعرض «توزيع الزوار»؟"],
+    aud_35: ["What should I verify before acting?", "ما الذي يجب أن أتحقق منه قبل اتخاذ أي إجراء؟"],
+    aud_36: ["What can I ask Air2Stay?", "ماذا يمكنني أن أسأل Air2Stay؟"],
+    aud_37: ["Ask how the current estimate was calculated, what changed, or what to check next. You can also request a country, month or flight change, such as “Add 3 flights from France in December”. Check the values the app actually applied; use the controls for other assumptions.", "اسأل كيف حُسب التقدير الحالي، أو ما الذي تغيّر، أو ما الذي يجب التحقق منه بعد ذلك. ويمكنك أيضًا طلب تغيير البلد أو الشهر أو الرحلات، مثل «أضف 3 رحلات من فرنسا في ديسمبر». تحقّق من القيم التي طبّقها التطبيق فعلًا، واستخدم أدوات التحكم للافتراضات الأخرى."],
+    aud_38: ["Where can I keep or share a result?", "أين يمكنني حفظ نتيجة أو مشاركتها؟"],
+    aud_39: ["What do red, amber and green mean?", "ماذا تعني الألوان الأحمر والأصفر والأخضر؟"],
+    aud_40: ["Will assigning an action notify my teammate?", "هل يُرسل تعيين إجراء إشعارًا إلى زميلي؟"],
+    aud_41: ["Create your first plan", "أنشئ خطتك الأولى"],
+    aud_42: ["Choose a market, change capacity and read the effect.", "اختر سوقًا، وغيّر السعة، واقرأ الأثر."],
+    aud_43: ["Choose the departure market", "اختر سوق المغادرة"],
+    aud_44: ["Choose the month", "اختر الشهر"],
+    aud_45: ["Set the extra flights", "اضبط الرحلات الإضافية"],
+    aud_46: ["Read the result", "اقرأ النتيجة"],
+    aud_47: ["Decide what to check", "حدّد ما يجب التحقق منه"],
+    aud_48: ["Explore a new country", "استكشف بلدًا جديدًا"],
+    aud_49: ["Understand confirmation and comparison-country assumptions.", "افهم التأكيد وافتراضات البلدان المقارنة."],
+    aud_50: ["Choose + New route", "اختر «+ مسار جديد»"],
+    aud_51: ["Choose and confirm a country", "اختر بلدًا وأكّده"],
+    aud_52: ["Set a proposed schedule", "اضبط جدولًا مقترحًا"],
+    aud_53: ["Inspect the comparison countries", "افحص البلدان المقارنة"],
+    aud_54: ["Compare an alternative", "قارن بديلًا"],
+    aud_55: ["Understand the numbers", "افهم الأرقام"],
+    aud_56: ["Trace estimates, evidence and uncertainty.", "تتبّع التقديرات والأدلة وعدم اليقين."],
+    aud_57: ["Read the baseline label", "اقرأ وصف التقدير المرجعي"],
+    aud_58: ["Open the calculation", "افتح طريقة الحساب"],
+    aud_59: ["Test what matters", "اختبر ما يهم"],
+    aud_60: ["Understand the accuracy test", "افهم اختبار الدقة"],
+    aud_61: ["Prepare a planning decision", "جهّز قرار تخطيط"],
+    aud_62: ["Compare routes, test a weaker outcome and export a note.", "قارن المسارات، واختبر نتيجة أضعف، وصدّر مذكرة."],
+    aud_63: ["Choose an alternative route", "اختر مسارًا بديلًا"],
+    aud_64: ["Compare launch sizes", "قارن أحجام الإطلاق"],
+    aud_65: ["Test a weaker outcome", "اختبر نتيجة أضعف"],
+    aud_66: ["Work backwards from a target", "احسب عكسيًا من هدف"],
+    aud_67: ["Review and export the note", "راجع المذكرة وصدّرها"],
+    aud_68: ["Follow up a proposal", "تابع مقترحًا"],
+    aud_69: ["Record checks, evidence, discussion and stakeholder drafts.", "سجّل عمليات التحقق والأدلة والنقاش ومسودات أصحاب المصلحة."],
+    aud_70: ["Read the priority checks", "اقرأ عمليات التحقق ذات الأولوية"],
+    aud_71: ["Add a task", "أضف مهمة"],
+    aud_72: ["Assign and track the check", "عيّن عملية التحقق وتابعها"],
+    aud_73: ["Keep a proposal version", "احتفظ بنسخة من المقترح"],
+    aud_74: ["Review a stakeholder draft", "راجع مسودة لأصحاب المصلحة"],
+    aud_75: ["Optional online AI. Enabling it sends your question, recent chat and selected proposal context to Gemini.", "ذكاء اصطناعي اختياري عبر الإنترنت. تفعيله يرسل سؤالك والمحادثة الأخيرة وسياق المقترح المختار إلى Gemini."],
+    aud_76: ["Find an answer", "ابحث عن إجابة"],
+    aud_77: ["Use Compare to prepare a decision note.", "استخدم «المقارنة» لإعداد مذكرة قرار."],
+    aud_78: ["Feedback and optional usage counts on this page stay in this browser. They are not shared with a team or sent to an analytics service. Browser clearing can erase them. This is usage guidance, not an organisation’s formal policy.", "تبقى الملاحظات وأعداد الاستخدام الاختيارية في هذه الصفحة داخل هذا المتصفح، ولا تُشارك مع فريق ولا تُرسل إلى خدمة تحليلات، وقد يمحوها مسح بيانات المتصفح. هذه إرشادات للاستخدام، وليست سياسة رسمية لأي جهة."],
+    aud_79: ["Mark an answer or recommendation as helpful, or record a problem. The latest 100 feedback entries stay on this browser only; they are not support tickets.", "حدّد إجابة أو توصية بأنها مفيدة، أو سجّل مشكلة. تبقى آخر 100 ملاحظة في هذا المتصفح فقط، وليست طلبات دعم."],
+    aud_80: ["Feedback saved in this browser", "الملاحظات المحفوظة في هذا المتصفح"],
+    aud_81: ["Clear local feedback", "مسح الملاحظات المحلية"],
+    aud_82: ["Allow local feature counts on this browser", "السماح بعدّ الميزات محليًا في هذا المتصفح"],
+    aud_83: ["Off by default. When enabled, only fixed feature names and counts are saved. Search words, questions, answers, proposal values and identities are not recorded here. Turning it off stops new counts; clearing removes existing counts.", "متوقف افتراضيًا. عند التفعيل تُحفظ أسماء ميزات ثابتة وأعدادها فقط، ولا تُسجَّل كلمات البحث أو الأسئلة أو الإجابات أو قيم المقترح أو الهويات. إيقافه يوقف العدّ الجديد، والمسح يحذف الأعداد الحالية."],
+    aud_84: ["Clear usage counts", "مسح أعداد الاستخدام"],
+    aud_85: ["No feature counts yet. Use a guide or another feature to begin.", "لا توجد أعداد للميزات بعد. استخدم دليلًا أو ميزة أخرى للبدء."],
+    aud_86: ["Feature counting is off. Nothing is tracked by this panel until you turn it on.", "عدّ الميزات متوقف، ولا يتتبّع هذا القسم أي شيء حتى تفعّله."],
+    aud_87: ["Local feature counts are on.", "عدّ الميزات المحلي مفعّل."],
+    aud_88: ["Local feature counts are off.", "عدّ الميزات المحلي متوقف."],
+    aud_89: ["{count} answers available", "{count} إجابة متاحة"],
+    aud_90: ["{count} answers found", "{count} إجابة مطابقة"],
+    aud_91: ["{count} answer available", "{count} إجابة متاحة"],
+    aud_92: ["{count} answer found", "{count} إجابة مطابقة"],
+    aud_93: ["· {count} steps", "· {count} خطوات"],
+    aud_94: ["About: {item}", "بخصوص: {item}"],
+    aud_95: ["Feedback on {item}", "ملاحظات حول {item}"],
+    aud_96: ["{item} · {value} of {count}", "{item} · {value} من {count}"],
+    aud_97: ["Help for your current plan: {route}, {month}.", "مساعدة لخطتك الحالية: {route}، {month}."],
+    aud_98: ["Help for your current plan: {route}.", "مساعدة لخطتك الحالية: {route}."],
+    aud_99: ["(download)", "(تنزيل)"],
+    aud_100: ["(opens in a new tab)", "(يُفتح في علامة تبويب جديدة)"],
+    aud_101: ["What happened?", "ماذا حدث؟"],
+    aud_102: ["Save feedback", "حفظ الملاحظات"],
+    aud_103: ["Describe what you expected and what happened. Avoid personal or confidential details.", "صِف ما توقعته وما حدث، وتجنّب ذكر تفاصيل شخصية أو سرية."],
+    aud_104: ["Reference document downloads are unavailable in this copy.", "تنزيل المستندات المرجعية غير متاح في هذه النسخة."],
+    aud_105: ["No feedback saved yet.", "لا توجد ملاحظات محفوظة بعد."],
+    aud_106: ["This page could not be opened. Exit the guide and use the page tabs, then try again.", "تعذّر فتح هذه الصفحة. اخرج من الدليل واستخدم علامات تبويب الصفحات، ثم حاول مرة أخرى."],
+    aud_107: ["Browser storage is unavailable. Feedback and counts can be shown for this visit, but may be lost when the page closes. Export your important proposal notes separately.", "تخزين المتصفح غير متاح. يمكن عرض الملاحظات والأعداد خلال هذه الزيارة، لكنها قد تُفقد عند إغلاق الصفحة. صدّر ملاحظات المقترح المهمة بشكل منفصل."],
+    aud_108: ["Problem reported", "تم الإبلاغ عن مشكلة"],
+    aud_109: ["Data dictionary (current app)", "قاموس البيانات (التطبيق الحالي)"],
+    aud_110: ["Usage and data-handling guidance", "إرشادات الاستخدام والتعامل مع البيانات"],
+    aud_111: ["Geographic proximity and approximate route length do not establish similar demand, income, travel purpose or visa conditions.", "القرب الجغرافي وطول المسار التقريبي لا يثبتان تشابه الطلب أو الدخل أو غرض السفر أو شروط التأشيرة."],
+    aud_112: ["Locations are country centroids, not airport coordinates; route lengths are approximate.", "المواقع هي مراكز البلدان وليست إحداثيات المطارات، وأطوال المسارات تقريبية."],
+    aud_113: ["Visitor shares and stay lengths are estimated allocations, not observed hotel outcomes for the proposed route.", "نِسب الزوار ومدد الإقامة توزيعات تقديرية، وليست نتائج فندقية مرصودة للمسار المقترح."],
+    aud_114: ["The overall hotel-conversion rate is a shared assumption; it is not learned separately for each comparison country.", "معدل التحويل الفندقي الإجمالي افتراض مشترك، ولا يُستخلص لكل بلد مقارنة على حدة."],
+    aud_115: ["Three-market geographic starting profile", "ملف أولي جغرافي من ثلاثة أسواق"],
+    aud_116: ["No valid country location is available; choose a country from the reference list.", "لا يتوفر موقع صالح للبلد؛ اختر بلدًا من القائمة المرجعية."],
+    aud_117: ["No comparison markets with flight records and coordinates are available for this month.", "لا توجد أسواق مقارنة لها سجلات رحلات وإحداثيات في هذا الشهر."],
+    aud_118: ["Up to three markets in the same month; weighted by country-centroid proximity and approximate route-length similarity.", "حتى ثلاثة أسواق في الشهر نفسه، مرجّحة حسب قرب مراكز البلدان وتشابه طول المسار التقريبي."],
+    aud_119: ["Comparison country", "بلد المقارنة"],
+    aud_120: ["Weight", "الوزن"],
+    aud_121: ["Centroid distance", "المسافة بين المراكز"],
+    aud_122: ["Route-length gap", "فرق طول المسار"],
+    aud_123: ["scoreKm = centroid distance + 0.5 × route-length gap; weight ∝ 1 / (500 + scoreKm). The design weights were not fitted to hotel outcomes.", "scoreKm = المسافة بين المراكز + 0.5 × فرق طول المسار؛ الوزن ∝ 1 / (500 + scoreKm). ولم تُضبط أوزان التصميم وفق النتائج الفندقية."],
+    aud_124: ["Blend three comparison countries", "مزج ثلاثة بلدان مقارنة"],
+    aud_125: ["Correct the highlighted plan input before applying visitor assumptions.", "صحّح قيمة الخطة المظلّلة قبل تطبيق افتراضات الزوار."],
+    aud_126: ["Your visitor assumptions are applied. The historical baseline is unchanged.", "طُبّقت افتراضات الزوار التي حددتها، ولم يتغير التقدير المرجعي التاريخي."],
+    aud_127: ["Decision note exported with assumptions, stress trials and next checks.", "صُدّرت مذكرة القرار مع الافتراضات واختبارات الضغط وعمليات التحقق التالية."],
+    aud_128: ["Saved assumptions restored. Checks must match these exact values.", "استُعيدت الافتراضات المحفوظة. يجب أن تطابق عمليات التحقق هذه القيم بالضبط."],
+    aud_129: ["Label selected. Numbers change only when you apply your assumptions.", "تم اختيار التصنيف. لا تتغير الأرقام إلا عند تطبيق افتراضاتك."],
+    aud_130: ["Download {name}", "تنزيل {name}"],
+    aud_131: ["Could not open the shared plan: {item}", "تعذّر فتح الخطة المشتركة: {item}"],
+    aud_132: ["View or copy history JSON", "عرض سجل JSON أو نسخه"],
+    aud_133: ["History JSON", "سجل JSON"],
+    aud_134: ["Earlier assumptions · this message may describe different numbers", "افتراضات سابقة · قد تصف هذه الرسالة أرقامًا مختلفة"],
+    aud_135: ["AI explanation · check against Details", "شرح بالذكاء الاصطناعي · تحقّق منه في «التفاصيل»"],
+    aud_136: ["Saved explanation for the earlier plan", "شرح محفوظ للخطة السابقة"],
+    aud_137: ["From this plan and its recorded checks", "من هذه الخطة وعمليات التحقق المسجّلة لها"],
+    aud_138: ["Plan explanations and clear change commands work locally. Optional Gemini answers can help with other questions when you enable them below.", "تعمل شروح الخطة وأوامر التغيير الواضحة محليًا. ويمكن لإجابات Gemini الاختيارية المساعدة في أسئلة أخرى عند تفعيلها أدناه."],
+    aud_139: ["Local planning assistant · explanations and clear change commands work without internet. Gemini is not configured in this copy.", "مساعد تخطيط محلي · تعمل الشروح وأوامر التغيير الواضحة دون إنترنت. لم يُضبط Gemini في هذه النسخة."],
+    aud_140: ["Describe a change or ask a question. The current result stays beside your conversation.", "صِف تغييرًا أو اطرح سؤالًا. تبقى النتيجة الحالية بجانب محادثتك."],
+    a2c_hotel_occupancy: ["Hotel occupancy means how full hotels are. This planner does not have that control. You can change flight occupancy or the share of visitors using hotels; please name which one. The plan has not changed.", "إشغال الفنادق يعني مدى امتلائها، وهذا المخطِّط لا يتضمن هذا الإعداد. يمكنك تغيير نسبة إشغال الرحلات أو نسبة الزوار المقيمين في الفنادق؛ يُرجى تحديد أيهما. لم تتغير الخطة."],
   };
   return {
     en: Object.fromEntries(Object.entries(labels).map(([key, [english]]) => [key, english])),
@@ -4742,6 +5731,10 @@ for (const [key, text] of Object.entries(I18N.en)) {
 }
 
 labelTemplates.sort((a, b) => b[3] - a[3]);
+// Chat-only reply patterns are used by the assistant only, so their short
+// placeholders can never partially translate other text in the app.
+const helpChatOwnTemplates = labelTemplates.filter(([, key]) => key.startsWith("a2c_"));
+for (let index = labelTemplates.length - 1; index >= 0; index--) if (labelTemplates[index][1].startsWith("a2c_")) labelTemplates.splice(index, 1);
 
 function t(key, values = {}) {
   const text = I18N[uiLanguage][key] ?? I18N.en[key];
@@ -4765,7 +5758,7 @@ function translateUiString(source, hint, split = true) {
   for (const [pattern, template, names] of labelTemplates) {
     const match = pattern.exec(text);
     if (!match || match.slice(1).includes(text)) continue;
-    if (["{month} estimate", "{month} · {series}: {value}"].includes(I18N.en[template]) && !arNameLookup.has(match[1].toLowerCase())) continue;
+    if (["{month} estimate", "{month} · {series}: {value}", "Usual {month}", "Current proposal · {country}", "Extra flights · {country}"].includes(I18N.en[template]) && !arNameLookup.has(match[1].toLowerCase())) continue;
     return source.replace(text, () => t(template, Object.fromEntries(names.map((name, index) => [name, match[index + 1]]))));
   }
   if (split) {
@@ -4884,6 +5877,9 @@ function setupLanguage() {
      $("#aircraftControls").open = window.matchMedia("(min-width: 1051px)").matches;
      setupControls();
      setupDecisionTools();
+     setupTargetWorkspace();
+     setupHelpChat();
+     setupExportLanguage();
      const shared = window.__AIR2STAY_SHARED_PLAN__ || new URLSearchParams(window.location.search).get("plan");
      if (shared) {
        try { restorePlan(typeof shared === "string" ? JSON.parse(shared) : shared); }

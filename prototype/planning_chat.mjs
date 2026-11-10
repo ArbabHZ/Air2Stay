@@ -1,4 +1,5 @@
 import { assistantReply, parseScenarioPrompt, sensitivity } from './engine.mjs';
+import { reverseTargetPlan, TARGET_FLIGHT_CONTROL_LIMIT } from './decision_tools.mjs';
 
 // Local answers use the same result object as the screen. This module never
 // changes the plan; the controller validates and applies an explicit command.
@@ -113,10 +114,422 @@ function pcNextAction(data, current, result, proposalSummary) {
   return pcAnswer(`${missing}\n\n- Why: ${!result.route.knownMarket ? 'Comparison countries only provide starting assumptions; they do not prove demand for this route.' : 'It has the largest guest-night spread in the one-at-a-time trials shown in Details. The trial sizes differ.'}\n- Ask hotels about available capacity for ${data.months[current.month - 1]} and typical stay length. Guest nights count people’s nights, not rooms.\n- Record the source, owner and response in Proposal before making a decision.`);
 }
 
-export function planningChatReply(data, prompt, current, result, proposalSummary = null) {
+// Reads "How many flights for 10,000 more nights from India in December?" or
+// "What would it take to reach 250k nights in July?". Returns null when no
+// hotel-night number is present. Never changes the plan.
+export const TARGET_NIGHTS_LIMIT = 1000000000;
+
+// Country and month named in free text. Short aliases that are also English
+// words ("US") must be written in capitals, so "help us" is not a country.
+function pcRouteAndMonth(data, text) {
+  const months = data.months.map((name, index) => ({ name, month: index + 1 }))
+    .filter(({ name }) => new RegExp('\\b' + pcEscapePattern(name) + '\\b').test(text) || new RegExp('\\b(?:in|for|during|of)\\s+' + pcEscapePattern(name) + '\\b', 'i').test(text));
+  const candidates = [...new Map(data.routes.map((route) => [route.origin, route.originKey])).entries(), ...Object.entries(pcRouteAliases)]
+    .sort(([first], [second]) => second.length - first.length);
+  const country = candidates.find(([name]) => new RegExp('\\b' + pcEscapePattern(name) + '\\b', name === 'US' ? '' : 'i').test(text));
+  return { originKey: country ? country[1] : null, month: months.length === 1 ? months[0].month : null };
+}
+
+export function parseTargetQuestion(data, prompt) {
   const text = String(prompt || '').trim();
   const lower = text.toLowerCase();
+  const where = pcRouteAndMonth(data, text);
+  const result = (fields) => ({ target: null, basis: 'extra', percent: null, decrease: false, tooLarge: false, ...where, ...fields });
+  if (!/\bnights?\b/.test(lower)) return null;
+  // Percentage changes ("increase nights by 20%", "20% more nights", "double the nights").
+  const percentMatch = lower.match(/(\d+(?:\.\d+)?)\s*(?:%|percent\b|per cent\b)/);
+  const increaseWord = /\b(?:increase[sd]?|increasing|grow|growth|raise|boost|lift|up|more|higher|extra|additional|add)\b/.test(lower);
+  const decreaseWord = /\b(?:decrease[sd]?|reduce[sd]?|reduction|cut|lower|drop|fewer|less|down)\b/.test(lower);
+  if (decreaseWord && !increaseWord && (percentMatch || /\d/.test(lower) || /\bhalve\b/.test(lower))) return result({ decrease: true });
+  if (percentMatch) {
+    const percent = Number(percentMatch[1]);
+    if (!Number.isFinite(percent)) return null;
+    if (percent > 100000) return result({ tooLarge: true });
+    return increaseWord || /\bby\s+\d/.test(lower) ? result({ percent }) : null;
+  }
+  if (/\b(?:double|twice)\b/.test(lower)) return result({ percent: 100 });
+  if (/\btriple\b/.test(lower)) return result({ percent: 200 });
+  const match = lower.match(/(\d[\d,]*(?:\.\d+)?)\s*(k|thousand|m|million)?\s+(?:(?:more|extra|additional|total)\s+)?(?:(?:hotel|guest)\s+)?nights?\b/)
+    || lower.match(/\bnights?\b[^\d]{0,30}?(\d[\d,]*(?:\.\d+)?)\s*(k|thousand|m|million)?\b/);
+  if (!match) return null;
+  let target = Number(match[1].replace(/,/g, ''));
+  if (match[2] === 'k' || match[2] === 'thousand') target *= 1000;
+  if (match[2] === 'm' || match[2] === 'million') target *= 1000000;
+  if (!Number.isFinite(target) || target < 0) return null;
+  if (target > TARGET_NIGHTS_LIMIT) return result({ tooLarge: true });
+  // Only words next to the number decide the basis: "how many more flights"
+  // must not turn "reach 250,000 nights" into an extra-nights target.
+  const extra = /\b(?:more|extra|additional)\b/.test(match[0]) || /\b(?:add(?:ing)?|another|by)\s+\d/.test(lower);
+  const total = /\btotal\b/.test(match[0]) || /\b(?:total\s+of|reach|hit|get\s+to|to)\s+\d/.test(lower);
+  return result({ target, basis: total && !extra ? 'total' : 'extra' });
+}
+
+function pcTargetIntent(lower) {
+  if (!/\bnights?\b/.test(lower)) return false;
+  // Stay-length requests ("set average stay to 4 nights") are plan changes.
+  if (/\bstays?\b/.test(lower) && !/\b(?:hotel|guest)\s+nights?\b/.test(lower)) return false;
+  // Direct plan changes are left to the command parser.
+  if (/^(?:please\s+)?(?:set|change|update|switch|use|try|remove|cancel|make|assume|move|reset)\b/.test(lower)) return false;
+  if (/^(?:please\s+)?add\b/.test(lower) && /\bflights?\b/.test(lower)) return false;
+  if (/(?:^|\s)-?\d+\s*(?:extra\s+|more\s+|additional\s+|weekly\s+)?flights?\b/.test(lower) && !/\bhow many\b/.test(lower)) return false;
+  const amount = /\d/.test(lower) || /\b(?:double|twice|triple|halve)\b/.test(lower);
+  return amount && /\b(?:how many|flights? (?:do|would|will) we need|flights? needed|what would it take|what will it take|how (?:do|can|could) we (?:get|reach|hit)|reach|hit|target|get to|want|need|increase[sd]?|increasing|grow|raise|boost|lift|up|rise|rises|rose|higher|double|twice|triple|more|extra|additional|add|decrease[sd]?|reduce[sd]?|cut|lower|drop|halve)\b/.test(lower);
+}
+
+function pcTargetReply(data, question, current) {
+  let inputs = current;
+  const routeChanged = (question.originKey && question.originKey !== current.originKey) || (question.month && question.month !== current.month);
+  if (routeChanged) {
+    const originName = data.routes.find((route) => route.originKey === (question.originKey || current.originKey))?.origin || '';
+    inputs = parseScenarioPrompt(data, [originName, data.months[(question.month || current.month) - 1]].join(' '), current).inputs;
+  }
+  if (question.decrease) return pcAnswer('I work out the extra flights needed to increase hotel nights. To test fewer flights, set a negative change, like “Set extra flights to -2”.');
+  if (question.tooLarge) return pcAnswer('That target is too large for this planner. Use fewer than 1,000,000,000 hotel nights, or an increase of up to 100,000%.');
+  // One sentence per line: the app's Arabic dictionary translates whole lines.
+  const intro = [];
+  let target = question.target;
+  let basis = question.basis;
+  if (question.percent != null) {
+    const usual = reverseTargetPlan(data, inputs, 0);
+    const name = usual.route.origin;
+    const monthName = data.months[inputs.month - 1];
+    if (!(usual.startingNights > 0)) return pcAnswer(`${name} in ${monthName} has no hotel nights without extra flights, so a percentage increase cannot be worked out. Give a number of nights instead, like “How many flights for 5,000 more nights?”`);
+    target = Math.round(usual.startingNights * question.percent / 100);
+    basis = 'extra';
+    intro.push(`A ${pcNumber(question.percent, 2)}% increase on the ${pcNumber(usual.startingNights)} hotel nights this plan gives without extra flights (${name}, ${monthName}) is about ${pcNumber(target)} more nights.`, '');
+  }
+  const answer = reverseTargetPlan(data, inputs, target, { basis });
+  const route = answer.route.origin;
+  const month = data.months[inputs.month - 1];
+  if (answer.alreadyMet) return pcAnswer(`${route} in ${month} already reaches about ${pcNumber(answer.startingNights)} hotel nights without extra flights, so no extra flights are needed.`);
+  const step = (key) => pcNumber(answer.steps.find((row) => row.key === key).value);
+  const percent = (value) => pcNumber(value * 100, 1) + '%';
+  const lines = [
+    ...intro,
+    basis === 'total'
+      ? `To reach ${pcNumber(target)} hotel nights in total from ${route} in ${month}, you would need about ${answer.requiredWeeklyFlights} extra flights a week (${pcNumber(answer.exactWeeklyFlights, 2)} before rounding up).`
+      : `To add ${pcNumber(target)} hotel nights from ${route} in ${month}, you would need about ${answer.requiredWeeklyFlights} extra flights a week (${pcNumber(answer.exactWeeklyFlights, 2)} before rounding up).`,
+    '',
+    `- Working back: ${pcNumber(answer.neededNights)} nights → ${step('hotelCheckins')} hotel check-ins → ${step('p2p')} visitors ending their trip here → ${step('passengers')} passengers → ${step('seats')} seats in the month.`,
+    `- ${answer.realism.text}`,
+  ];
+  for (const lever of answer.alternatives.filter((item) => item.withinLimits)) {
+    if (lever.key === 'averageStay') lines.push(`- Or, with no extra flights: average stay ${pcNumber(lever.from, 2)} → ${pcNumber(lever.to, 2)} nights.`);
+    if (lever.key === 'conversionRate') lines.push(`- Or, with no extra flights: hotel use ${percent(lever.from)} → ${percent(lever.to)}.`);
+    if (lever.key === 'loadFactor') lines.push(`- Or, with no extra flights: flights ${percent(lever.from)} → ${percent(lever.to)} full.`);
+  }
+  if (!answer.withinControlLimit) lines.push(`- That is above the planner's limit of ${TARGET_FLIGHT_CONTROL_LIMIT} extra flights a week, so it can't be applied to the plan as one route.`);
+  else if (routeChanged) lines.push(`- Your plan has not changed. To try it, switch to ${route} in ${month}, then say “Set extra flights to ${answer.requiredWeeklyFlights}”.`);
+  else lines.push(`- To try it, say “Set extra flights to ${answer.requiredWeeklyFlights}”, or open the Target tab.`);
+  lines.push('', 'This assumes every extra flight fills like the plan says. It does not prove passenger demand or hotel capacity.');
+  return pcAnswer(lines.join('\n'));
+}
+
+// Arabic questions are mapped to the English phrasing the local engine already
+// understands. Returns the input unchanged when it contains no Arabic letters.
+const AR_MONTHS = ['يناير', 'فبراير', 'مارس', 'ابريل', 'مايو', 'يونيو', 'يوليو', 'اغسطس', 'سبتمبر', 'اكتوبر', 'نوفمبر', 'ديسمبر'];
+const AR_COUNTRIES = [
+  ['المملكه العربيه السعوديه', 'Saudi Arabia'], ['السعوديه', 'Saudi Arabia'], ['المملكه المتحده', 'United Kingdom'], ['بريطانيا', 'United Kingdom'],
+  ['الولايات المتحده', 'United States Of America'], ['امريكا', 'United States Of America'], ['كوريا الجنوبيه', 'South Korea'], ['كوريا', 'South Korea'],
+  ['الهند', 'India'], ['فرنسا', 'France'], ['المانيا', 'Germany'], ['الصين', 'China'], ['روسيا', 'Russian Federation'], ['اليابان', 'Japan'],
+  ['مصر', 'Egypt'], ['الكويت', 'Kuwait'], ['قطر', 'Qatar'], ['عمان', 'Oman'], ['البحرين', 'Bahrain'], ['الاردن', 'Jordan'], ['لبنان', 'Lebanon'],
+  ['تركيا', 'Turkey'], ['ايطاليا', 'Italy'], ['اسبانيا', 'Spain'], ['هولندا', 'Netherlands'], ['بلجيكا', 'Belgium'], ['سويسرا', 'Switzerland'],
+  ['النمسا', 'Austria'], ['بولندا', 'Poland'], ['ايرلندا', 'Ireland'], ['كندا', 'Canada'], ['الفلبين', 'Philippines'], ['كازاخستان', 'Kazakhstan'],
+  ['اوزبكستان', 'Uzbekistan'], ['اذربيجان', 'Azerbaijan'], ['ارمينيا', 'Armenia'], ['اسرائيل', 'Israel'],
+];
+
+function pcArabicNormalize(text) {
+  return String(text)
+    .replace(/[ً-ْـ]/g, '')
+    .replace(/[٠-٩]/g, (digit) => String(digit.charCodeAt(0) - 0x0660))
+    .replace(/[۰-۹]/g, (digit) => String(digit.charCodeAt(0) - 0x06F0))
+    .replace(/٬/g, ',').replace(/٫/g, '.').replace(/٪/g, '%').replace(/؟/g, '?').replace(/،/g, ',')
+    .replace(/[أإآ]/g, 'ا').replace(/ة/g, 'ه').replace(/ى/g, 'ي')
+    .replace(/\s+/g, ' ').trim();
+}
+
+export function arabicPromptToEnglish(data, prompt) {
+  const raw = String(prompt || '');
+  if (!/[؀-ۿ]/.test(raw)) return raw;
+  const text = pcArabicNormalize(raw);
+  const monthIndex = AR_MONTHS.findIndex((name) => text.includes(name));
+  const month = monthIndex >= 0 ? data.months[monthIndex] : '';
+  const country = AR_COUNTRIES.find(([name]) => new RegExp('(^|\\s|ل|من|في|ب)' + name + '($|\\s|[?.,!])').test(text))?.[1]
+    || data.routes.map((route) => route.origin).find((name) => new RegExp('\\b' + pcEscapePattern(name) + '\\b', 'i').test(text)) || '';
+  const where = (country ? ` from ${country}` : '') + (month ? ` in ${month}` : '');
+  const numberMatch = text.match(/(\d[\d,]*(?:\.\d+)?)\s*(الف|الاف|مليون)?/);
+  let number = numberMatch ? Number(numberMatch[1].replace(/,/g, '')) : null;
+  if (number != null && /^(الف|الاف)$/.test(numberMatch[2] || '')) number *= 1000;
+  if (number != null && numberMatch[2] === 'مليون') number *= 1000000;
+  const numberAfter = (pattern) => {
+    const found = text.match(pattern);
+    if (!found) return null;
+    const after = text.slice(found.index + found[0].length).match(/-?\d+(?:\.\d+)?/);
+    return after ? after[0] : null;
+  };
+
+  // Polite openers ("أريد", "من فضلك", "هل يمكنك") and verbal nouns
+  // ("إضافة", "ضبط") are reduced to the command verb for the command rules.
+  const body = text.replace(/^((اريد|نريد|اود|ابغي|ابي|من فضلك|لو سمحت|ممكن|هل يمكنك|هل تستطيع|رجاء|رجاءا)\s+(ان\s+)?)+/, '')
+    .replace(/^ضبط\s/, 'اضبط ').replace(/^تغيير\s/, 'غير ').replace(/^تعيين\s/, 'عين ').replace(/^حذف\s/, 'احذف ').replace(/^اضافه\s(?=\d)/, 'اضف ');
+  const nightsWord = /(ليله|ليال|ليالي)/.test(text);
+  const percentMatch = text.match(/(\d+(?:\.\d+)?)\s*(?:%|بالمئه|بالمائه|في المئه|في المائه)/);
+
+  if (/^(مرحبا|اهلا|هلا|هاي|السلام عليكم|صباح الخير|مساء الخير)/.test(text)) return 'Hello';
+  if (/^(شكرا|مشكور|يعطيك العافيه|ممتاز|تمام|جميل)/.test(text)) return 'Thanks';
+  if (/(اعد|اعاده|ارجع) (ضبط|تعيين)|ابدا من جديد/.test(text)) return 'Reset the plan';
+  if (nightsWord && /(تقليل|خفض|انقاص|قلل|اخفض|نقص|تخفيض)/.test(text) && (percentMatch || number != null)) return `Decrease hotel nights by ${percentMatch ? percentMatch[1] + '%' : number}${where}`;
+  if (nightsWord && percentMatch && /(زياده|زد|نزيد|ازيد|يزيد|رفع|ارفع|نرفع|اكثر|نمو|تنمو|ترتفع|زيد)/.test(text)) return `I want to increase hotel nights by ${percentMatch[1]}%${where}`;
+  if (nightsWord && /(ضاعف|مضاعفه|نضاعف|ضعف)/.test(text)) return `I want to double the hotel nights${where}`;
+  if (number != null && nightsWord && /(كم|عدد|نحتاج|يلزم|يتطلب|للوصول|لتحقيق|لاضافه|اريد|نريد|زياده)/.test(text) && !/^(اضبط|عين|غير|اجعل|حدد|ضع)/.test(body)) {
+    const total = /(اجمالي|المجموع|الوصول الي|للوصول الي|نصل الي|يصل الي)/.test(text) && !/(اضافيه|اضافه|لاضافه|زياده|اكثر)/.test(text);
+    return total ? `How many flights do we need to reach ${number} nights in total${where}?` : `How many flights for ${number} more nights${where}?`;
+  }
+  if (/^(اضبط|عين|غير|اجعل|حدد|ضع)/.test(body)) {
+    const fields = [
+      [/(الرحلات الاضافيه|رحلات اضافيه|عدد الرحلات)/, (n) => `extra flights to ${n}`],
+      [/(اشغال|امتلاء)/, (n) => `flight occupancy to ${n}%`],
+      [/(الاقامه الفندقيه|استخدام الفنادق|نسبه الفنادق|التسجيل في الفنادق)/, (n) => `hotel use to ${n}%`],
+      [/(مده الاقامه|متوسط الاقامه|متوسط الليالي|ليالي الاقامه)/, (n) => `average stay to ${n} nights`],
+      [/(المقاعد|مقعد)/, (n) => `seats per flight to ${n}`],
+    ].map(([pattern, phrase]) => { const n = numberAfter(pattern); return n == null ? null : phrase(n); }).filter(Boolean);
+    if (fields.length) return `Set ${fields.join(' and ')}${where}`;
+  }
+  const flights = body.match(/^(اضف|زد|احذف|الغ|قلل)\s*(\d+)\s*(رحله|رحلات)/);
+  if (flights) return `${/^(احذف|الغ|قلل)/.test(flights[1]) ? 'Remove' : 'Add'} ${flights[2]} flights${where}`;
+  if (/(ماذا|ما الذي|شو) (يمكنك|تستطيع|تقدر)|^ماذا تفعل\??$|كيف استخدمك|^مساعده\??$/.test(text)) return 'What can you do?';
+  if (/(اشرح|لخص|فسر|وضح|ملخص|ماذا تعني|ما معني)( لي)? (النتيجه|النتائج|نتيجتي|الخطه|خطتي|الارقام|هذه الارقام|هذه النتيجه)/.test(text)) return 'Explain the result';
+  if (/(ما معني|ماذا يعني|ماذا تعني|ما المقصود|ما هو|ما هي|تعريف|عرف)/.test(text)) {
+    const definitions = [
+      [/(ليله النزيل|ليالي النزلاء|الليالي الفندقيه|الليله الفندقيه)/, 'What is a guest night?'],
+      [/(التسجيل الفندقي|تسجيل فندقي|التسجيلات الفندقيه)/, 'What is a hotel check-in?'],
+      [/(النطاق المحتمل|النطاق)/, 'What does the possible range mean?'],
+      [/(السجلات المطابقه|السجلات السابقه)/, 'What does matching past records mean?'],
+      [/(الاشغال|امتلاء)/, 'What does load factor mean?'],
+      [/(تنتهي رحلتهم|الركاب الذين)/, 'What does passengers ending their trip mean?'],
+      [/(الاقامه الفندقيه|استخدام الفنادق|التسجيل في الفنادق)/, 'What is hotel use?'],
+      [/(الفعاليه|الفعاليات|الموسم)/, 'What is the event or season control?'],
+    ];
+    const definition = definitions.find(([pattern]) => pattern.test(text));
+    if (definition) return definition[1];
+  }
+  const pages = [
+    [/(كيف (استخدم|اتنقل|ابدا)|التنقل|من اين ابدا|ما هو air2stay|ما هذا التطبيق|جوله في التطبيق|نظره عامه|ما (هي )?الصفحات)/i, 'How do I navigate the app?'],
+    [/(توزيع الزوار|مزيج الزوار|الجنسيات)/, 'What does Visitor mix show?'],
+    [/(تبويب|عرض|صفحه|قسم|واجهه) الهدف/, 'What does the Target view do?'],
+    [/(تبويب|عرض|صفحه|قسم) الملخص/, 'What does the Focus view show?'],
+    [/(المقارنه|(^|\s)قارن)/, 'What does Compare do?'],
+    [/(تبويب|عرض|صفحه|قسم) التفاصيل/, 'What does Details show?'],
+    [/(المتابعات|المتابعه)/, 'What are Follow-ups?'],
+    [/(النتائج السابقه|التحقق من النتائج)/, 'What does Check past results show?'],
+    [/(دليل المصطلحات|المصطلحات)/, 'What is the Term guide?'],
+    [/(الاحصاءات|الاحصائيات|الاحصائات)/, 'What does Statistics show?'],
+    [/الرسائل/, 'What does Messages do?'],
+    [/(^|\s)(تصدير|اصدر|صدر|تنزيل|احفظ التقرير|حفظ التقرير|اكسل|excel|pdf|csv)($|\s|[?.,!])/i, 'How do I export my plan?'],
+    [/((ال)?مسار (ال)?جديد|(ال)?بلد (ال)?جديد|(ال)?دوله (ال)?جديده)/, 'How do I create a new route?'],
+    [/(اللغه|العربيه|الانجليزيه|الانكليزيه)/, 'How do I change the language?'],
+    [/(^|\s)(البحث|ابحث)($|\s|[?.,!])/, 'How do I search?'],
+    [/(ارشدني|دليل الاستخدام|المساعده والتعلم|الجولات)/, 'What does Guide me do?'],
+    [/(تعديل الخطه|ادوات التحكم|الاعدادات|تخطيط المسار)/, 'What does Adjust plan do?'],
+    [/(المهام|الاشعارات|الشريط الجانبي|الاختصارات|الجرس)/, 'What are the shortcuts on the right?'],
+  ];
+  const page = pages.find(([pattern]) => pattern.test(text));
+  if (page) return page[1];
+  if (/(اشغال|امتلاء|ممتلئه)/.test(text)) return 'Explain how full the flights are';
+  if (/(التقدير المرجعي|خط الاساس)/.test(text)) return 'Where does the baseline come from?';
+  if (/الافتراضات/.test(text)) return 'What are the current assumptions?';
+  if (/(دقه|دقيق|موثوق)/.test(text)) return 'How accurate is this?';
+  if (/(اتحقق|نتحقق|التحقق|اراجع|الخطوه التاليه|الخطوات التاليه)/.test(text)) return 'What should I check next?';
+  if (/(كيف|اشرح|وضح|لماذا).*(ليالي|الليالي|النتيجه|الخطه)/.test(text)) return 'How were hotel nights calculated?';
+  return raw;
+}
+
+// "I want to set…", "please add…", "can you change…" → the command itself.
+// Questions such as "can you explain…" are left unchanged.
+function pcNormalizePrompt(text) {
+  const stripped = text.replace(/^(?:(?:hey|hi|ok|okay|so)[,!.\s]+)?(?:(?:i\s+(?:want|would like|'d like|wanna|need|wish)\s+(?:you\s+)?(?:to\s+)?|please\s+|kindly\s+|can you\s+|could you\s+|would you\s+|will you\s+|let'?s\s+|let us\s+))+/i, '');
+  return stripped !== text && /^(?:set|change|update|switch|use|try|add|remove|cancel|reduce|increase|decrease|make|assume|move|reset|double|triple|grow|raise|boost)\b/i.test(stripped) ? stripped : text;
+}
+
+// App guide: every line below describes what the app actually shows. Each
+// English line has a matching Arabic entry in the app's dictionary.
+const PC_GUIDE = [
+  ['adjust', /adjust plan|plan controls|the controls|controls panel|settings|plan a route/, [
+    'Plan a route is where you build a plan.',
+    'Open Adjust plan to change it. The controls are in four groups:',
+    '- Market: the departure country and month. Choose + New route for a country without past flights.',
+    '- Flights: extra flights each week, seats on each flight and how full flights are.',
+    '- Event or disruption: extra hotel demand for an event or season, from 0% to 50%.',
+    '- Hotel visitors: travel purpose, passengers ending their trip in Abu Dhabi, the share checking into a hotel and average nights per stay.',
+    'The results update as you change any value. Reset puts the starting values back.']],
+  ['focus', /focus (?:tab|view|page)|focus(?= (?:show|shows|do|does|mean)\b)/, [
+    'Focus shows the outcome of your plan:',
+    '- Four result cards: extra hotel check-ins, extra guest nights, total guest nights and the possible range.',
+    '- A chart of how your plan flows from seats to guest nights.',
+    '- Next steps to check before relying on the result.']],
+  ['target', /target (?:tab|view|page)|target(?= (?:show|shows|do|does)\b)/, [
+    'Target works backwards from the hotel nights you want.',
+    '- Enter nights to add, or a total to reach, or ask in your own words.',
+    '- It shows the extra weekly flights needed, each step from nights back to seats, and whether that is realistic for the route.',
+    '- It also shows how the same target could be reached with no extra flights.',
+    'A button there puts the flights into your plan.']],
+  ['compare', /compare(?: (?:tab|view|page|tools?))?/, [
+    'Compare helps you decide which route option to investigate. Each option is compared with zero extra flights under the same assumptions.',
+    '- Current proposal versus an existing route.',
+    '- Three launch sizes: cautious, standard and expanded.',
+    '- Compare months: the same plan across the year.',
+    '- What if fewer visitors stay in hotels? Tests with lower assumptions.',
+    '- Work backwards from a hotel-night target.',
+    '- The planning decision: a note you can save as a PDF or download as text.',
+    'These are planning comparisons, not airline profitability or booking forecasts.']],
+  ['details', /details (?:tab|view|page)|details(?= (?:show|shows|do|does|mean)\b)/, [
+    'Details traces the assumptions, calculations, flight history and limits behind your plan, in four levels:',
+    '- How the result is calculated.',
+    '- What moves the result most.',
+    '- Where the starting numbers come from.',
+    '- Checks on the method.']],
+  ['followups', /follow[- ]?ups?/, [
+    'Follow-ups helps you check a plan before acting on it. It is saved in this browser.',
+    '- What needs checking: flight demand, hotel capacity and visitor mix.',
+    '- Tasks with an owner or team and a due date.',
+    '- Notes, and a draft email to review and copy into your email app.',
+    '- A decision log: Investigate, Hold or Ready for review.',
+    'Assigning an owner does not send a notification.']],
+  ['mix', /vis[a-z]{0,5} mix|nationalit(?:y|ies)|country bridge/, [
+    'Visitor mix estimates which nationalities may make up the hotel guests on this route.',
+    'It uses past patterns, not a list of confirmed guests.',
+    'Flight records show where a trip started; hotel records show a guest’s nationality. Air2Stay uses both.',
+    'It splits the same hotel estimate across nationalities, so the total does not change.',
+    'Choose Edit mix to change the shares, then Update visitor mix. Reset to estimate puts the original shares back.']],
+  ['validation', /check past results|past results(?: page)?|validation(?: page| results)?|accuracy (?:page|test|score)/, (data) => {
+    const metrics = data.metrics || {};
+    const share = Number.isFinite(metrics.liveChainWmape) ? (metrics.liveChainWmape * 100).toFixed(2) + '%' : null;
+    return ['Check past results shows how close Air2Stay’s estimates were to real hotel arrivals.',
+      ...(Number.isFinite(metrics.trainingMonths) && Number.isFinite(metrics.validationMonths) && metrics.validationPeriod
+        ? [`It learned from ${metrics.trainingMonths} months of older records, then estimated ${metrics.validationMonths} later months it had not used (${metrics.validationPeriod}) and compared them with the actual totals.`] : []),
+      ...(share ? [`The overall weighted error was ${share} of recorded hotel arrivals. Lower is better.`] : []),
+      'The page also shows a longer test and a month-by-month chart.'];
+  }],
+  ['terms', /term guide|glossary|terms page/, [
+    'Term guide explains the words and numbers in Air2Stay in plain language.',
+    'You can search for a term, and print or save the guide as a PDF.',
+    'It also lists what the records don’t tell us, and how privacy and sharing work.']],
+  ['stats', /statistics|stats(?: page)?/, [
+    'Statistics puts your plan in context with charts:',
+    '- Guest nights through the year: your plan against each month’s baseline estimate.',
+    '- Largest departure markets in the selected month.',
+    '- Total seats by month across the included markets.',
+    '- The share of guests outside the 5 largest nationality groups.']],
+  ['messages', /messages(?: page| tab)?|messaging|inbox|ai assist/, [
+    'Messages lets you write, prioritise and keep track of messages to your team and partners.',
+    'Messages are saved in this browser and not emailed.',
+    'Use Inbox, Sent and Drafts, filter by priority, or search.',
+    'When writing, AI Assist is a built-in drafting aid. No external AI service is called; review the text before sending.']],
+  ['export', /export|download(?:ing)?(?: (?:the|my))? (?:plan|report|results|data)|excel|pdf|csv|save (?:the |my )?(?:plan|report|results)/, [
+    'Export, on Plan a route, saves your plan as:',
+    '- An Excel report: dashboard, results, visitors, months and scenarios.',
+    '- A PDF report with charts, ready to print or share.',
+    '- A model-ready CSV: inputs and simulated targets for this route across 12 months.',
+    'In Compare, the planning decision note can be saved as a PDF or downloaded as text.']],
+  ['newRoute', /new route|new country|new market|add a country|country without (?:past )?flights/, [
+    'To plan a country without past flights, open Adjust plan, choose + New route under Departure country, then choose and confirm the country.',
+    'A new route starts from zero. Comparison countries supply starting assumptions only; they do not prove demand.']],
+  ['language', /language|arabic|english|translat/, [
+    'Use the English and العربية buttons at the top to switch the page language.',
+    'I reply in the language you write in, whatever the page language is.']],
+  ['search', /search|guide me|help panel|help (?:&|and) learning|tours?\b/, [
+    'Search at the top finds pages, plan views, controls, countries, months and terms. Press / to jump to it.',
+    'Guide me, the book icon, opens Help & learning with short guides and plain-language answers.']],
+  ['rail', /shortcuts?|side rail|right(?:-hand)? (?:edge|side)|tasks|notifications?|bell/, [
+    'The shortcuts on the right edge open Tasks, Messages, Notifications and Statistics. Drag the dotted handle to move them up or down.',
+    'The bell at the top shows notifications and checks that need attention.']],
+];
+const PC_OVERVIEW = [
+  'Air2Stay estimates how changes to flights into Abu Dhabi could change hotel check-ins and guest nights.',
+  'The pages along the top:',
+  '- Plan a route: build and test a plan for one departure country and month.',
+  '- Visitor mix: see which nationalities may make up the hotel guests.',
+  '- Check past results: see how close past estimates were to real hotel arrivals.',
+  '- Term guide: plain-language definitions of the words and numbers.',
+  '- Statistics: charts that put your plan in context.',
+  '- Messages: write and keep track of messages to your team.',
+  'To start, open Adjust plan on Plan a route, choose a country and month, and change the flights.',
+  'Ask me about any page or view, for example “What does Compare do?”',
+];
+const PC_DEFINITIONS = [
+  ['guest nights?|hotel nights?', () => ['A guest night is one guest staying for one night. One guest staying three nights counts as three guest nights.', 'Guest nights count people, not hotel rooms.']],
+  ['hotel check-?ins?|check-?ins?', () => ['A hotel check-in is a guest arriving to begin a stay at a hotel.']],
+  ['possible range|range|p10|p90', (current, result) => ['The possible range gives lower and higher guides around the main estimate. Read it as a planning guide, not a guaranteed outcome.', `For your plan it is ${pcNumber(result.p10)} – ${pcNumber(result.p90)}.`]],
+  ['matching past records|past records|data support', () => ['Matching past records shows how much flight history exists for this country and month.', '- Several records: three or more.', '- A few records: one or two.', '- No route records: a new route that starts from fallback assumptions.', 'It describes the data available, not forecast accuracy.']],
+  ['load factor|flight occupancy|occupancy|how full (?:a |the )?flights? (?:is|are)', (current) => ['How full a flight is: if 160 of 200 seats are filled, the flight is 80% full.', `Your plan uses ${pcNumber(current.loadFactor * 100, 1)}%.`]],
+  ['passengers ending their trip(?: in abu dhabi)?|p2p(?: share| passengers?)?|point[- ]to[- ]point(?: passengers?)?|trip[- ]ending share', (current) => ['Passengers ending their trip in Abu Dhabi arrive here and do not continue to another destination. A traveller staying here is included; one changing planes is not.', `Your plan uses ${pcNumber(current.p2pShare * 100, 1)}%.`]],
+  ['hotel use|hotel conversion|conversion rate|share checking into a hotel', (current) => ['Hotel use is the share of passengers ending their trip in Abu Dhabi who check into a hotel.', `Your plan uses ${pcNumber(current.conversionRate * 100, 1)}%.`]],
+  ['event or season|event uplift|event adjustment|seasonal uplift|event demand|event', () => ['The event or season control adds extra hotel demand from 0% to 50%. It is your planning assumption, not measured from past events.']],
+];
+
+function pcResultSummary(data, current, result) {
+  const month = data.months[current.month - 1];
+  const records = { Low: 'No route records', Medium: 'A few records', High: 'Several records' }[result.confidence?.label] || 'No route records';
+  const signed = (value) => (Number(value) >= 0 ? '+' : '−') + pcNumber(Math.abs(Number(value)));
+  const lines = [
+    `Here is your current result for ${result.route.origin} in ${month}.`,
+    '',
+    `- Extra hotel check-ins: ${signed(result.delta.hotelCheckins)} compared with a usual ${month}.`,
+    `- Extra guest nights: ${signed(result.delta.guestNights)} compared with a usual ${month}.`,
+    `- Total guest nights: ${pcNumber(result.scenario.guestNights)} (usual: ${pcNumber(result.baseline.guestNights)}).`,
+    `- Possible range: ${pcNumber(result.p10)} – ${pcNumber(result.p90)}. This is a history-based guide, not a guarantee.`,
+    `- Matching past records: ${records}.`,
+    '',
+    `Your settings: ${pcNumber(current.extraFlights, 2)} extra flights a week, about ${pcNumber(current.seatsPerFlight)} seats per flight and ${pcNumber(current.loadFactor * 100, 1)}% of seats filled.`,
+    `Visitors: ${pcNumber(current.p2pShare * 100, 1)}% end their trip in Abu Dhabi, ${pcNumber(current.conversionRate * 100, 1)}% of those use a hotel, staying ${pcNumber(current.averageStay, 2)} nights on average.`,
+  ];
+  if (result.eventUplift) lines.push(`It also includes a +${pcNumber(result.eventUplift * 100, 1)}% increase for an event or season, which you chose.`);
+  if (!result.route.knownMarket) lines.push('This is a new route, so the usual month starts at zero.');
+  lines.push('Ask “How were hotel nights calculated?” for the formula, or open Details for every step.');
+  return lines.join('\n');
+}
+
+function pcGuideReply(data, text, current, result) {
+  if (pcExplicitCommand(text)) return null;
+  const lower = text.toLowerCase().replace(/[’`]/g, "'").replace(/\s+/g, ' ').trim();
+  const asking = /\b(?:what(?:'s| is| are| does| do)|how (?:do|does|can|should|to) (?:i |we )?(?:use|open|find|get|change|switch|create|make|add|export|save|download|start|search)?|(?:can|could) (?:i|we)|is there|do you have|explain|tell me about|describe|summari[sz]e|guide me through|show me|where (?:is|are|can i find|do i find)|what can i do (?:in|with|on)|help me with)\b/;
+  const plain = lower.replace(/[?.!]+$/, '');
+  if (/\b(?:navigate|navigation|get around|where (?:do|should|can) i (?:start|begin)|getting started|get started|overview|tour of the app|what (?:is|does) (?:air2stay|this app|this tool|the app)(?: do)?|what can (?:this app|the app|air2stay) do|which pages|what pages|main (?:pages|features|sections)|walk me through the app)\b/.test(lower)
+      || /^how (?:do|can|should) (?:i|we) (?:use|start|begin)(?: (?:the|this) (?:app|tool|site|website)| air2stay| it)?$/.test(plain)) return PC_OVERVIEW.join('\n');
+  for (const [term, linesFor] of PC_DEFINITIONS) {
+    const definition = new RegExp(`^(?:what(?:'s| is| are)|define|meaning of|explain the term)\\s+(?:a |an |the )?(?:${term})s?(?: control)?$|^what (?:does|do) (?:a |an |the )?(?:${term})s? mean$`);
+    if (definition.test(plain)) return linesFor(current, result).join('\n');
+  }
+  // Pages and views first, so "What does Check past results show?" is not
+  // mistaken for a request to explain the current result.
+  for (const [, pattern, lines] of PC_GUIDE) {
+    const exact = new RegExp(`^(?:the )?(?:${pattern.source})(?: (?:tab|view|page))?$`);
+    if (exact.test(plain) || (asking.test(lower) && new RegExp(`\\b(?:${pattern.source})`).test(lower))) {
+      return (typeof lines === 'function' ? lines(data) : lines).join('\n');
+    }
+  }
+  if ((/\b(?:explain|summari[sz]e|summary|interpret|break down|walk me through|tell me about|what (?:does|do))\b/.test(lower) && /\b(?:result|results|outcome|numbers|cards|estimate|my plan|this plan|the plan)\b/.test(lower)
+      && !/\b(?:assumptions?|baseline|range|records?|calculat\w*|formula|accura\w*|nights?|flights?|visitor|mix|compare|target|export)\b/.test(lower))
+      || /^(?:explain|summari[sz]e)(?: it| this)?$/.test(plain) || /^what am i looking at$/.test(plain)) {
+    return pcResultSummary(data, current, result);
+  }
+  return null;
+}
+
+export function planningChatReply(data, prompt, current, result, proposalSummary = null) {
+  const text = pcNormalizePrompt(String(prompt || '').trim());
+  const lower = text.toLowerCase();
   if (!text) return pcAnswer('Ask about the current plan, or name a value you want to change.');
+  if (text.length > 600) return pcAnswer('That message is too long. Please ask one short question at a time.');
+  if (pcTargetIntent(lower)) {
+    const question = parseTargetQuestion(data, text);
+    if (question) {
+      try { return pcTargetReply(data, question, current); }
+      catch (error) { return pcAnswer(`I couldn't work out that target. ${error.message} The plan has not changed.`); }
+    }
+  }
+  const guide = pcGuideReply(data, text, current, result);
+  if (guide) return pcAnswer(guide);
   if (/^(?:please\s+)?(?:reset(?:\s+(?:(?:the|my|this)\s+)?(?:plan|scenario))?|start over)[.!]?$/i.test(text)) return assistantReply(data, 'reset', current, result);
   if (/\b(?:what if|would happen if)\b/.test(lower)) return pcAnswer('I can try that as a scenario. To apply it, give a direct instruction such as “Set flight occupancy to 80%.” Your current plan has not changed.');
   const explicit = pcExplicitCommand(text);
@@ -132,7 +545,7 @@ export function planningChatReply(data, prompt, current, result, proposalSummary
   }
   if (/\b(?:next steps?|next action|check next|check first|what should .*(?:check|do)|what .*investigate|who (?:can|should)|priorit(?:y|ies)|pending|overdue|red|amber|green)\b/.test(lower)) return pcNextAction(data, current, result, proposalSummary);
   if (/\b(?:what (?:can|should) i ask|what can you|help me|how (?:do|can) i use|capabilit|what do you do)\b/.test(lower)) return pcAnswer('I can explain this proposal and help change its assumptions.\n\n- Ask “How were hotel nights calculated?” or “What should I check first?”\n- Try “Set flight occupancy to 80%” or “Add 5 flights from France in December.”\n- Use Proposal for checks, comments and stakeholder drafts. Open-ended AI answers use your current plan and recent chat; the app’s calculation engine supplies the numbers.');
-  if (/\b(?:assumptions?|inputs?|starting values)\b/.test(lower) && !/\b(?:why|comparison|peer|country)\b/.test(lower)) return pcAnswer(`The current proposal is ${result.route.origin} in ${data.months[current.month - 1]}.\n\n- Flights: ${pcNumber(current.extraFlights, 6)} extra each week, ${pcNumber(current.seatsPerFlight, 6)} seats per flight, ${pcPercent(current.loadFactor)} full.\n- Visitors: ${pcPercent(current.p2pShare)} end their trip here; ${pcPercent(current.conversionRate)} of those use hotels.\n- Stay: ${pcNumber(current.averageStay, 6)} nights on average; event uplift ${pcPercent(current.eventUplift || 0)}. These are planning assumptions. See Details for the calculation and source records.`);
+  if (/\b(?:assumptions?|inputs?|starting values)\b/.test(lower) && !/\b(?:why|comparison|peer|country)\b/.test(lower)) return pcAnswer(`The current proposal is ${result.route.origin} in ${data.months[current.month - 1]}.\n\n- Flights: ${pcNumber(current.extraFlights, 2)} extra each week, about ${pcNumber(current.seatsPerFlight)} seats per flight, ${pcNumber(current.loadFactor * 100, 1)}% full.\n- Visitors: ${pcNumber(current.p2pShare * 100, 1)}% end their trip here; ${pcNumber(current.conversionRate * 100, 1)}% of those use hotels.\n- Stay: ${pcNumber(current.averageStay, 2)} nights on average; event uplift ${pcNumber((current.eventUplift || 0) * 100, 1)}%. These are planning assumptions. See Details for the calculation and source records.`);
   if (/\b(?:hotel|guest)\s+nights?\b|\bnights?\s+per\s+(?:hotel\s+)?stay\b/.test(lower)) {
     return pcAnswer(`Hotel nights are estimated hotel arrivals multiplied by average nights per stay.\n\n- This plan: about ${pcNumber(result.scenario.hotelCheckins)} hotel arrivals × ${pcNumber(current.averageStay, 6)} nights = ${pcNumber(result.scenario.guestNights)} guest nights. Displayed values are rounded.\n- That is ${pcSigned(result.delta.guestNights)} guest nights compared with the baseline estimate based on past flight records.${!result.route.knownMarket ? ' The new route starts from zero.' : ''}\n- Guest nights count nights spent by people, not hotel rooms.${result.eventUplift ? ' The arrivals and nights already include your ' + pcPercent(result.eventUplift) + ' event assumption.' : ''}`);
   }

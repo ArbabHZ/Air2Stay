@@ -2213,3 +2213,86 @@ html[dir="rtl"] #scenarioName { text-align: end; }
   #planPrintSheet .report-notes ul { padding-inline-start: 14pt; margin: 0; }
   #planPrintSheet .report-notes li { margin-block-end: 2pt; }
 }
+
+/* Assistant: gold "Ask Air2Stay" button in the bottom-right corner on every screen. */
+.help-chat-bubble { position:fixed; z-index:41; inset-inline-end:calc(var(--team-rail-width, 44px) + 16px); bottom:20px; display:grid; place-items:center; width:58px; height:58px; padding:0; border:1px solid #f6dc95; border-radius:50%; color:#15182b; background:linear-gradient(135deg,#f6dc95 0%,#f2c66d 55%,#e8a24f 100%); box-shadow:0 10px 28px #050a18cc, 0 0 0 1px #c9a84c55; cursor:pointer; animation:help-chat-glow 2.4s ease-out 3; transition:transform .15s ease, box-shadow .15s ease; }
+.help-chat-bubble:hover { transform:translateY(-2px); box-shadow:0 14px 32px #050a18cc, 0 0 0 4px #f2d58a40; }
+.help-chat-bubble svg { width:27px; height:27px; }
+.help-chat-bubble:focus-visible { outline:3px solid #fff6da; outline-offset:3px; }
+body.help-chat-open .help-chat-bubble { display:none; }
+@keyframes help-chat-glow { 0% { box-shadow:0 10px 28px #050a18cc, 0 0 0 0 #f2d58a99; } 70% { box-shadow:0 10px 28px #050a18cc, 0 0 0 14px #f2d58a00; } 100% { box-shadow:0 10px 28px #050a18cc, 0 0 0 0 #f2d58a00; } }
+@media (prefers-reduced-motion:reduce) { .help-chat-bubble { animation:none; transition:none; } }
+.help-chat { position:fixed; z-index:42; inset-inline-end:calc(var(--team-rail-width, 44px) + 16px); bottom:20px; display:flex; flex-direction:column; width:min(390px, calc(100vw - 32px)); height:min(600px, calc(100dvh - var(--header-height, 64px) - 32px)); border:1px solid #c9a84c99; border-radius:16px; background:#111933; box-shadow:0 18px 48px #03071299, 0 0 0 1px #f2d58a1f; overflow:hidden; color:#f5efe3; }
+.help-chat[hidden] { display:none; }
+.help-chat-header { display:flex; justify-content:space-between; align-items:flex-start; gap:10px; padding:14px 12px 12px 16px; background:linear-gradient(135deg,#f6dc95 0%,#f2c66d 55%,#e8a24f 100%); color:#15182b; }
+.help-chat-header h2 { margin:0; font-size:15px; color:#15182b; }
+.help-chat-header p { margin:3px 0 0; font-size:11.5px; color:#3b3220; line-height:1.4; }
+.help-chat-tools { display:flex; gap:4px; flex-shrink:0; }
+.help-chat-tools button { display:grid; place-items:center; width:30px; height:30px; padding:0; border:0; border-radius:8px; color:#15182b; background:transparent; cursor:pointer; font-size:20px; line-height:1; }
+.help-chat-tools button svg { width:16px; height:16px; }
+.help-chat-tools button:hover, .help-chat-tools button:focus-visible { background:#15182b1f; }
+.help-chat-tools button:focus-visible { outline:2px solid #15182b; outline-offset:-2px; }
+.help-chat-log { flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:10px; padding:14px; overscroll-behavior:contain; }
+.help-chat-message { max-width:88%; padding:9px 12px; border-radius:12px; font-size:13px; line-height:1.55; overflow-wrap:anywhere; }
+.help-chat-message.bot { align-self:flex-start; background:#1c2545; border:1px solid #c9a84c45; border-bottom-left-radius:4px; color:#ece6d8; }
+.help-chat-message.user { align-self:flex-end; background:linear-gradient(135deg,#f6dc95,#f2c66d); color:#15182b; border-bottom-right-radius:4px; }
+.help-chat-message p { margin:0; }
+.help-chat-message p + p, .help-chat-message p + ul, .help-chat-message ul + p { margin-top:7px; }
+.help-chat-message ul { margin:6px 0 0; padding-inline-start:18px; }
+.help-chat-message li + li { margin-top:4px; }
+.help-chat-message strong { color:#fff; }
+.help-chat-starters { display:flex; gap:6px; overflow-x:auto; padding:8px 14px 2px; scrollbar-width:none; }
+.help-chat-starters button { flex-shrink:0; padding:6px 10px; border:1px solid #c9a84c70; border-radius:100px; background:#1c2545; color:#f2d58a; font-size:12px; cursor:pointer; white-space:nowrap; }
+.help-chat-starters button:hover, .help-chat-starters button:focus-visible { background:#2a3765; }
+.help-chat-form { display:flex; gap:8px; padding:10px 14px 6px; }
+.help-chat-form input { flex:1; min-width:0; padding:10px 12px; border:1px solid #c9a84c66; border-radius:9px; background:#0d1428; color:#f5efe3; font-size:13px; }
+.help-chat-form input:focus-visible { outline:2px solid #f2d58a; outline-offset:0; border-color:transparent; }
+.help-chat-form button { display:grid; place-items:center; width:40px; padding:0; border:0; border-radius:9px; background:#f2d58a; color:#15182b; cursor:pointer; }
+.help-chat-form button svg { width:18px; height:18px; }
+.help-chat-note { margin:0; padding:0 14px 12px; font-size:11px; line-height:1.45; color:#93a6c6; }
+@media (max-width:560px) {
+  .help-chat-bubble { inset-inline-end:calc(var(--team-rail-width, 38px) + 10px); bottom:14px; width:54px; height:54px; }
+  .help-chat { inset-inline:8px; bottom:8px; width:auto; height:min(78dvh, calc(100dvh - 24px)); }
+}
+
+/* Target view: work back from a hotel-night target to the flights needed. */
+body.target-mode #scenarioResults { display:none !important; }
+.target-ask { display:flex; gap:12px; align-items:end; flex-wrap:wrap; }
+.target-ask .planning-field { flex:1 1 320px; max-width:none; margin-bottom:0; }
+.target-ask button { background:#1c2545; color:#f5efe3; border:1px solid rgba(201,168,76,.45); padding:10px 18px; border-radius:7px; cursor:pointer; font-weight:600; }
+#targetAskStatus:empty { display:none; }
+.target-workspace .target-controls { margin-top:4px; }
+.target-headline { display:flex; justify-content:space-between; gap:16px; align-items:center; flex-wrap:wrap; }
+.target-big { display:block; font-size:30px; line-height:1.15; color:#f2d58a; }
+.target-headline p { color:#bdd4dd; font-size:13px; line-height:1.6; margin:6px 0 0; }
+.target-actions { display:grid; gap:6px; justify-items:end; text-align:right; }
+.target-actions small { color:#aac3cc; font-size:12px; max-width:260px; line-height:1.5; }
+#targetWorkspace button.feature-primary { background:#f2d58a; border:1px solid #f2d58a; color:#15182b; font-weight:750; padding:10px 16px; border-radius:7px; cursor:pointer; }
+.target-realism { margin:16px 0 0; padding:10px 14px; border-left:3px solid #8fb3ff; background:#12313c; color:#d6e9ec; font-size:13px; line-height:1.6; }
+.target-realism.target-small { border-left-color:#46d4b8; }
+.target-realism.target-moderate { border-left-color:#e8b281; }
+.target-realism.target-large, .target-realism.target-very-large { border-left-color:#ef8a7a; }
+.target-chain { list-style:none; margin:14px 0 0; padding:0; }
+.target-step { display:grid; grid-template-columns:minmax(0,1.3fr) minmax(0,1.3fr) auto; gap:12px; align-items:baseline; padding:11px 14px; border-left:2px solid #34586a; }
+.target-step + .target-step { border-top:1px solid #23404f; }
+.target-op { color:#e8b281; font-size:12px; }
+.target-label { color:#d2e7ec; font-size:13px; }
+.target-step strong { color:#f0f9fa; font-size:16px; font-variant-numeric:tabular-nums; text-align:right; }
+.target-step-final { background:#12313c; border-left-color:#f2d58a; }
+.target-step-final strong { color:#f2d58a; font-size:20px; }
+@media (max-width:760px) {
+  .target-step { grid-template-columns:1fr auto; }
+  .target-op { grid-column:1 / -1; }
+  .target-actions { justify-items:start; text-align:left; }
+  .target-workspace .launch-grid { grid-template-columns:1fr; }
+}
+
+/* Export language picker (export menu, decision note, Term guide print). */
+.export-language { display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap; color:#c6bfae; font-size:12px; }
+.export-language-options { display:inline-flex; flex:none; border:1px solid #c9a84c80; border-radius:8px; overflow:hidden; }
+.export-language button[data-export-lang] { display:inline-block; width:auto; min-width:0; min-height:0; margin:0; padding:5px 11px; border:0; border-radius:0; background:transparent; color:#f5efe3; font:inherit; font-size:12px; line-height:1.3; text-align:center; cursor:pointer; }
+.export-language button[data-export-lang] + button[data-export-lang] { border-inline-start:1px solid #c9a84c80; }
+.export-language button[data-export-lang][aria-pressed="true"] { background:#f2d58a; color:#15182b; font-weight:700; }
+.export-language button[data-export-lang]:focus-visible { outline:2px solid #f2d58a; outline-offset:-2px; }
+.export-choices .export-language { padding:4px 4px 8px; margin-bottom:2px; border-bottom:1px solid #34466c; }
+.decision-note-actions .export-language, .glossary-tools .export-language { justify-content:flex-start; }
