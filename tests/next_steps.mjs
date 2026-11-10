@@ -272,4 +272,36 @@ for (const text of ['أين بلد المغادرة؟', 'ماذا لو أضفن�
   assert.ok(!whatIf(ar(text)).startsWith('Tell me the final value'), text);
 }
 
+// 17. Compare with an earlier result from this session.
+const compareAsk = (text, history, now = base) => planningChatReply(data, text, now, runScenario(data, now), null, { where: { view: 'scenarioView', mode: 'focus' }, history }).text;
+const fiveFlights = { ...base, extraFlights: 5 };
+const history = { previous: base, first: base, count: 2 };
+const expectedCompare = ['Compared with your previous result:',
+  '- Extra flights each week: 3 → 5',
+  `- Extra hotel check-ins: ${fmt(planningMetrics(data, base).incremental.hotelCheckins)} → ${fmt(planningMetrics(data, fiveFlights).incremental.hotelCheckins)}`,
+  `- Extra guest nights: ${fmt(planningMetrics(data, base).incremental.guestNights)} → ${fmt(planningMetrics(data, fiveFlights).incremental.guestNights)}`,
+  `- Total guest nights: ${fmt(result.scenario.guestNights)} → ${fmt(runScenario(data, fiveFlights).scenario.guestNights)}`, '',
+  `That is about ${fmt(runScenario(data, fiveFlights).scenario.guestNights - result.scenario.guestNights)} more guest nights than the earlier result.`].join('\n');
+for (const question of ['can you compare the current and the previous results', 'can you compare it now?', 'What changed?', 'compare with the previous result', 'How does this compare to before?']) {
+  assert.equal(compareAsk(question, history, fiveFlights), expectedCompare, question);
+}
+assert.ok(compareAsk('compare with my first result', { previous: fiveFlights, first: base, count: 3 }, { ...base, extraFlights: 7 }).startsWith('Compared with your first result in this session:\n- Extra flights each week: 3 → 7\n'));
+assert.ok(compareAsk('compare it with the previous one', { previous: fiveFlights, first: base, count: 3 }, { ...base, extraFlights: 7 }).endsWith('Ask “Compare with my first result” to compare with where you started.'));
+assert.equal(compareAsk('What changed?', { previous: null, first: null, count: 1 }), 'There is no earlier result to compare with yet.\nChange the plan, then ask again; I compare with the result just before the change.');
+const france = inputsFor(routeOf('FRANCE', 5));
+const crossRoute = compareAsk('compare with the previous result', { previous: france, first: france, count: 2 });
+assert.ok(crossRoute.startsWith('Compared with your previous result:\n- Departure country: France → India\n- Month: May → December\n'), crossRoute);
+const lower = { ...fiveFlights, loadFactor: 0.7 };
+assert.ok(compareAsk('what changed', { previous: fiveFlights, first: base, count: 3 }, lower).includes('fewer guest nights than the earlier result.'));
+// Not compare questions: the Compare tab and route comparisons keep their answers.
+for (const text of ['What does Compare do?', 'How does this page work?', 'Explain the charts in Compare']) {
+  assert.ok(!compareAsk(text, history).startsWith('Compared with'), text);
+}
+assert.equal(ar('قارن بالنتيجة السابقة'), 'Compare with the previous result');
+assert.equal(ar('هل يمكنك المقارنة الآن؟'), 'Compare with the previous result');
+assert.equal(ar('قارن بنتيجتي الأولى'), 'Compare with my first result');
+assert.equal(ar('ماذا تغير؟'), 'What changed?');
+assert.equal(ar('ما الذي تغير؟'), 'What changed?');
+assert.equal(ar('ما هي المقارنة؟'), 'What does Compare do?');
+
 console.log('next steps tests passed');
