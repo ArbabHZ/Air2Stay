@@ -302,14 +302,14 @@
      <form id="messageForm" class="feature-form">
        <fieldset><legend data-i18n="recipients">Recipients</legend><div id="recipientChips" class="recipient-chips"></div></fieldset>
        <div class="feature-form-grid"><label><span data-i18n="priority">Priority</span><select name="priority"><option data-i18n="normal">Normal</option><option data-i18n="high">High</option><option data-i18n="low">Low</option></select></label><label><span data-i18n="tone">Tone</span><select name="tone"><option data-i18n="professional">Professional</option><option data-i18n="friendly">Friendly</option><option data-i18n="direct">Direct</option></select></label></div>
-       <label><span data-i18n="subject">Subject</span><input name="subject" required maxlength="140"></label>
+       <label><span data-i18n="subject">Subject</span><input name="subject" required maxlength="140" dir="auto"></label>
        <div class="feature-button-row">
          <button type="button" id="draftAssist" data-i18n="ai_assist">AI Assist</button>
          <button type="button" id="geminiDraft" aria-describedby="geminiDraftNote" hidden data-i18n="draft_with_gemini">Draft with Gemini</button>
        </div>
        <small data-i18n="ai_assist_builds_a">AI Assist builds a draft offline from your subject and current plan.</small>
-       <small id="geminiDraftNote" hidden data-i18n="draft_with_gemini_sends">Draft with Gemini sends only the subject to Google. Review the reply before using it.</small>
-       <label><span data-i18n="message">Message</span><textarea name="body" rows="6" maxlength="4000"></textarea></label>
+       <small id="geminiDraftNote" hidden data-i18n="draft_with_gemini_sends">Draft with Gemini sends your subject and selected language to Google. Review the reply before using it.</small>
+       <label><span data-i18n="message">Message</span><textarea name="body" rows="6" maxlength="4000" dir="auto"></textarea></label>
        <label id="attachmentDrop"><span data-i18n="drop_attachments_here_or">Drop attachments here or choose files</span><input type="file" id="attachmentFiles" multiple><small data-i18n="only_file_names_and">Only file names and sizes are saved.</small></label>
        <div class="feature-form-grid"><label><span data-i18n="link">Link</span><input id="attachmentUrl" type="text" inputmode="url" placeholder="https://example.com"></label><button type="button" id="addAttachmentUrl" data-i18n="add_url">Add URL</button></div>
        <ul id="attachmentList"></ul><p id="composeStatus" role="status"></p>

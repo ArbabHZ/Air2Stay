@@ -3111,16 +3111,22 @@ function setupFeaturePack() {
   $("#saveMessageDraft").addEventListener("click",()=>saveMessage("drafts"));
   $("#draftAssist").addEventListener("click",()=>{
     const subject = field("subject").value.trim();
-    if (!subject) { $("#composeStatus").textContent = "Enter a subject for the draft first."; field("subject").focus(); return; }
+    if (!subject) { $("#composeStatus").textContent = t("draft_subject_required"); field("subject").focus(); return; }
     const context = currentProposalContext;
     const tone = field("tone").value;
-    const greeting = tone === "Friendly" ? "Hi team!" : tone === "Direct" ? "Team," : "Hello team,";
-    const ask = tone === "Friendly" ? "Could you share your thoughts when you get a chance?" : tone === "Direct" ? "Please review the assumptions and flag any changes." : "Please review the plan assumptions and share any feedback.";
-    const summary = context ? `The current proposal covers ${context.result.route.origin} in ${data.months[context.inputs.month-1]}. Compared with the baseline, it estimates ${formatSigned(context.result.delta.hotelCheckins)} hotel check-ins and ${formatSigned(context.result.delta.guestNights)} guest nights.` : "The plan results can be added once its inputs are valid.";
-    const draft = greeting + "\n\n" + subject + "\n\n" + summary + "\n\n" + ask + (tone === "Direct" ? "" : "\n\nThanks,\nAir2Stay planning team");
+    const greeting = t(tone === "Friendly" ? "draft_greeting_friendly" : tone === "Direct" ? "draft_greeting_direct" : "draft_greeting");
+    const ask = t(tone === "Friendly" ? "draft_ask_friendly" : tone === "Direct" ? "draft_ask_direct" : "draft_ask");
+    const summary = context ? t("draft_plan_summary", {
+      country: context.result.route.origin,
+      month: data.months[context.inputs.month - 1],
+      checkins: formatSigned(context.result.delta.hotelCheckins),
+      nights: formatSigned(context.result.delta.guestNights),
+    }) : t("draft_plan_unavailable");
+    const paragraphs = [greeting, subject, summary, ask];
+    if (tone !== "Direct") paragraphs.push(t("draft_signoff"));
     const body = field("body");
-    body.value = (body.value.trim() ? body.value.trim() + "\n\n" + draft : draft).slice(0,4000);
-    $("#composeStatus").textContent = "Draft text added. Review it before sending.";
+    body.value = [body.value.trim(), ...paragraphs].filter(Boolean).join("\n\n").slice(0, 4000);
+    $("#composeStatus").textContent = t("draft_ready");
   });
 
   const gemini = window.__AIR2STAY_LOCAL_GEMINI_DRAFTS__;
@@ -3135,7 +3141,7 @@ function setupFeaturePack() {
       const subjectField = field("subject");
       const subject = subjectField.value.trim();
       if (!subject) {
-        status.textContent = "Enter a subject first.";
+        status.textContent = t("draft_subject_required");
         subjectField.focus();
         return;
       }
@@ -3144,12 +3150,12 @@ function setupFeaturePack() {
       const request = new AbortController();
       pending = request;
       geminiButton.disabled = true;
-      status.textContent = "Drafting with Gemini…";
+      status.textContent = t("drafting_with_gemini");
       try {
         const response = await fetch(gemini.url, {
           method: "POST",
           headers: {"Content-Type": "application/json", "X-Air2Stay-Token": gemini.token},
-          body: JSON.stringify({subject}),
+          body: JSON.stringify({subject, language: uiLanguage}),
           signal: AbortSignal.any([request.signal, AbortSignal.timeout(45000)]),
         });
         const payload = await response.json();
@@ -3161,7 +3167,7 @@ function setupFeaturePack() {
           return;
         }
         body.value = [startingBody.trim(), draft].filter(Boolean).join("\n\n").slice(0, 4000);
-        status.textContent = "Gemini draft ready to review.";
+        status.textContent = t("gemini_draft_ready");
         body.focus();
       } catch (error) {
         if (!request.signal.aborted && compose.open) {
@@ -3576,7 +3582,20 @@ const I18N = (() => {
     ai_assist: ["AI Assist", "مساعد الصياغة"],
     draft_with_gemini: ["Draft with Gemini", "صياغة مسودة باستخدام Gemini"],
     ai_assist_builds_a: ["AI Assist builds a draft offline from your subject and current plan.", "ينشئ مساعد الصياغة مسودة محليًا بالاستناد إلى موضوعك وخطتك الحالية."],
-    draft_with_gemini_sends: ["Draft with Gemini sends only the subject to Google. Review the reply before using it.", "يرسل هذا الخيار الموضوع فقط إلى Google. راجع المسودة قبل استخدامها."],
+    draft_with_gemini_sends: ["Draft with Gemini sends your subject and selected language to Google. Review the reply before using it.", "يرسل هذا الخيار موضوع الرسالة واللغة المختارة إلى Google. راجع المسودة قبل استخدامها."],
+    draft_subject_required: ["Enter a subject for the draft first.", "أدخل موضوع الرسالة أولًا."],
+    draft_greeting: ["Hello team,", "السلام عليكم،"],
+    draft_greeting_friendly: ["Hi team!", "مرحبًا جميعًا،"],
+    draft_greeting_direct: ["Team,", "فريق العمل،"],
+    draft_ask: ["Please review the plan assumptions and share any feedback.", "يرجى مراجعة افتراضات الخطة ومشاركة ملاحظاتكم."],
+    draft_ask_friendly: ["Could you share your thoughts when you get a chance?", "يسعدنا سماع ملاحظاتكم عندما يتسنى لكم ذلك."],
+    draft_ask_direct: ["Please review the assumptions and flag any changes.", "يرجى مراجعة الافتراضات والإشارة إلى أي تعديلات مطلوبة."],
+    draft_plan_summary: ["The current proposal covers {country} in {month}. Compared with the baseline, it estimates {checkins} hotel check-ins and {nights} guest nights.", "يتعلق المقترح الحالي بسوق المغادرة {country} في شهر {month}. وبالمقارنة مع التقدير المرجعي، يُقدّر المقترح تغيّر تسجيلات الوصول إلى الفنادق بمقدار {checkins}، وتغيّر ليالي النزلاء بمقدار {nights}."],
+    draft_plan_unavailable: ["The plan results can be added once its inputs are valid.", "يمكن إضافة نتائج الخطة بعد إدخال قيم صالحة."],
+    draft_signoff: ["Thanks,\nAir2Stay planning team", "مع الشكر،\nفريق التخطيط في Air2Stay"],
+    draft_ready: ["Draft text added. Review it before sending.", "أُضيفت المسودة. راجعها قبل الإرسال."],
+    drafting_with_gemini: ["Drafting with Gemini…", "جارٍ إعداد المسودة باستخدام Gemini…"],
+    gemini_draft_ready: ["Gemini draft ready to review.", "مسودة Gemini جاهزة للمراجعة."],
     message: ["Message", "الرسالة"],
     drop_attachments_here_or: ["Drop attachments here or choose files", "أسقط المرفقات هنا أو اختر الملفات"],
     only_file_names_and: ["Only file names and sizes are saved.", "تُحفظ أسماء الملفات وأحجامها فقط."],
