@@ -323,6 +323,11 @@ export function arabicPromptToEnglish(data, prompt) {
     ].find(([pattern]) => pattern.test(text));
     if (places) return places[1];
   }
+  // "قارن بالنتيجة السابقة", "ماذا تغير؟": compare with an earlier result.
+  if (/(^|\s)(ماذا|ما الذي|ما اللذي|شو) (تغير|تغيرت)/.test(text)) return 'What changed?';
+  if (/(قارن|قارنها|قارنه|قارني|مقارنه|بالمقارنه)/.test(text) && /(السابق|السابقه|قبل|الماضي|الماضيه|الاولي|الاول|البدايه|الاصليه|الان|مجددا)/.test(text)) {
+    return /(الاولي|الاول|البدايه|الاصليه)/.test(text) ? 'Compare with my first result' : 'Compare with the previous result';
+  }
   // "ماذا لو …": a what-if on the open plan.
   if (/(ماذا لو|ماذا سيحدث|ما الذي سيحدث|ماذا يحدث|ماذا يصير|لو افترضنا|افترض ان)/.test(text)) {
     const flightCount = text.match(/(\d+)\s*(رحله|رحلات)/)?.[1] || (/رحلتين|رحلتان/.test(text) ? '2' : /رحله واحده/.test(text) ? '1' : null);
@@ -945,8 +950,44 @@ export function pcFixTypos(data, text) {
   return fixes.length ? { text: fixed, fixes } : null;
 }
 
+// ---------------------------------------------------------------------------
+// Compare the open plan with an earlier result from this session.
+const PC_COMPARE_INTENT = /\b(?:compare|comparison|compared|versus|vs)\b[^.?!]*\b(?:previous|last|earlier|before|prior|old|original|first|start(?:ed|ing)?|beginning)\b|\b(?:previous|earlier|prior|old) (?:result|results|plan|one|version|numbers?)\b|\bwhat (?:has |have )?changed\b|\bwhat did (?:that|this|it|the change) (?:do|change)\b|^(?:(?:can|could|would) you |please )*compare (?:it|this|them|that|now|again)\b/;
+const PC_COMPARE_FIRST = /\b(?:first|original|start(?:ed|ing)?|beginning)\b/;
+
+function pcPlanNumbers(data, inputs) {
+  const run = runScenario(data, inputs);
+  const metrics = planningMetrics(data, inputs);
+  return { origin: run.route.origin, month: Number(inputs.month), checkins: metrics.incremental.hotelCheckins, added: metrics.incremental.guestNights, total: run.scenario.guestNights };
+}
+
+/** Exported for tests: compares the open plan with history.previous or history.first. */
+export function pcCompareReply(data, lower, current, history) {
+  const first = PC_COMPARE_FIRST.test(lower);
+  const before = first ? history?.first : history?.previous;
+  if (!before) return ['There is no earlier result to compare with yet.', 'Change the plan, then ask again; I compare with the result just before the change.'].join('\n');
+  let then, now;
+  try { then = pcPlanNumbers(data, before); now = pcPlanNumbers(data, current); }
+  catch { return 'There is no earlier result to compare with yet.'; }
+  const lines = [first ? 'Compared with your first result in this session:' : 'Compared with your previous result:'];
+  if (then.origin !== now.origin) lines.push(`- Departure country: ${then.origin} → ${now.origin}`);
+  if (then.month !== now.month) lines.push(`- Month: ${data.months[then.month - 1]} → ${data.months[now.month - 1]}`);
+  for (const [key, label, format] of PC_WHATIF_FIELDS) {
+    if (Number.isFinite(Number(before[key])) && Number.isFinite(Number(current[key])) && format(before[key]) !== format(current[key])) lines.push(`- ${label}: ${format(before[key])} → ${format(current[key])}`);
+  }
+  lines.push(`- Extra hotel check-ins: ${pcNumber(then.checkins)} → ${pcNumber(now.checkins)}`,
+    `- Extra guest nights: ${pcNumber(then.added)} → ${pcNumber(now.added)}`,
+    `- Total guest nights: ${pcNumber(then.total)} → ${pcNumber(now.total)}`, '');
+  const difference = Math.round(now.total - then.total);
+  lines.push(difference > 0 ? `That is about ${pcNumber(difference)} more guest nights than the earlier result.`
+    : difference < 0 ? `That is about ${pcNumber(-difference)} fewer guest nights than the earlier result.` : 'Guest nights are about the same as the earlier result.');
+  if (!first && history.first && Number(history.count) > 2) lines.push('Ask “Compare with my first result” to compare with where you started.');
+  return lines.join('\n');
+}
+
 function pcExtrasReply(text, lower, extras, data, current, result) {
   if (!extras) return null;
+  if (extras.history && PC_COMPARE_INTENT.test(lower)) return pcCompareReply(data, lower, current, extras.history);
   const plain = lower.replace(/[?.!]+$/, '').trim();
   if (/\b(?:graph|graphs|chart|charts|plot|plots|diagram|diagrams|visuals?)\b/.test(lower) && !pcExplicitCommand(text)) return pcChartsReply(lower, extras.where);
   if (extras.missing && /\b(?:missing|left to do|still (?:need|to do|have to)|not (?:done|finished|checked)|haven'?t (?:done|checked|finished)|remaining|incomplete|what else (?:is|do i|should|needs?))\b/.test(lower)) return pcMissingReply(extras.missing);

@@ -1798,6 +1798,41 @@ function setupNextSteps() {
   });
 }
 
+// Settled plan results from this session, for "compare with the previous result".
+// A change is kept once it has stayed for a moment, so values passed through
+// while typing ("1" on the way to "15") are not treated as results.
+let planHistory = [];
+let planHistoryPending = null;
+let planHistoryTimer = null;
+const PLAN_HISTORY_SETTLE_MS = 1200;
+const PLAN_HISTORY_LIMIT = 20;
+
+function planHistoryKey(inputs) {
+  return JSON.stringify(inputs);
+}
+
+function commitPlanHistory(entry) {
+  if (!entry || planHistory.at(-1)?.key === entry.key) return;
+  planHistory.push(entry);
+  // The first result stays, so "compare with my first result" keeps working.
+  if (planHistory.length > PLAN_HISTORY_LIMIT) planHistory = [planHistory[0], ...planHistory.slice(-(PLAN_HISTORY_LIMIT - 1))];
+}
+
+function recordPlanHistory(inputs) {
+  const snapshot = JSON.parse(JSON.stringify(inputs));
+  const entry = { key: planHistoryKey(snapshot), inputs: snapshot };
+  if (!planHistory.length || typeof setTimeout !== "function") { commitPlanHistory(entry); return; }
+  planHistoryPending = entry;
+  if (typeof clearTimeout === "function") clearTimeout(planHistoryTimer);
+  planHistoryTimer = setTimeout(() => { commitPlanHistory(planHistoryPending); planHistoryPending = null; }, PLAN_HISTORY_SETTLE_MS);
+}
+
+function planHistoryForChat() {
+  const key = planHistoryKey(JSON.parse(JSON.stringify(state)));
+  const earlier = planHistory.filter((entry) => entry.key !== key);
+  return { previous: earlier.at(-1)?.inputs || null, first: planHistory[0] && planHistory[0].key !== key ? planHistory[0].inputs : null, count: planHistory.length + (planHistory.at(-1)?.key === key ? 0 : 1) };
+}
+
 // What the assistant needs about the plan, the page and the follow-ups.
 function helpChatExtras() {
   const summary = proposalWorkspace?.contextSummary?.() || null;
@@ -1806,6 +1841,7 @@ function helpChatExtras() {
     nextSteps: next ? { readiness: next.plan.readiness, steps: next.steps } : null,
     missing: summary && next ? { checks: summary.checks || [], decisionLogged: (summary.decisions || []).length > 0, total: next.plan.readiness.total } : null,
     where: { view: $(".nav-tab.active")?.dataset.view || "scenarioView", mode: $(".view-mode.active")?.dataset.mode || "focus" },
+    history: planHistoryForChat(),
   };
 }
 
@@ -1907,6 +1943,7 @@ function setupDecisionTools() {
      $("#dataNote").textContent += ` Includes your chosen +${Math.round(result.eventUplift * 100)}% increase for an event or season; this is not based on measured event results.`;
    }
    const contextInputs = JSON.parse(JSON.stringify({...state,bridgeOverride}));
+   recordPlanHistory(state);
    const starting = nextStepStarting(state, result.route);
    const orderPlan = nextStepPlan(data, contextInputs, result, { starting });
    const nextStepReasons = Object.fromEntries(orderPlan.order.map((id) => { const lines = nextStepLines(orderPlan.checks[id], result); return [id, [lines.why, lines.impact].filter(Boolean).join(" ")]; }));
@@ -5752,6 +5789,16 @@ const I18N = (() => {
     a2c_wi_46: ["02 Flights", "02 الرحلات الجوية"],
     a2c_wi_47: ["03 Event or disruption", "03 فعالية أو اضطراب"],
     a2c_wi_48: ["04 Hotel visitors", "04 نزلاء الفنادق"],
+    // Audit fixes: guide panel, comparison-country notes and status messages.
+    a2c_cmp_1: ["Compared with your previous result:", "مقارنةً بنتيجتك السابقة:"],
+    a2c_cmp_2: ["Compared with your first result in this session:", "مقارنةً بنتيجتك الأولى في هذه الجلسة:"],
+    a2c_cmp_3: ["{item}: {from} → {to}", "{item}: {from} ← {to}"],
+    a2c_cmp_4: ["That is about {value} more guest nights than the earlier result.", "أي نحو {value} ليلة نزلاء أكثر من النتيجة السابقة."],
+    a2c_cmp_5: ["That is about {value} fewer guest nights than the earlier result.", "أي نحو {value} ليلة نزلاء أقل من النتيجة السابقة."],
+    a2c_cmp_6: ["Guest nights are about the same as the earlier result.", "ليالي النزلاء تقريبًا كما في النتيجة السابقة."],
+    a2c_cmp_7: ["Ask “Compare with my first result” to compare with where you started.", "اسأل «قارن بنتيجتي الأولى» للمقارنة بنقطة البداية."],
+    a2c_cmp_8: ["There is no earlier result to compare with yet.", "لا توجد نتيجة سابقة للمقارنة بها بعد."],
+    a2c_cmp_9: ["Change the plan, then ask again; I compare with the result just before the change.", "غيّر الخطة، ثم اسأل مرة أخرى؛ أقارن بالنتيجة التي سبقت التغيير مباشرةً."],
     a2c_hotel_occupancy: ["Hotel occupancy means how full hotels are. This planner does not have that control. You can change flight occupancy or the share of visitors using hotels; please name which one. The plan has not changed.", "إشغال الفنادق يعني مدى امتلائها، وهذا المخطِّط لا يتضمن هذا الإعداد. يمكنك تغيير نسبة إشغال الرحلات أو نسبة الزوار المقيمين في الفنادق؛ يُرجى تحديد أيهما. لم تتغير الخطة."],
   };
   return {
