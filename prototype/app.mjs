@@ -1,10 +1,10 @@
  import { assistantReply, appliedPlanConfirmation, findRoute, getBridge, weeksInMonth, parseScenarioPrompt, runScenario, sensitivity, validateScenarioInputs } from "./engine.mjs";
 import { buildPeerProfile, validatePeerMethod } from "./route_planning.mjs";
-import { ROUTE_PURPOSES, applyRoutePurpose, planningMetrics, compareOptions, compareMonths, launchOptions, stressTest, solveCapacityTarget, reverseTargetPlan, rankingReversals, decisionNote } from "./decision_tools.mjs";
+import { ROUTE_PURPOSES, applyRoutePurpose, planningMetrics, compareOptions, compareMonths, launchOptions, stressTest, solveCapacityTarget, reverseTargetPlan, rankingReversals, decisionNote, nextStepPlan, nextStepLines } from "./decision_tools.mjs";
 import { CONVERSION_EVIDENCE } from "./conversion_evidence.mjs";
 import { createProposalWorkspace } from "./proposal_workspace.mjs";
 import { createGuidedHelp } from "./guided_help.mjs";
-import { planningChatReply, parseTargetQuestion, arabicPromptToEnglish } from "./planning_chat.mjs";
+import { planningChatReply, parseTargetQuestion, arabicPromptToEnglish, pcMessagesQuery, pcMessagesReply, pcFixTypos } from "./planning_chat.mjs";
   
  const chatEnabled = globalThis.__AIR2STAY_CHAT_ENABLED__ === true;
  const $ = (selector) => document.querySelector(selector);
@@ -34,6 +34,7 @@ let lastExportUrl = "";
 let peerValidationResult = null;
 let targetSolution = null;
 let targetAnswer = null;
+let teamSnapshot = () => null;
  let assistantMessages = [
    { role: "bot", text: "Hi! Ask what changed, ask how a number was worked out, or tell me what you’d like to change." },
  ];
@@ -1196,12 +1197,6 @@ function visitorOriginMap(rows, colors, flag) {
      <p class="model-comparison-source">The primary live and seasonal test scores match saved results. Training, Ridge-only and later-window scores are supplied figures; verdicts are supplied interpretations, not verified diagnoses.</p>`;
  }
 
- function renderRecommendation() {
-   const [lead] = sensitivity(data, { ...state, bridgeOverride });
-   $("#recommendationText").textContent = lead?.span > 0
-     ? `Start by checking ${lead.label.toLowerCase()}. It had the largest effect in these trials.`
-     : "Review the checks for this plan before making a decision.";
- }
   
  function scheduleRender() {
    if (renderQueued) return;
@@ -1281,13 +1276,14 @@ function renderDecisionWorkspace() {
   const ending = note.workplaceDecision;
   $("#decisionNote").innerHTML = `<p class="decision-question">${planningEscape(ending.question)}</p>
     <div class="decision-answers"><article><h3>Hotel nights to plan for</h3><button type="button" class="text-action" data-evidence="routes">See the route comparison →</button></article>
-    <article><h3>Check this assumption first</h3><p>${planningEscape(ending.driverText)}</p><button type="button" class="text-action" data-evidence="stress">See the lower-assumption trials →</button></article></div>
+    <article><h3>Check this assumption first</h3><div id="firstCheckText" class="first-check"></div><button type="button" class="text-action" data-evidence="stress">See the lower-assumption trials →</button></article></div>
     <details><summary>Questions for airlines and hotels</summary>
       <ul><li>Ask the airline how many of the arrivals will be residents returning home.</li>
       <li>Ask hotels about guests per occupied room before using guest nights to plan rooms or staffing.</li>
       <li>${planningEscape(ending.verification[1])}</li></ul>
     </details>
     <button type="button" class="text-action" data-evidence="followups">Open follow-ups →</button>`;
+  fillFirstCheck();
   if (targetSolution) updateTargetResult();
 }
 
@@ -1491,7 +1487,9 @@ function updateHelpChatContext() {
   label.textContent = `About your plan: ${origin} · ${data.months[state.month - 1]} · ${flights ? formatSigned(flights) + " flights a week" : "usual flights"}`;
 }
 
-function helpChatAnswer(prompt) {
+const HELP_CHAT_NOT_UNDERSTOOD = "I can’t answer that one on this computer yet. Try one of these:\n\n- “How were hotel nights calculated?”\n- “How many flights for 10,000 more nights?”\n- “Set flight occupancy to 80%”\n- “What should I check next?”";
+
+function helpChatAnswer(prompt, raw = prompt) {
   const plain = prompt.trim().toLowerCase().replace(/[!.?,]+$/g, "");
   if (/^(?:hi|hello|hey|hiya|salam|salaam|assalamu? ?alaikum|marhaba|good (?:morning|afternoon|evening))(?: there| air2stay)?$/.test(plain)) {
     return "Hello! I can explain your plan, work out what it takes to reach a hotel-night target, or change an assumption for you.\n\nTry “How were hotel nights calculated?” or tap one of the suggestions below.";
@@ -1502,10 +1500,12 @@ function helpChatAnswer(prompt) {
   if (/^(?:help|what can you do|what can i ask(?: you)?|how (?:do|can) i use you|what are your capabilities)$/.test(plain)) {
     return "I can help with the plan you have open.\n\n- Explain: “How were hotel nights calculated?” or “Where does the baseline come from?”\n- Targets: “How many flights for 10,000 more nights from India in December?”\n- Changes: “Set flight occupancy to 80%” or “Add 5 flights from France in December”.\n- Next steps: “What should I check next?”\n\nI work out numbers with the same calculator as the rest of the app, and I only change your plan when you ask directly.";
   }
+  const messageQuery = pcMessagesQuery(raw);
+  if (messageQuery) return pcMessagesReply(messageQuery, teamSnapshot());
   if (!$("#inputError").hidden) return "Please fix the highlighted plan input first, then ask again.";
   readForm();
   const result = runScenario(data, state);
-  const reply = planningChatReply(data, prompt, state, result, proposalWorkspace?.contextSummary());
+  const reply = planningChatReply(data, prompt, state, result, proposalWorkspace?.contextSummary(), helpChatExtras());
   const onPlanPage = $("#scenarioView").classList.contains("active");
   const seeIt = onPlanPage ? "" : "\n\nOpen Plan a route to see the updated result.";
   if (reply.type === "reset") {
@@ -1516,7 +1516,7 @@ function helpChatAnswer(prompt) {
     try { const text = applyAssistantPlan(reply.parsed); renderAll(); return helpChatAppliedLines(text) + seeIt; }
     catch (error) { return `The plan was not changed.\n${friendlyPlanError(error)}`; }
   }
-  if (reply.type === "apply") return "I can’t answer that one on this computer yet. Try one of these:\n\n- “How were hotel nights calculated?”\n- “How many flights for 10,000 more nights?”\n- “Set flight occupancy to 80%”\n- “What should I check next?”";
+  if (reply.type === "apply") return HELP_CHAT_NOT_UNDERSTOOD;
   return reply.text;
 }
 
@@ -1568,7 +1568,17 @@ function sendHelpChat(prompt, { lang } = {}) {
   const shown = language === "ar" && helpChatLanguageOf(text) === "en" ? helpChatLocalize(text) : text;
   helpChatMessages.push({ role:"user", lang:language, text:shown });
   let answer;
-  try { answer = helpChatAnswer(arabicPromptToEnglish(data, text)); }
+  try {
+    answer = helpChatAnswer(arabicPromptToEnglish(data, text), text);
+    // Not understood: retry once with close misspellings corrected, and say so.
+    if (answer === HELP_CHAT_NOT_UNDERSTOOD || answer.startsWith("I couldn’t find a message that matches those words.")) {
+      const fixed = pcFixTypos(data, text);
+      const retry = fixed ? helpChatAnswer(fixed.text, fixed.text) : null;
+      if (retry && retry !== HELP_CHAT_NOT_UNDERSTOOD && !retry.startsWith("I couldn’t find a message")) {
+        answer = fixed.fixes.map(([from, to]) => `I read “${from}” as “${to}”.`).join("\n") + "\n" + retry;
+      }
+    }
+  }
   catch (error) { answer = "Something went wrong, and your plan was not changed."; }
   helpChatMessages.push({ role:"bot", lang:language, text:helpChatInLanguage(answer, language) });
   if (helpChatMessages.length > 40) helpChatMessages = helpChatMessages.slice(-40);
@@ -1704,8 +1714,103 @@ function setupHelpChat() {
   $("#helpChat").addEventListener("keydown", (event) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); setHelpChatOpen(false); } });
 }
 
+// Next steps: the Focus box, the Compare card, the decision note and the
+// assistant all read one plan, so they always name the same first check.
+let latestNextSteps = null;
+
+function nextStepStarting(inputs, route) {
+  return defaultState(route.originKey, inputs.month, inputs.referenceMode === "peers" ? "__PEERS__" : route.proxyOriginKey);
+}
+
+function followUpStatuses() {
+  const summary = proposalWorkspace?.contextSummary?.();
+  return Object.fromEntries((summary?.checks || [])
+    .filter((check) => !String(check.id).startsWith("task:"))
+    .map((check) => [check.id, check.status]));
+}
+
+function buildNextSteps() {
+  if (!currentProposalContext) return null;
+  const { inputs, result, starting } = currentProposalContext;
+  const plan = nextStepPlan(data, inputs, result, { starting, statuses: followUpStatuses() });
+  return { plan, steps: plan.steps.map((step) => ({ id: step.id, draft: step.draft, ...nextStepLines(step, result), status: step.status })) };
+}
+
+function renderNextSteps() {
+  const list = $("#nextStepsList");
+  const readiness = $("#nextStepsReadiness");
+  if (!list || !readiness) return;
+  if (!currentProposalContext || !$("#inputError").hidden) {
+    latestNextSteps = null;
+    readiness.textContent = "";
+    list.replaceChildren();
+    fillFirstCheck();
+    return;
+  }
+  latestNextSteps = buildNextSteps();
+  const { plan, steps } = latestNextSteps;
+  readiness.textContent = `Decision readiness: ${plan.readiness.verified} of ${plan.readiness.total} checks have recorded evidence.`;
+  list.innerHTML = steps.length ? steps.map((step) => `<li class="next-step next-step-${step.status}">
+      <div class="next-step-head"><strong>${planningEscape(step.title)}</strong><span class="next-step-status">${step.status === "red" ? "Overdue" : "No recorded evidence yet"}</span></div>
+      <p>${planningEscape(step.why)}</p>${step.impact ? `<p>${planningEscape(step.impact)}</p>` : ""}
+      <p class="next-step-ask">${planningEscape(step.ask)}</p>
+      <div class="next-step-actions"><button type="button" class="text-action" data-next-task="${planningEscape(step.id)}">Add task</button><button type="button" class="text-action" data-next-draft="${planningEscape(step.draft)}">Draft email</button></div>
+    </li>`).join("")
+    : '<li class="next-step next-step-done"><p>All checks have recorded evidence for these exact assumptions. You can finish with a planning decision.</p></li>';
+  fillFirstCheck();
+}
+
+// Compare's "Check this assumption first" card shows the same first step.
+function fillFirstCheck() {
+  const target = $("#firstCheckText");
+  if (!target) return;
+  const first = latestNextSteps?.steps[0];
+  const lines = !latestNextSteps ? [] : first ? [first.title, first.overdue, first.why, first.impact, first.ask].filter(Boolean)
+    : ["All checks have recorded evidence for these exact assumptions."];
+  target.innerHTML = lines.map((line, index) => index === 0 && first ? `<p><strong>${planningEscape(line)}</strong></p>` : `<p>${planningEscape(line)}</p>`).join("");
+}
+
+function setupNextSteps() {
+  $("#nextStepsList").addEventListener("click", (event) => {
+    const task = event.target.closest("[data-next-task]");
+    const draft = event.target.closest("[data-next-draft]");
+    if (!task && !draft) return;
+    // The open assistant panel floats over the Follow-ups forms, so close it first.
+    if (!$("#helpChat").hidden) setHelpChatOpen(false);
+    $('.view-mode[data-mode="proposal"]').click();
+    if (task) {
+      // Follow-ups opens its task form, filled in with this check's title and owner.
+      const button = [...$$('#proposalWorkspace [data-pw-action="add-task"]')].find((item) => item.dataset.check === task.dataset.nextTask);
+      button?.click();
+      return;
+    }
+    const select = $("#proposalWorkspace [data-pw-draft-kind]");
+    if (select && [...select.options].some((option) => option.value === draft.dataset.nextDraft)) {
+      select.value = draft.dataset.nextDraft;
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+    const tool = $('#proposalWorkspace details[data-pw-tool="email"]');
+    if (tool) {
+      tool.open = true;
+      tool.scrollIntoView({ block: "start" });
+      tool.querySelector('[data-pw-action="draft"]')?.focus({ preventScroll: true });
+    }
+  });
+}
+
+// What the assistant needs about the plan, the page and the follow-ups.
+function helpChatExtras() {
+  const summary = proposalWorkspace?.contextSummary?.() || null;
+  const next = currentProposalContext && $("#inputError").hidden ? buildNextSteps() : null;
+  return {
+    nextSteps: next ? { readiness: next.plan.readiness, steps: next.steps } : null,
+    missing: summary && next ? { checks: summary.checks || [], decisionLogged: (summary.decisions || []).length > 0, total: next.plan.readiness.total } : null,
+    where: { view: $(".nav-tab.active")?.dataset.view || "scenarioView", mode: $(".view-mode.active")?.dataset.mode || "focus" },
+  };
+}
+
 function decisionNoteText() {
-  const note = decisionNote(data,state,decisionOptions());
+  const note = decisionNote(data,state,decisionOptions(),latestNextSteps?.plan || null);
   const peerText=state.peerProfile ? "\n\nComparison-country starting weights\n"+state.peerProfile.peers.map((peer)=>peer.origin+": "+formatPercent(peer.weight,1)).join("\n")+"\nGeographic assumptions only; not measured route demand." : "";
   const targetText = targetSolution ? "\n\nCapacity target check\n" + englishUiText($("#targetResult")) : "";
   return note.text + peerText + targetText;
@@ -1773,6 +1878,7 @@ function setupDecisionTools() {
      currentProposalContext = null;
      refreshPackStatistics(null);
      proposalWorkspace?.update(null);
+     renderNextSteps();
      $("#inputError").textContent = pendingCountry ? "Choose and confirm a departure country to calculate a new route." : `Please enter ${invalid.id === "averageStay" ? "average nights per stay" : invalid.id === "seatsPerFlight" ? "seats per flight" : "a value"} between ${invalid.min} and ${invalid.max} to see the results.`;
      return;
    }
@@ -1787,7 +1893,6 @@ function setupDecisionTools() {
    renderContributions(result);
    renderSensitivity();
    renderBridge(result);
-   renderRecommendation();
    renderDecisionWorkspace();
    renderTargetWorkspace();
    updateHelpChatContext();
@@ -1801,11 +1906,16 @@ function setupDecisionTools() {
    if (result.eventUplift) {
      $("#dataNote").textContent += ` Includes your chosen +${Math.round(result.eventUplift * 100)}% increase for an event or season; this is not based on measured event results.`;
    }
-   const nextContext = {inputs:JSON.parse(JSON.stringify({...state,bridgeOverride})),result,decision:decisionNote(data,state)};
+   const contextInputs = JSON.parse(JSON.stringify({...state,bridgeOverride}));
+   const starting = nextStepStarting(state, result.route);
+   const orderPlan = nextStepPlan(data, contextInputs, result, { starting });
+   const nextStepReasons = Object.fromEntries(orderPlan.order.map((id) => { const lines = nextStepLines(orderPlan.checks[id], result); return [id, [lines.why, lines.impact].filter(Boolean).join(" ")]; }));
+   const nextContext = {inputs:contextInputs,result,decision:decisionNote(data,state),starting,nextStepOrder:orderPlan.order,nextStepReasons};
    const changed = currentProposalContext && JSON.stringify(currentProposalContext.inputs) !== JSON.stringify(nextContext.inputs);
    currentProposalContext = nextContext;
    refreshPackStatistics(nextContext);
    proposalWorkspace?.update(nextContext);
+   renderNextSteps();
    guidedHelp?.update(nextContext);
    if (changed) guidedHelp?.track("scenario_change");
    if (chatEnabled) syncProposalChat();
@@ -1842,7 +1952,7 @@ function setupProposalTools() {
     if (mode) $(`.view-mode[data-mode="${mode}"]`)?.click();
     if (controls && !document.body.classList.contains("controls-open") && getComputedStyle($("#adjustControls")).display !== "none") $("#adjustControls").click();
   }});
-  proposalWorkspace = createProposalWorkspace({mount:$("#proposalWorkspace"),chatEnabled,rail:$("#proposalRail"),launcher:$("#toggleProposalPanel"),onOpenWorkspace:()=>{ if ($("#proposalWorkspace").hidden) $(".view-mode[data-mode='proposal']").click(); },getContext:()=>currentProposalContext,track:name=>guidedHelp.track(name),onRecommendation:(element,{context,recommended,fingerprint})=>{
+  proposalWorkspace = createProposalWorkspace({mount:$("#proposalWorkspace"),chatEnabled,rail:$("#proposalRail"),launcher:$("#toggleProposalPanel"),onOpenWorkspace:()=>{ if ($("#proposalWorkspace").hidden) $(".view-mode[data-mode='proposal']").click(); },getContext:()=>currentProposalContext,track:name=>{guidedHelp.track(name);if(String(name).startsWith("proposal_"))renderNextSteps();},onRecommendation:(element,{context,recommended,fingerprint})=>{
     const identity = `${fingerprint}|${recommended?.id}|${recommended?.status}`;
     const feedbackKey = [...identity].reduce((hash,letter)=>Math.imul(hash ^ letter.charCodeAt(0),16777619)>>>0,2166136261).toString(36);
     if (recommended) guidedHelp.addFeedback({element,id:`recommendation-${feedbackKey}`,label:`Next action · ${context.result.route.origin} · ${data.months[context.inputs.month-1]}`});
@@ -3398,6 +3508,21 @@ function setupFeaturePack() {
     $("#openNotifications").setAttribute("aria-label", counts.notificationCount ? `Notifications (${counts.notificationCount} unread)` : "Notifications");
   }
 
+  teamSnapshot = () => ({
+    messages: team.messages.map((item) => {
+      const parties = messageParties(item);
+      const subject = String(item.subject || "");
+      return { folder: item.folder, subject, from: parties.from, to: parties.to, unread: Boolean(item.unread), priority: item.priority,
+        body: String(item.body || "").slice(0, 600),
+        subjectAr: item.example ? withLanguage("ar", () => translateUiString(subject)) : subject,
+        fromAr: withLanguage("ar", () => translateUiString(parties.from)), toAr: withLanguage("ar", () => translateUiString(parties.to)) };
+    }),
+    requests: team.requests.map((item) => {
+      const title = String(item.title || "");
+      return { title, from: String(item.from || ""), recipient: item.toProfile ? "You" : String(item.recipient || ""), status: requestStates[item.status] || String(item.status || ""),
+        titleAr: item.example ? withLanguage("ar", () => translateUiString(title)) : title, fromAr: withLanguage("ar", () => translateUiString(String(item.from || ""))) };
+    }),
+  });
   const contactName = (address) => directory.find((contact) => contact.email === address)?.name || address;
   const priorityClass = (priority) => ["High","Normal","Low"].includes(priority) ? "priority-" + priority.toLowerCase() : "priority-normal";
   const shortDate = new Intl.DateTimeFormat("en-GB", {day:"numeric", month:"short"});
@@ -4149,7 +4274,7 @@ const I18N = (() => {
     see_range_evidence: ["See the range evidence →", "عرض الأدلة التي يستند إليها النطاق ←"],
     open_market_controls: ["Open market controls →", "فتح أدوات التحكم بالسوق ←"],
     see_baseline_coverage: ["See the baseline and record coverage →", "عرض التقدير المرجعي وتغطية السجلات ←"],
-    open_term_guide: ["Open Term Guide →", "فتح دليل المصطلحات ←"],
+    open_term_guide_arrow: ["Open Term Guide →", "فتح دليل المصطلحات ←"],
     open_calculation: ["Open the calculation →", "عرض طريقة الحساب ←"],
     see_comparison_countries: ["See the comparison countries in Details →", "عرض البلدان المقارنة في التفاصيل ←"],
     see_range_estimate: ["See how the range is estimated →", "عرض طريقة تقدير النطاق ←"],
@@ -5075,7 +5200,7 @@ const I18N = (() => {
     a2c_comparison_only: ["Comparison countries only provide starting assumptions; they do not prove demand for this route.", "توفّر البلدان المقارنة افتراضات أولية فقط، ولا تثبت وجود طلب على هذا المسار."],
     a2c_final_value: ["Please give the final value you want, so I don’t guess. For example: “Set extra flights to 5” or “Set flight occupancy to 80%.” The plan has not changed.", "يُرجى ذكر القيمة النهائية التي تريدها حتى لا أخمّن، مثل «اضبط الرحلات الإضافية على 5» أو «اضبط نسبة إشغال الرحلات على 80%». لم تتغير الخطة."],
     a2c_clear_value: ["I couldn’t match every requested change to a clear value. Use digits and units, for example: “Set hotel use to 40% and average stay to 4 nights.” Nothing has changed.", "لم أتمكن من ربط كل تغيير مطلوب بقيمة واضحة. استخدم الأرقام والوحدات، مثل «اضبط الإقامة الفندقية على 40% ومتوسط الإقامة على 4 ليالٍ». لم يتغير شيء."],
-    a2c_what_if: ["I can try that as a scenario. To apply it, give a direct instruction such as “Set flight occupancy to 80%.” Your current plan has not changed.", "يمكنني تجربة ذلك كسيناريو. لتطبيقه، اكتب تعليمة مباشرة مثل «اضبط نسبة إشغال الرحلات على 80%». لم تتغير خطتك الحالية."],
+    a2c_what_if: ["Tell me the final value to try, such as “What if flight occupancy is 80%?”, and I will work it out without changing your plan.", "أخبرني بالقيمة النهائية التي تريد تجربتها، مثل «ماذا لو كان الإشغال 80%؟»، وسأحسبها دون تغيير خطتك."],
     a2c_one_route: ["Choose one departure country and one month for this change. Use Compare to examine alternatives. The plan has not changed.", "اختر بلد مغادرة واحدًا وشهرًا واحدًا لهذا التغيير، واستخدم «المقارنة» لدراسة البدائل. لم تتغير الخطة."],
     a2c_name_value: ["Please name the value to change. I can set the route, month, extra flights, seats, flight occupancy, trip-ending share, hotel use, average stay, or event uplift. Use the country picker to create a new route.", "يُرجى تحديد القيمة المراد تغييرها. يمكنني ضبط المسار أو الشهر أو الرحلات الإضافية أو المقاعد أو نسبة إشغال الرحلات أو نسبة من تنتهي رحلتهم هنا أو الإقامة الفندقية أو متوسط الإقامة أو زيادة الفعاليات. استخدم قائمة البلدان لإنشاء مسار جديد."],
     // Percentage and other target replies.
@@ -5505,6 +5630,128 @@ const I18N = (() => {
     aud_138: ["Plan explanations and clear change commands work locally. Optional Gemini answers can help with other questions when you enable them below.", "تعمل شروح الخطة وأوامر التغيير الواضحة محليًا. ويمكن لإجابات Gemini الاختيارية المساعدة في أسئلة أخرى عند تفعيلها أدناه."],
     aud_139: ["Local planning assistant · explanations and clear change commands work without internet. Gemini is not configured in this copy.", "مساعد تخطيط محلي · تعمل الشروح وأوامر التغيير الواضحة دون إنترنت. لم يُضبط Gemini في هذه النسخة."],
     aud_140: ["Describe a change or ask a question. The current result stays beside your conversation.", "صِف تغييرًا أو اطرح سؤالًا. تبقى النتيجة الحالية بجانب محادثتك."],
+    // Audit fixes: guide panel, comparison-country notes and status messages.
+    ns_1: ["Decision readiness: {count} of {value} checks have recorded evidence.", "جاهزية القرار: {count} من {value} عمليات تحقق لها أدلة مسجّلة."],
+    ns_2: ["No recorded evidence yet", "لا توجد أدلة مسجّلة بعد"],
+    ns_3: ["All checks have recorded evidence for these exact assumptions. You can finish with a planning decision.", "جميع عمليات التحقق لها أدلة مسجّلة لهذه الافتراضات بالضبط. يمكنك الآن إنهاء التخطيط بقرار."],
+    ns_4: ["All checks have recorded evidence for these exact assumptions.", "جميع عمليات التحقق لها أدلة مسجّلة لهذه الافتراضات بالضبط."],
+    ns_5: ["{item}: {value}, borrowed from comparison countries because this route has no flight history.", "قيمة {item} هي {value}، وهي مستعارة من البلدان المقارنة لأن هذا المسار ليس له سجل رحلات."],
+    ns_6: ["{item}: {value}, a value you entered, so record where it came from.", "قيمة {item} هي {value}، وهي قيمة أدخلتها، لذا سجّل مصدرها."],
+    ns_7: ["{item}: {value}, one app-wide rate, not measured for this route.", "قيمة {item} هي {value}، وهي معدل واحد للتطبيق كله ولم تُقَس لهذا المسار."],
+    ns_8: ["{item}: {value}, estimated from hotel records by nationality.", "قيمة {item} هي {value}، وهي مقدّرة من سجلات الفنادق حسب الجنسية."],
+    ns_9: ["{item}: {value}, from only 1 past flight record for this route and month.", "قيمة {item} هي {value}، من سجل رحلات سابق واحد فقط لهذا المسار والشهر."],
+    ns_10: ["{item}: {value}, from only {count} past flight records for this route and month.", "قيمة {item} هي {value}، من {count} سجلات رحلات سابقة فقط لهذا المسار والشهر."],
+    ns_11: ["{item}: {value}, from {count} past flight records for this route and month.", "قيمة {item} هي {value}، من {count} سجلات رحلات سابقة لهذا المسار والشهر."],
+    ns_12: ["The visitor mix is an estimated split by nationality: it changes who is expected, not the total.", "توزيع الزوار تقسيم تقديري حسب الجنسية: يغيّر من يُتوقع قدومهم، لا الإجمالي."],
+    ns_13: ["It is already at the lowest value the planner allows.", "القيمة عند أدنى حد يسمح به المخطِّط بالفعل."],
+    ns_14: ["If it is 10% lower ({value}), your extra flights add about {count} nights instead of {estimate}.", "إذا كانت أقل بنسبة 10% ({value})، فستضيف رحلاتك الإضافية نحو {count} ليلة بدلًا من {estimate}."],
+    ns_15: ["If it is 10% lower ({value}), the plan gives about {count} guest nights instead of {estimate}.", "إذا كانت أقل بنسبة 10% ({value})، فستعطي الخطة نحو {count} ليلة نزلاء بدلًا من {estimate}."],
+    ns_16: ["Ask: {item}.", "اسأل: {item}."],
+    ns_17: ["This check is overdue.", "موعد هذا التحقق قد فات."],
+    ns_18: ["First check: {item}.", "التحقق الأول: {item}."],
+    ns_19: ["Validate the event increase", "التحقق من زيادة الفعالية"],
+    ns_20: ["Event or tourism team", "فريق الفعاليات أو السياحة"],
+    ns_21: ["{item}: {value}, from only two past flight records for this route and month.", "قيمة {item} هي {value}، من سجلَّي رحلات سابقَين فقط لهذا المسار والشهر."],
+    // Audit fixes: guide panel, comparison-country notes and status messages.
+    a2c_ns_1: ["Step {count}: {item}.", "الخطوة {count}: {item}."],
+    a2c_ns_2: ["You can finish with a planning decision in Compare.", "يمكنك إنهاء التخطيط بقرار في «المقارنة»."],
+    a2c_ns_3: ["Use Add task in the Next steps box on Focus to track each check.", "استخدم «إضافة مهمة» في مربع الخطوات التالية ضمن «ملخص» لمتابعة كل عملية تحقق."],
+    a2c_ns_4: ["When these are done, finish with a planning decision in Compare.", "بعد إنجاز ذلك، أنهِ التخطيط بقرار في «المقارنة»."],
+    a2c_ns_5: ["You still have {count} of {value} checks without recorded evidence:", "لا يزال لديك {count} من {value} عمليات تحقق دون أدلة مسجّلة:"],
+    a2c_ns_6: ["Every check has recorded evidence for these exact assumptions.", "كل عمليات التحقق لها أدلة مسجّلة لهذه الافتراضات بالضبط."],
+    a2c_ns_7: ["{item} · overdue", "{item} · فات موعدها"],
+    a2c_ns_8: ["{item} · no recorded evidence yet", "{item} · لا توجد أدلة مسجّلة بعد"],
+    a2c_ns_9: ["No planning decision is logged yet; use Log decision in Follow-ups when the checks are done.", "لم يُسجَّل قرار تخطيط بعد؛ استخدم «تسجيل القرار» في «المتابعات» بعد إنجاز عمليات التحقق."],
+    a2c_ns_10: ["Nothing is missing: every check has recorded evidence for these exact assumptions, and a decision is logged.", "لا ينقص شيء: كل عمليات التحقق لها أدلة مسجّلة لهذه الافتراضات بالضبط، وتم تسجيل قرار."],
+    a2c_ns_11: ["Ask “What is the next step?” for the order to work through them.", "اسأل «ما الخطوة التالية؟» لمعرفة ترتيب إنجازها."],
+    a2c_ns_12: ["Here is what the charts on {item} show:", "هذا ما تعرضه الرسوم البيانية في {item}:"],
+    a2c_ns_13: ["This page has no charts. Plan a route (Focus, Compare and Details), Visitor mix, Check past results and Statistics have charts.", "لا توجد رسوم بيانية في هذه الصفحة. تتضمن «تخطيط المسار» («ملخص» و«المقارنة» و«التفاصيل») و«توزيع الزوار» و«التحقق من النتائج السابقة» و«الإحصاءات» رسومًا بيانية."],
+    a2c_ns_14: ["You are on {item}.", "أنت في {item}."],
+    a2c_ns_15: ["Ask “Explain the charts” to read the graphs on this page.", "اسأل «اشرح الرسوم البيانية» لقراءة رسوم هذه الصفحة."],
+    a2c_ns_16: ["The four cards show extra hotel check-ins, extra guest nights, total guest nights and the possible range.", "تعرض البطاقات الأربع التسجيلات الفندقية الإضافية وليالي النزلاء الإضافية وإجمالي ليالي النزلاء والنطاق المحتمل."],
+    a2c_ns_17: ["The small line in the first three cards shows that measure for every month of the year.", "يعرض الخط الصغير في البطاقات الثلاث الأولى هذا المقياس لكل شهر من أشهر السنة."],
+    a2c_ns_18: ["The possible range card shows the lower and higher guides as a bar.", "تعرض بطاقة النطاق المحتمل الحدين الأدنى والأعلى في شكل شريط."],
+    a2c_ns_19: ["From seats to guest nights: each bar is one step, from flight seats to passengers, passengers ending their trip in Abu Dhabi, hotel check-ins and guest nights.", "من المقاعد إلى ليالي النزلاء: كل عمود خطوة واحدة، من مقاعد الرحلات إلى الركاب، ثم الركاب الذين تنتهي رحلتهم في أبوظبي، ثم التسجيلات الفندقية، ثم ليالي النزلاء."],
+    a2c_ns_20: ["In that chart, gray shows the usual month, the coloured cap marks your plan and the badge shows the change.", "في هذا الرسم، يمثّل الرمادي الشهر المعتاد، ويشير الجزء الملوّن في الأعلى إلى خطتك، وتعرض الشارة مقدار التغيّر."],
+    a2c_ns_21: ["Three launch sizes: cards for cautious, standard and expanded weekly flights, with the extra check-ins and guest nights each would add.", "ثلاثة أحجام للإطلاق: بطاقات للرحلات الأسبوعية الحذرة والقياسية والموسّعة، مع التسجيلات وليالي النزلاء الإضافية لكل منها."],
+    a2c_ns_22: ["Compare months: the extra guest nights from the same flights in each month of the year.", "مقارنة الأشهر: ليالي النزلاء الإضافية من الرحلات نفسها في كل شهر من أشهر السنة."],
+    a2c_ns_23: ["What if fewer visitors stay in hotels?: how much the extra guest nights fall under each lower-assumption trial, compared with your plan.", "ماذا لو أقام عدد أقل من الزوار في الفنادق؟: مقدار انخفاض ليالي النزلاء الإضافية في كل اختبار للافتراضات الأدنى مقارنةً بخطتك."],
+    a2c_ns_24: ["Show the numbers under each chart opens the table behind it.", "يفتح «عرض الأرقام» أسفل كل رسم الجدول الذي يستند إليه."],
+    a2c_ns_25: ["Estimated hotel nights by nationality: the estimated change in hotel nights for each visitor group.", "الليالي الفندقية المقدّرة حسب الجنسية: التغيّر المقدّر في الليالي الفندقية لكل فئة من الزوار."],
+    a2c_ns_26: ["One-at-a-time sensitivity: how far guest nights move when one assumption is nudged up or down on its own; the nudge sizes differ, so treat it as a guide.", "الحساسية لكل افتراض على حدة: مقدار تحرّك ليالي النزلاء عند رفع افتراض واحد أو خفضه وحده؛ وتختلف أحجام التغيير، فاعتبرها دليلًا."],
+    a2c_ns_27: ["Route map: a schematic line from the country’s reference point to Abu Dhabi city, not airport locations.", "خريطة المسار: خط تخطيطي من النقطة المرجعية للبلد إلى مدينة أبوظبي، لا مواقع المطارات."],
+    a2c_ns_28: ["Seats by month: average monthly flight seats for this route from the supplied records; bars start at zero and k means thousand.", "المقاعد حسب الشهر: متوسط مقاعد الرحلات الشهرية لهذا المسار من السجلات المقدّمة؛ تبدأ الأعمدة من الصفر، وk تعني ألفًا."],
+    a2c_ns_29: ["Global Visitor Origins: an illustrative map of visitor nationalities; locations are country reference points, not airports or flight paths.", "أصول الزوار عالميًا: خريطة توضيحية لجنسيات الزوار؛ المواقع نقاط مرجعية للبلدان، لا مطارات ولا مسارات رحلات."],
+    a2c_ns_30: ["The cards list the largest nationality groups with their share, hotel check-ins and guest nights.", "تعرض البطاقات أكبر فئات الجنسيات مع نسبتها والتسجيلات الفندقية وليالي النزلاء."],
+    a2c_ns_31: ["Monthly hotel arrivals: the recorded hotel arrivals for each test month, compared with Air2Stay’s live calculation and the hybrid comparison model.", "الوافدون إلى الفنادق شهريًا: الوافدون المسجّلون في كل شهر اختبار، مقارنةً بالحساب المباشر في Air2Stay ونموذج المقارنة الهجين."],
+    a2c_ns_32: ["The shaded band shows plus or minus the overall weighted error around the live estimate; it is a visual guide, not a guaranteed range.", "يُظهر النطاق المظلّل زائد أو ناقص الخطأ المرجّح الإجمالي حول التقدير المباشر؛ وهو دليل بصري، وليس نطاقًا مضمونًا."],
+    a2c_ns_33: ["Messages: Inbox {count} ({value} unread), Sent {estimate}, Drafts {low}.", "الرسائل: الوارد {count} (غير المقروءة {value})، والمرسلة {estimate}، والمسودات {low}."],
+    a2c_ns_34: ["Approval requests are in Tasks, in the shortcuts on the right edge.", "طلبات الموافقة موجودة في «المهام» ضمن الاختصارات على حافة الشاشة."],
+    a2c_ns_35: ["Requests: {count}, waiting: {value}.", "الطلبات: {count}، قيد الانتظار: {value}."],
+    a2c_ns_36: ["I couldn’t find a request that matches those words.", "لم أجد طلبًا يطابق هذه الكلمات."],
+    a2c_ns_37: ["The request “{item}” from {from} is in Tasks, marked {status}.", "الطلب «{item}» من {from} موجود في «المهام»، وحالته: {status}."],
+    a2c_ns_38: ["Open Tasks from the shortcuts on the right edge to see it.", "افتح «المهام» من الاختصارات على حافة الشاشة لعرضه."],
+    a2c_ns_39: ["{folder} is in Messages at the top (messages: {count}).", "تجد {folder} في «الرسائل» في الأعلى (عدد الرسائل: {count})."],
+    a2c_ns_40: ["Open Messages at the top to see them.", "افتح «الرسائل» في الأعلى لعرضها."],
+    a2c_ns_41: ["I couldn’t find a message that matches those words.", "لم أجد رسالة تطابق هذه الكلمات."],
+    a2c_ns_42: ["Try a word from the subject or the sender’s name.", "جرّب كلمة من الموضوع أو اسم المرسل."],
+    a2c_ns_43: ["I found these messages:", "وجدت هذه الرسائل:"],
+    a2c_ns_44: ["“{item}” · {folder}", "«{item}» · {folder}"],
+    a2c_ns_45: ["Open Messages at the top, choose the folder, then select the message.", "افتح «الرسائل» في الأعلى، واختر المجلد، ثم اختر الرسالة."],
+    a2c_ns_46: ["Your draft “{item}” is in {folder}.", "مسودتك «{item}» موجودة في {folder}."],
+    a2c_ns_47: ["The message “{item}” to {to} is in {folder}.", "الرسالة «{item}» إلى {to} موجودة في {folder}."],
+    a2c_ns_48: ["The message “{item}” from {from} is in {folder}.", "الرسالة «{item}» من {from} موجودة في {folder}."],
+    a2c_ns_49: ["It is unread.", "وهي غير مقروءة."],
+    a2c_ns_50: ["Open Messages at the top, choose {folder}, then select it.", "افتح «الرسائل» في الأعلى، واختر {folder}، ثم اختر الرسالة."],
+    // Audit fixes: guide panel, comparison-country notes and status messages.
+    a2c_wi_1: ["Here is how this change would affect your plan, without applying it:", "هذا تأثير هذا التغيير على خطتك، دون تطبيقه:"],
+    a2c_wi_2: ["{item}: {low} → {high}", "{item}: {low} ← {high}"],
+    a2c_wi_3: ["That is about {value} more guest nights than your plan.", "أي نحو {value} ليلة نزلاء أكثر من خطتك."],
+    a2c_wi_4: ["That is about {value} fewer guest nights than your plan.", "أي نحو {value} ليلة نزلاء أقل من خطتك."],
+    a2c_wi_5: ["Guest nights would stay about the same.", "ستبقى ليالي النزلاء تقريبًا كما هي."],
+    a2c_wi_6: ["Your plan has not changed; to apply it, say “Set extra flights to {count}”.", "لم تتغير خطتك؛ لتطبيقه، قل «اضبط الرحلات الإضافية على {count}»."],
+    a2c_wi_7: ["Your plan has not changed; to apply it, say “Set flight occupancy to {value}”.", "لم تتغير خطتك؛ لتطبيقه، قل «اضبط الإشغال على {value}»."],
+    a2c_wi_8: ["Your plan has not changed; to apply it, say “Set hotel use to {value}”.", "لم تتغير خطتك؛ لتطبيقه، قل «اضبط التسجيل في الفنادق على {value}»."],
+    a2c_wi_9: ["Your plan has not changed; to apply it, say “Set average stay to {value} nights”.", "لم تتغير خطتك؛ لتطبيقه، قل «اضبط متوسط الليالي على {value}»."],
+    a2c_wi_10: ["Your plan has not changed; to apply it, say “Set seats per flight to {count}”.", "لم تتغير خطتك؛ لتطبيقه، قل «اضبط المقاعد على {count}»."],
+    a2c_wi_11: ["Your plan has not changed; to apply it, give each change as a command, such as “Set extra flights to 5”.", "لم تتغير خطتك؛ لتطبيقه، اكتب كل تغيير كأمر، مثل «اضبط الرحلات الإضافية على 5»."],
+    a2c_wi_12: ["This what-if works on the plan you have open.", "يعمل سؤال «ماذا لو» على الخطة المفتوحة لديك."],
+    a2c_wi_13: ["Switch the departure country to {item} first, then ask again.", "غيّر بلد المغادرة إلى {item} أولًا، ثم اسأل مرة أخرى."],
+    a2c_wi_14: ["Switch the month to {item} first, then ask again.", "غيّر الشهر إلى {item} أولًا، ثم اسأل مرة أخرى."],
+    a2c_wi_15: ["Extra flights must stay between −20 and 20 a week, so I can’t work that out.", "يجب أن تبقى الرحلات الإضافية بين −20 و20 رحلة أسبوعيًا، لذا لا يمكنني حساب ذلك."],
+    a2c_wi_16: ["That value is outside what the planner allows, so I can’t work that out.", "هذه القيمة خارج ما يسمح به المخطِّط، لذا لا يمكنني حساب ذلك."],
+    a2c_wi_17: ["Your plan has not changed.", "لم تتغير خطتك."],
+    a2c_wi_18: ["To draft an email, open Follow-ups, then open Draft email.", "لكتابة مسودة بريد إلكتروني، افتح «المتابعات»، ثم افتح «مسودة بريد إلكتروني»."],
+    a2c_wi_19: ["Choose who it is for under Message for, then choose Prepare draft.", "اختر المرسَل إليه من «رسالة إلى»، ثم اختر «إعداد المسودة»."],
+    a2c_wi_20: ["For hotel rooms or capacity, choose Hotel team.", "للاستفسار عن الغرف الفندقية أو السعة، اختر «فريق الفنادق»."],
+    a2c_wi_21: ["For flights or bookings, choose Airline or airport planner.", "للاستفسار عن الرحلات أو الحجوزات، اختر «مسؤول التخطيط في شركة الطيران أو المطار»."],
+    a2c_wi_22: ["Draft email in the Next steps box on Focus opens the same form.", "يفتح زر «مسودة بريد إلكتروني» في مربع «الخطوات التالية» ضمن «ملخص» النموذج نفسه."],
+    a2c_wi_23: ["You set “{item}” under Adjust plan, in section {section}.", "تضبط «{item}» من «تعديل الخطة»، في القسم {section}."],
+    a2c_wi_24: ["Adjust plan is the button at the top left of Plan a route.", "«تعديل الخطة» هو الزر أعلى يسار «تخطيط المسار»."],
+    a2c_wi_25: ["It appears when you choose + New route in Departure country.", "يظهر عند اختيار «＋ مسار جديد» في «بلد المغادرة»."],
+    a2c_wi_26: ["+ New route is the last choice in Departure country, under Adjust plan.", "«＋ مسار جديد» هو آخر خيار في «بلد المغادرة»، ضمن «تعديل الخطة»."],
+    a2c_wi_27: ["It opens the plan controls in four sections: 01 Market, 02 Flights, 03 Event or disruption and 04 Hotel visitors.", "يفتح أدوات التحكم في الخطة في أربعة أقسام: 01 السوق، و02 الرحلات الجوية، و03 فعالية أو اضطراب، و04 نزلاء الفنادق."],
+    a2c_wi_28: ["Add task is on each check in Follow-ups, and in the Next steps box on Focus.", "«إضافة مهمة» موجودة على كل عملية تحقق في «المتابعات»، وفي مربع «الخطوات التالية» ضمن «ملخص»."],
+    a2c_wi_29: ["Log decision is in Follow-ups, further down the page.", "«تسجيل القرار» موجود في «المتابعات»، في أسفل الصفحة."],
+    a2c_wi_30: ["Add note is in Follow-ups, below Your tasks.", "«إضافة ملاحظة» موجودة في «المتابعات»، أسفل «مهامك»."],
+    a2c_wi_31: ["The decision note is on Compare, with Save as PDF and a text download.", "مذكرة القرار موجودة في «المقارنة»، مع زر الحفظ بصيغة PDF وخيار التنزيل كنص."],
+    a2c_wi_32: ["Next steps is on Focus, below your result.", "«الخطوات التالية» موجودة في «ملخص»، أسفل نتيجتك."],
+    a2c_wi_33: ["Actions is the button at the top right of Plan a route; its number shows the checks that need attention.", "«الإجراءات» هو الزر أعلى يمين «تخطيط المسار»؛ ويُظهر رقمه عمليات التحقق التي تحتاج إلى متابعة."],
+    a2c_wi_34: ["Export is the button under Your current plan on Focus.", "«تصدير» هو الزر أسفل «خطتك الحالية» في «ملخص»."],
+    a2c_wi_35: ["It saves the plan as Excel, a PDF report or CSV, in English or Arabic.", "يحفظ الخطة بصيغة Excel أو تقرير PDF أو CSV، بالعربية أو الإنجليزية."],
+    a2c_wi_36: ["The language buttons, EN and عربي, are at the top right of the page.", "زرّا اللغة، EN وعربي، موجودان أعلى يمين الصفحة."],
+    a2c_wi_37: ["Guide me is the button next to Search at the top right.", "«جولة إرشادية» هو الزر المجاور لـ«بحث» أعلى اليمين."],
+    a2c_wi_38: ["Search is at the top right of the page.", "«بحث» موجود أعلى يمين الصفحة."],
+    a2c_wi_39: ["Notifications is the bell at the top right, and it is also in the shortcuts on the right edge.", "«الإشعارات» هي الجرس أعلى اليمين، وهي موجودة أيضًا ضمن الاختصارات على حافة الشاشة."],
+    a2c_wi_40: ["Tasks is in the shortcuts on the right edge.", "«المهام» موجودة ضمن الاختصارات على حافة الشاشة."],
+    a2c_wi_41: ["Statistics is in the menu at the top of the page and in the shortcuts on the right edge.", "«الإحصاءات» موجودة في القائمة أعلى الصفحة وضمن الاختصارات على حافة الشاشة."],
+    a2c_wi_42: ["Edit mix is on the Visitor mix page.", "«تعديل التوزيع» موجود في صفحة «توزيع الزوار»."],
+    a2c_wi_43: ["“{item}” is a tab at the top of Plan a route.", "«{item}» تبويب أعلى «تخطيط المسار»."],
+    a2c_wi_44: ["“{item}” is in the menu at the top of the page.", "«{item}» موجود في القائمة أعلى الصفحة."],
+    a2c_wi_45: ["01 Market", "01 السوق"],
+    a2c_wi_46: ["02 Flights", "02 الرحلات الجوية"],
+    a2c_wi_47: ["03 Event or disruption", "03 فعالية أو اضطراب"],
+    a2c_wi_48: ["04 Hotel visitors", "04 نزلاء الفنادق"],
     a2c_hotel_occupancy: ["Hotel occupancy means how full hotels are. This planner does not have that control. You can change flight occupancy or the share of visitors using hotels; please name which one. The plan has not changed.", "إشغال الفنادق يعني مدى امتلائها، وهذا المخطِّط لا يتضمن هذا الإعداد. يمكنك تغيير نسبة إشغال الرحلات أو نسبة الزوار المقيمين في الفنادق؛ يُرجى تحديد أيهما. لم تتغير الخطة."],
   };
   return {
@@ -5968,8 +6215,26 @@ function setupLanguage() {
   observer.observe(root, {subtree:true, childList:true, characterData:true, attributes:true, attributeFilter:attrs});
 }
 
+// Inside the Streamlit frame, scrollIntoView also scrolls the host page, which
+// pushes the app up and leaves an empty band below it. Scroll only the app.
+function keepHostPageInPlace() {
+  let frame = null;
+  try { frame = window.frameElement; } catch { frame = null; }
+  if (!frame || Element.prototype.scrollIntoView.keepsHostPage) return;
+  const native = Element.prototype.scrollIntoView;
+  const patched = function (...args) {
+    const hosts = [];
+    for (let node = frame.parentElement; node; node = node.parentElement) hosts.push([node, node.scrollTop, node.scrollLeft]);
+    try { return native.apply(this, args); }
+    finally { for (const [node, top, left] of hosts) if (node.scrollTop !== top || node.scrollLeft !== left) { node.scrollTop = top; node.scrollLeft = left; } }
+  };
+  patched.keepsHostPage = true;
+  Element.prototype.scrollIntoView = patched;
+}
+
  async function init() {
    try {
+     keepHostPageInPlace();
      setupLanguage();
      await loadData();
      state = defaultState();
@@ -5981,6 +6246,7 @@ function setupLanguage() {
      setupTargetWorkspace();
      setupHelpChat();
      setupExportLanguage();
+     setupNextSteps();
      const shared = window.__AIR2STAY_SHARED_PLAN__ || new URLSearchParams(window.location.search).get("plan");
      if (shared) {
        try { restorePlan(typeof shared === "string" ? JSON.parse(shared) : shared); }

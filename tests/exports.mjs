@@ -13,7 +13,7 @@ const node = () => ({ hidden:true, value:'FRANCE', textContent:'', dataset:{}, c
 const context=vm.createContext({inputData:data,inputLocations:locations,Blob,findRoute,getBridge,weeksInMonth,runScenario,validateScenarioInputs,planningMetrics,decisionNote,solveCapacityTarget,launchOptions,stressTest,buildPeerProfile,
   URL:{createObjectURL(blob){exported=blob;return 'blob:test';},revokeObjectURL(){}},
   document:{addEventListener(){},querySelector(selector){if(!nodes.has(selector))nodes.set(selector,node());return nodes.get(selector);},
-    createElement(){return {click(){}};},createTextNode(text){return {textContent:text};}}
+    createElement(){return {click(){},setAttribute(){},append(){}};},createTextNode(text){return {textContent:text};}}
 });
 vm.runInContext(source+'\ndata=inputData; countryLocationLookup=buildCountryLocationLookup(inputLocations); readForm=()=>{}; setupPlanActions(); setupDecisionTools();',context);
 for (const [origin, proxy, flights] of [['FRANCE', '', 0], ['INDIA', '', 3], ['INDIA', '', -5], ['GREECE', '__PEERS__', 5]]) {

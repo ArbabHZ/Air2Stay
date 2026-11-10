@@ -1,5 +1,5 @@
-import { assistantReply, parseScenarioPrompt, sensitivity } from './engine.mjs';
-import { reverseTargetPlan, TARGET_FLIGHT_CONTROL_LIMIT } from './decision_tools.mjs';
+import { assistantReply, parseScenarioPrompt, sensitivity, runScenario, validateScenarioInputs } from './engine.mjs';
+import { reverseTargetPlan, TARGET_FLIGHT_CONTROL_LIMIT, planningMetrics } from './decision_tools.mjs';
 
 // Local answers use the same result object as the screen. This module never
 // changes the plan; the controller validates and applies an explicit command.
@@ -278,6 +278,63 @@ export function arabicPromptToEnglish(data, prompt) {
   if (/^(مرحبا|اهلا|هلا|هاي|السلام عليكم|صباح الخير|مساء الخير)/.test(text)) return 'Hello';
   if (/^(شكرا|مشكور|يعطيك العافيه|ممتاز|تمام|جميل)/.test(text)) return 'Thanks';
   if (/(اعد|اعاده|ارجع) (ضبط|تعيين)|ابدا من جديد/.test(text)) return 'Reset the plan';
+  // "Where/how do I write an email…", then "where is …" for controls and pages.
+  if (PC_AR_DRAFT_INTENT.test(text) && /(بريد|رساله|رسائل|ايميل|مسوده|خطاب|طلب)/.test(text)) {
+    return 'Where do I draft an email' + (/(فندق|فنادق|الفنادق|غرف|الغرف|السعه)/.test(text) ? ' about hotel rooms?' : /(طيران|الطيران|رحلات|الرحلات|المطار|حجوزات)/.test(text) ? ' about flights?' : '?');
+  }
+  if (/(^|\s)(اين|مكان|موقع)(\s|$)|كيف (اجد|اصل|افتح)|لا اجد/.test(text)) {
+    const places = [
+      [/(بلد|دوله) المغادره|المغادره|بلد الانطلاق/, 'Where is the departure country?'],
+      [/مسار جديد|المسار الجديد/, 'Where is new route?'],
+      [/الافتراضات الاوليه|افتراضات البدايه/, 'Where are starting assumptions?'],
+      [/(الرحلات الاضافيه|عدد الرحلات|الرحلات الاسبوعيه)/, 'Where are extra flights?'],
+      [/(المقاعد|مقاعد)/, 'Where are seats per flight?'],
+      [/(اشغال|امتلاء)/, 'Where is flight occupancy?'],
+      [/(الفعاليه|الموسم|الفعاليات)/, 'Where is the event control?'],
+      [/(الغرض من السفر|غرض السفر|الغرض)/, 'Where is travel purpose?'],
+      [/(تنتهي رحلتهم|الركاب الذين)/, 'Where is passengers ending their trip?'],
+      [/(التسجيل في الفنادق|استخدام الفنادق|نسبه الفنادق)/, 'Where is hotel use?'],
+      [/(متوسط الليالي|مده الاقامه|متوسط الاقامه)/, 'Where is average stay?'],
+      [/تعديل الخطه/, 'Where is Adjust plan?'],
+      [/(اضافه مهمه|اضف مهمه)/, 'Where is Add task?'],
+      [/تسجيل القرار/, 'Where is Log decision?'],
+      [/(اضافه ملاحظه|اضف ملاحظه)/, 'Where is Add note?'],
+      [/مذكره القرار/, 'Where is the decision note?'],
+      [/الخطوات التاليه/, 'Where is next steps?'],
+      [/الاجراءات/, 'Where is Actions?'],
+      [/(التصدير|تصدير|التنزيل|تنزيل)/, 'Where is export?'],
+      [/(اللغه|العربيه|الانجليزيه)/, 'Where is the language?'],
+      [/ارشدني/, 'Where is Guide me?'],
+      [/البحث/, 'Where is search?'],
+      [/(الاشعارات|الجرس)/, 'Where are notifications?'],
+      [/المهام/, 'Where are tasks?'],
+      [/(الاحصاءات|الاحصائيات)/, 'Where is statistics?'],
+      [/تعديل التوزيع/, 'Where is edit mix?'],
+      [/(الشهر|شهر)/, 'Where is the month control?'],
+      [/(^|\s)(ملخص|الملخص)($|\s|[?؟])/, 'Where is Focus?'],
+      [/(^|\s)الهدف($|\s|[?؟])/, 'Where is Target?'],
+      [/المقارنه/, 'Where is Compare?'],
+      [/التفاصيل/, 'Where is Details?'],
+      [/المتابعات/, 'Where are follow-ups?'],
+      [/توزيع الزوار/, 'Where is visitor mix?'],
+      [/النتائج السابقه/, 'Where is check past results?'],
+      [/دليل المصطلحات/, 'Where is the term guide?'],
+      [/تخطيط المسار/, 'Where is plan a route?'],
+    ].find(([pattern]) => pattern.test(text));
+    if (places) return places[1];
+  }
+  // "ماذا لو …": a what-if on the open plan.
+  if (/(ماذا لو|ماذا سيحدث|ما الذي سيحدث|ماذا يحدث|ماذا يصير|لو افترضنا|افترض ان)/.test(text)) {
+    const flightCount = text.match(/(\d+)\s*(رحله|رحلات)/)?.[1] || (/رحلتين|رحلتان/.test(text) ? '2' : /رحله واحده/.test(text) ? '1' : null);
+    if (flightCount != null && /(اضفنا|اضافه|نضيف|اضيف|زدنا|زياده|اكثر|اخري|اضافيه|ارتفع|ارتفعت|زادت)/.test(text) && !/(قللنا|نقص|اقل|خفضنا|حذفنا|الغينا)/.test(text)) return `What if we add ${flightCount} more flights?`;
+    if (flightCount != null && /(قللنا|نقص|اقل|خفضنا|حذفنا|الغينا|انخفضت)/.test(text)) return `What if there are ${flightCount} fewer flights?`;
+    // "زاد بنسبة 5%" is a relative change: the English reply asks for the final value.
+    if (percentMatch && /(بنسبه|بمقدار)/.test(text) && /(زاد|زادت|ارتفع|ارتفعت|انخفض|انخفضت|نقص|نقصت|قل|قلت|زياده|انخفاض)/.test(text)) return `What if it changes by ${percentMatch[1]}%?`;
+    if (percentMatch && /(اشغال|امتلاء)/.test(text)) return `What if flight occupancy is ${percentMatch[1]}%?`;
+    if (percentMatch && /(التسجيل في الفنادق|استخدام الفنادق|نسبه الفنادق)/.test(text)) return `What if hotel use is ${percentMatch[1]}%?`;
+    const stay = numberAfter(/(متوسط الليالي|مده الاقامه|متوسط الاقامه)/);
+    if (stay != null) return `What if average stay is ${stay} nights?`;
+  }
   if (nightsWord && /(تقليل|خفض|انقاص|قلل|اخفض|نقص|تخفيض)/.test(text) && (percentMatch || number != null)) return `Decrease hotel nights by ${percentMatch ? percentMatch[1] + '%' : number}${where}`;
   if (nightsWord && percentMatch && /(زياده|زد|نزيد|ازيد|يزيد|رفع|ارفع|نرفع|اكثر|نمو|تنمو|ترتفع|زيد)/.test(text)) return `I want to increase hotel nights by ${percentMatch[1]}%${where}`;
   if (nightsWord && /(ضاعف|مضاعفه|نضاعف|ضعف)/.test(text)) return `I want to double the hotel nights${where}`;
@@ -297,6 +354,13 @@ export function arabicPromptToEnglish(data, prompt) {
   }
   const flights = body.match(/^(اضف|زد|احذف|الغ|قلل)\s*(\d+)\s*(رحله|رحلات)/);
   if (flights) return `${/^(احذف|الغ|قلل)/.test(flights[1]) ? 'Remove' : 'Add'} ${flights[2]} flights${where}`;
+  if (/(الرسم|الرسوم|المخطط|المخططات|البياني|البيانيه)/.test(text)) {
+    const named = [[/(الاحصاءات|الاحصائيات)/, ' in Statistics'], [/توزيع الزوار/, ' in Visitor mix'], [/النتائج السابقه/, ' in Check past results'], [/المقارنه/, ' in Compare'], [/التفاصيل/, ' in Details']].find(([pattern]) => pattern.test(text));
+    return 'Explain the charts' + (named ? named[1] : '');
+  }
+  if (/(ينقصني|ناقص|الناقصه|المتبقي|المتبقيه|لم انجز|لم اكمل|لم اتحقق|ما الذي بقي)/.test(text)) return 'What steps am I missing?';
+  if (/(الخطوه التاليه|الخطوات التاليه|ما التالي|ماذا بعد|ماذا افعل الان|ماذا افعل بعد)/.test(text)) return 'What is the next step?';
+  if (/(هذه الصفحه|هذا القسم|هذا التبويب|هذا الجزء|كيف يعمل هذا|كيف تعمل هذه|اين انا)/.test(text)) return 'How does this page work?';
   if (/(ماذا|ما الذي|شو) (يمكنك|تستطيع|تقدر)|^ماذا تفعل\??$|كيف استخدمك|^مساعده\??$/.test(text)) return 'What can you do?';
   if (/(اشرح|لخص|فسر|وضح|ملخص|ماذا تعني|ما معني)( لي)? (النتيجه|النتائج|نتيجتي|الخطه|خطتي|الارقام|هذه الارقام|هذه النتيجه)/.test(text)) return 'Explain the result';
   if (/(ما معني|ماذا يعني|ماذا تعني|ما المقصود|ما هو|ما هي|تعريف|عرف)/.test(text)) {
@@ -406,7 +470,7 @@ const PC_GUIDE = [
     const share = Number.isFinite(metrics.liveChainWmape) ? (metrics.liveChainWmape * 100).toFixed(2) + '%' : null;
     return ['Check past results shows how close Air2Stay’s estimates were to real hotel arrivals.',
       ...(Number.isFinite(metrics.trainingMonths) && Number.isFinite(metrics.validationMonths) && metrics.validationPeriod
-        ? [`It learned from ${metrics.trainingMonths} months of older records, then estimated ${metrics.validationMonths} later months it had not used (${metrics.validationPeriod}) and compared them with the actual totals.`] : []),
+        ? [`It learned from ${metrics.trainingMonths} months of older records, then estimated ${metrics.validationMonths} later months it had not used (${String(metrics.validationPeriod).replace(' to ', ' – ')}) and compared them with the actual totals.`] : []),
       ...(share ? [`The overall weighted error was ${share} of recorded hotel arrivals. Lower is better.`] : []),
       'The page also shows a longer test and a month-by-month chart.'];
   }],
@@ -516,7 +580,383 @@ function pcGuideReply(data, text, current, result) {
   return null;
 }
 
-export function planningChatReply(data, prompt, current, result, proposalSummary = null) {
+// ---------------------------------------------------------------------------
+// Assistant extras: next steps, missing checks, this page, charts and messages.
+// Every sentence is one line so the app dictionary can translate it.
+
+// Which guide topic belongs to the page and view the user has open.
+function pcPageKey(where = {}) {
+  if (where.view === 'scenarioView' || !where.view) {
+    return { focus: 'focus', target: 'target', decisions: 'compare', details: 'details', proposal: 'followups', chat: 'focus' }[where.mode] || 'focus';
+  }
+  return { bridgeView: 'mix', validationView: 'validation', glossaryView: 'terms', statsView: 'stats', messagesView: 'messages' }[where.view] || 'focus';
+}
+
+const PC_PAGE_NAMES = Object.freeze({ focus: 'Focus', target: 'Target', compare: 'Compare', details: 'Details', followups: 'Follow-ups',
+  mix: 'Visitor mix', validation: 'Check past results', terms: 'Term guide', stats: 'Statistics', messages: 'Messages' });
+
+// Each line describes what the chart on that page actually draws.
+const PC_CHARTS = Object.freeze({
+  focus: [
+    'The four cards show extra hotel check-ins, extra guest nights, total guest nights and the possible range.',
+    'The small line in the first three cards shows that measure for every month of the year.',
+    'The possible range card shows the lower and higher guides as a bar.',
+    'From seats to guest nights: each bar is one step, from flight seats to passengers, passengers ending their trip in Abu Dhabi, hotel check-ins and guest nights.',
+    'In that chart, gray shows the usual month, the coloured cap marks your plan and the badge shows the change.',
+  ],
+  compare: [
+    'Three launch sizes: cards for cautious, standard and expanded weekly flights, with the extra check-ins and guest nights each would add.',
+    'Compare months: the extra guest nights from the same flights in each month of the year.',
+    'What if fewer visitors stay in hotels?: how much the extra guest nights fall under each lower-assumption trial, compared with your plan.',
+    'Show the numbers under each chart opens the table behind it.',
+  ],
+  details: [
+    'Estimated hotel nights by nationality: the estimated change in hotel nights for each visitor group.',
+    'One-at-a-time sensitivity: how far guest nights move when one assumption is nudged up or down on its own; the nudge sizes differ, so treat it as a guide.',
+    'Route map: a schematic line from the country’s reference point to Abu Dhabi city, not airport locations.',
+    'Seats by month: average monthly flight seats for this route from the supplied records; bars start at zero and k means thousand.',
+  ],
+  mix: [
+    'Global Visitor Origins: an illustrative map of visitor nationalities; locations are country reference points, not airports or flight paths.',
+    'The cards list the largest nationality groups with their share, hotel check-ins and guest nights.',
+  ],
+  validation: [
+    'Monthly hotel arrivals: the recorded hotel arrivals for each test month, compared with Air2Stay’s live calculation and the hybrid comparison model.',
+    'The shaded band shows plus or minus the overall weighted error around the live estimate; it is a visual guide, not a guaranteed range.',
+  ],
+  stats: [
+    'Guest nights through the year: your plan against each month’s baseline estimate.',
+    'Largest departure markets in the selected month.',
+    'Total seats by month across the included markets.',
+    'The share of guests outside the 5 largest nationality groups.',
+  ],
+});
+
+function pcNamedPage(lower) {
+  const named = [
+    ['stats', /\bstatistics\b|\bstats\b/], ['mix', /\bvis[a-z]{0,5} mix\b|\bnationalit/], ['validation', /\bpast results\b|\bvalidation\b|\baccuracy\b/],
+    ['compare', /\bcompare\b/], ['details', /\bdetails\b/], ['target', /\btarget\b/], ['focus', /\bfocus\b|\bresult cards\b|\bplan a route\b/],
+    ['followups', /\bfollow[- ]?ups?\b/], ['messages', /\bmessages\b/], ['terms', /\bterm guide\b|\bglossary\b/],
+  ].find(([, pattern]) => pattern.test(lower));
+  return named ? named[0] : null;
+}
+
+function pcChartsReply(lower, where) {
+  const key = pcNamedPage(lower) || pcPageKey(where);
+  const lines = PC_CHARTS[key] || [];
+  if (!lines.length) return 'This page has no charts. Plan a route (Focus, Compare and Details), Visitor mix, Check past results and Statistics have charts.';
+  return [`Here is what the charts on ${PC_PAGE_NAMES[key]} show:`, ...lines.map((line) => `- ${line}`)].join('\n');
+}
+
+function pcPageReply(where, data) {
+  const key = pcPageKey(where);
+  const entry = PC_GUIDE.find(([name]) => name === key);
+  const lines = entry ? (typeof entry[2] === 'function' ? entry[2](data) : entry[2]) : [];
+  const body = lines.length ? lines : [`You are on ${PC_PAGE_NAMES[key]}.`];
+  return [...body, ...(PC_CHARTS[key]?.length ? ['', 'Ask “Explain the charts” to read the graphs on this page.'] : [])].join('\n');
+}
+
+function pcNextStepsReply(next) {
+  const { readiness, steps } = next;
+  const lines = [`Decision readiness: ${readiness.verified} of ${readiness.total} checks have recorded evidence.`, ''];
+  if (!steps.length) {
+    lines.push('All checks have recorded evidence for these exact assumptions.', 'You can finish with a planning decision in Compare.');
+    return lines.join('\n');
+  }
+  steps.forEach((step, index) => {
+    lines.push(`Step ${index + 1}: ${step.title}.`);
+    if (step.status === 'red') lines.push('This check is overdue.');
+    lines.push(step.why);
+    if (step.impact) lines.push(step.impact);
+    lines.push(step.ask, '');
+  });
+  lines.push('Use Add task in the Next steps box on Focus to track each check.', 'When these are done, finish with a planning decision in Compare.');
+  return lines.join('\n');
+}
+
+function pcMissingReply(missing) {
+  const checks = (missing.checks || []).filter((check) => check.status !== 'green');
+  const builtIn = checks.filter((check) => !String(check.id).startsWith('task:'));
+  const lines = [];
+  if (builtIn.length) lines.push(`You still have ${builtIn.length} of ${missing.total} checks without recorded evidence:`);
+  else lines.push('Every check has recorded evidence for these exact assumptions.');
+  for (const check of checks) lines.push(`- ${check.title} · ${check.status === 'red' ? 'overdue' : 'no recorded evidence yet'}`);
+  if (!missing.decisionLogged) lines.push('', 'No planning decision is logged yet; use Log decision in Follow-ups when the checks are done.');
+  if (!checks.length && missing.decisionLogged) return 'Nothing is missing: every check has recorded evidence for these exact assumptions, and a decision is logged.';
+  if (checks.length) lines.push('', 'Ask “What is the next step?” for the order to work through them.');
+  return lines.join('\n');
+}
+
+// Messages and approval requests: "where is the message about …?"
+const PC_MESSAGE_STOP = new Set(['where', 'what', 'which', 'the', 'message', 'messages', 'email', 'emails', 'mail', 'from', 'about', 'regarding', 'find', 'inbox', 'sent', 'drafts', 'draft', 'folder', 'located', 'location', 'are', 'my', 'the', 'that', 'this', 'with', 'for', 'can', 'you', 'show', 'list', 'any', 'have', 'there', 'how', 'many', 'unread', 'request', 'requests', 'approval', 'approvals', 'look', 'search', 'titled', 'called', 'subject', 'did', 'get', 'got', 'received', 'receive', 'does', 'and', 'was', 'were', 'one', 'please', 'tell', 'kept', 'stored', 'saved', 'put', 'went', 'gone', 'into', 'waiting', 'pending', 'open', 'still', 'status', 'new', 'box',
+  'اين', 'الرساله', 'رساله', 'الرسائل', 'رسائل', 'البريد', 'الوارد', 'المسودات', 'المسوده', 'مسوده', 'المرسله', 'التي', 'الذي', 'ابحث', 'اجد', 'اعثر', 'موقع', 'طلب', 'الطلب', 'طلبات', 'الطلبات', 'موافقه', 'الموافقه', 'لدي', 'عندي', 'حول', 'بخصوص', 'غير', 'مقروءه', 'المقروءه', 'يوجد', 'توجد', 'هناك', 'قيد', 'انتظار', 'الانتظار', 'صندوق', 'مجلد']);
+
+export function pcMessagesQuery(prompt) {
+  const raw = String(prompt || '').trim().slice(0, 600);
+  if (!raw) return null;
+  const arabic = /[؀-ۿ]/.test(raw);
+  const text = arabic ? pcArabicNormalize(raw) : raw.toLowerCase();
+  const topic = arabic ? /(رساله|رسائل|البريد|الوارد|المسودات|مسوده|المرسله|طلب|طلبات|موافقه)/ : /\b(?:messages?|e-?mails?|mail|inbox|drafts?|unread|requests?|approvals?)\b/;
+  const asking = arabic ? /(^|\s)(اين|ابحث|اجد|اعثر|كم|عدد|هل|موقع|في اي)(\s|$)/ : /\b(?:where|find|which folder|located|location|how many|any|do i have|is there|are there|look for|search for|show me|list)\b/;
+  if (!topic.test(text) || !asking.test(text)) return null;
+  // "Where should I draft an email…?" asks where to write one: the guide answers it.
+  if (arabic ? PC_AR_DRAFT_INTENT.test(text) : PC_DRAFT_INTENT.test(text)) return null;
+  const requests = arabic ? /(طلب|طلبات|موافقه)/.test(text) : /\b(?:requests?|approvals?)\b/.test(text);
+  const folder = arabic ? (/(المسودات|مسوده)/.test(text) ? 'drafts' : /المرسله/.test(text) ? 'sent' : /الوارد/.test(text) ? 'inbox' : null)
+    : (/\bdrafts?\b/.test(text) ? 'drafts' : /\bsent\b/.test(text) ? 'sent' : /\binbox\b/.test(text) ? 'inbox' : null);
+  const count = arabic ? /(^|\s)(كم|عدد)(\s|$)/.test(text) : /\bhow many\b/.test(text);
+  const unread = arabic ? /غير مقروء/.test(text) : /\bunread\b/.test(text);
+  const terms = [...new Set(text.replace(/[?؟!.,:;"“”'’()«»]/g, ' ').split(/\s+/)
+    // Arabic words are also checked without a leading "al-", "wa-", "bi-", "li-" or "min".
+    .filter((word) => !PC_MESSAGE_STOP.has(word))
+    .map((word) => arabic ? word.replace(/^(ال|و|ب|ل|من)(?=..)/, '') : word)
+    .filter((word) => word.length >= 3 && !PC_MESSAGE_STOP.has(word) && !(arabic && PC_MESSAGE_STOP.has('ال' + word))))];
+  return { arabic, requests, folder, count, unread, terms };
+}
+
+function pcMatchScore(terms, fields, arabic) {
+  const haystack = fields.map((field) => arabic ? pcArabicNormalize(String(field || '')) : String(field || '').toLowerCase());
+  return terms.reduce((score, term) => score + haystack.reduce((sum, field, index) => sum + (field.includes(term) ? (index === haystack.length - 1 ? 1 : 2) : 0), 0), 0);
+}
+
+export function pcMessagesReply(query, team) {
+  const messages = Array.isArray(team?.messages) ? team.messages : [];
+  const requests = Array.isArray(team?.requests) ? team.requests : [];
+  const folderName = { inbox: 'Inbox', sent: 'Sent', drafts: 'Drafts' };
+  const counts = { inbox: 0, sent: 0, drafts: 0 };
+  for (const message of messages) if (Object.hasOwn(counts, message.folder)) counts[message.folder] += 1;
+  const unread = messages.filter((message) => message.folder === 'inbox' && message.unread).length;
+  const summary = `Messages: Inbox ${counts.inbox} (${unread} unread), Sent ${counts.sent}, Drafts ${counts.drafts}.`;
+  if (query.requests) {
+    const scored = requests.map((request) => ({ request, score: pcMatchScore(query.terms, query.arabic ? [request.titleAr, request.fromAr] : [request.title, request.from], query.arabic) }));
+    const best = Math.max(0, ...scored.map((row) => row.score));
+    const waiting = requests.filter((request) => request.status === 'Waiting').length;
+    if (query.count || !query.terms.length || best === 0) {
+      return ['Approval requests are in Tasks, in the shortcuts on the right edge.', `Requests: ${requests.length}, waiting: ${waiting}.`,
+        ...(query.terms.length && !query.count ? ['I couldn’t find a request that matches those words.'] : [])].join('\n');
+    }
+    const found = scored.filter((row) => row.score === best).slice(0, 3).map((row) => row.request);
+    return [...found.map((request) => `The request “${request.title}” from ${request.from} is in Tasks, marked ${request.status}.`),
+      'Open Tasks from the shortcuts on the right edge to see it.'].join('\n');
+  }
+  if (query.count || query.unread || !query.terms.length) {
+    if (query.folder && !query.count && !query.unread) {
+      return [`${folderName[query.folder]} is in Messages at the top (messages: ${counts[query.folder]}).`, 'Open Messages at the top to see them.'].join('\n');
+    }
+    return [summary, 'Open Messages at the top to see them.'].join('\n');
+  }
+  const pool = messages.filter((message) => !query.folder || message.folder === query.folder);
+  const scored = pool.map((message) => ({ message, score: pcMatchScore(query.terms,
+    query.arabic ? [message.subjectAr, message.fromAr, message.toAr, message.body] : [message.subject, message.from, message.to, message.body], query.arabic) }));
+  const best = Math.max(0, ...scored.map((row) => row.score));
+  if (best === 0) return ['I couldn’t find a message that matches those words.', summary, 'Try a word from the subject or the sender’s name.'].join('\n');
+  const found = scored.filter((row) => row.score === best).map((row) => row.message);
+  if (found.length > 1) {
+    return ['I found these messages:', ...found.slice(0, 5).map((message) => `- “${message.subject}” · ${folderName[message.folder] || message.folder}`), 'Open Messages at the top, choose the folder, then select the message.'].join('\n');
+  }
+  const [message] = found;
+  const place = folderName[message.folder] || message.folder;
+  const lines = [message.folder === 'drafts' ? `Your draft “${message.subject}” is in ${place}.`
+    : message.folder === 'sent' ? `The message “${message.subject}” to ${message.to} is in ${place}.`
+    : `The message “${message.subject}” from ${message.from} is in ${place}.`];
+  if (message.folder === 'inbox' && message.unread) lines.push('It is unread.');
+  lines.push(`Open Messages at the top, choose ${place}, then select it.`);
+  return lines.join('\n');
+}
+
+// ---------------------------------------------------------------------------
+// What-if: works out a change on the open plan without applying it.
+const PC_WHATIF_FIELDS = [
+  ['extraFlights', 'Extra flights each week', (value) => pcNumber(value)],
+  ['seatsPerFlight', 'Seats on each flight', (value) => pcNumber(value)],
+  ['loadFactor', 'How full flights are', (value) => (Number(value) * 100).toFixed(1) + '%'],
+  ['p2pShare', 'Passengers ending their trip in Abu Dhabi', (value) => (Number(value) * 100).toFixed(1) + '%'],
+  ['conversionRate', 'Share checking into a hotel', (value) => (Number(value) * 100).toFixed(1) + '%'],
+  ['averageStay', 'Average nights per hotel stay', (value) => Number(value).toFixed(2)],
+  ['eventUplift', 'Extra hotel demand for an event or season', (value) => (Number(value) * 100).toFixed(1) + '%'],
+];
+const PC_WHATIF_INTENT = /\b(?:what (?:will|would|could) happen if|what happens if|what if|suppose|imagine if|what would (?:the |my )?(?:result|results|plan|nights?|numbers?) (?:be|look like) if)\b/;
+
+// "2 more flights", "increase by 2", "another 2 flights": a change from the
+// current number. Returns the signed change, or null.
+function pcFlightStep(lower) {
+  const up = lower.match(/\b(\d+)\s+(?:more|additional)\s+(?:weekly\s+|extra\s+)?flights?\b|\b(?:another|an additional)\s+(\d+)\s+flights?\b|\bflights?\b[^.?!]{0,40}?\b(?:increase[sd]?|rise[sn]?|rose|grow[sn]?|go(?:es)? up|went up)\s+by\s+(\d+)\b|\b(?:increase|raise|grow)\s+(?:the\s+)?(?:extra\s+|weekly\s+)?flights?\s+by\s+(\d+)\b|\b(?:add|adding|added)\s+(\d+)\s+(?:more\s+|extra\s+|weekly\s+)?flights?\b/);
+  if (up) return Number(up.slice(1).find(Boolean));
+  const down = lower.match(/\b(\d+)\s+(?:fewer|less)\s+(?:weekly\s+|extra\s+)?flights?\b|\bflights?\b[^.?!]{0,40}?\b(?:decrease[sd]?|drop(?:s|ped)?|fall[s]?|fell|go(?:es)? down|went down|reduce[sd]?|cut)\s+by\s+(\d+)\b|\b(?:decrease|reduce|cut|lower)\s+(?:the\s+)?(?:extra\s+|weekly\s+)?flights?\s+by\s+(\d+)\b|\b(?:remove|removing|removed|cancel|cancelling|cancelled)\s+(\d+)\s+(?:weekly\s+|extra\s+)?flights?\b/);
+  if (down) return -Number(down.slice(1).find(Boolean));
+  return null;
+}
+
+function pcWhatIfCommand(key, value) {
+  if (key === 'extraFlights') return `Set extra flights to ${value}`;
+  if (key === 'loadFactor') return `Set flight occupancy to ${(value * 100).toFixed(1).replace(/\.0$/, '')}%`;
+  if (key === 'conversionRate') return `Set hotel use to ${(value * 100).toFixed(1).replace(/\.0$/, '')}%`;
+  if (key === 'averageStay') return `Set average stay to ${Number(value.toFixed(2))} nights`;
+  if (key === 'seatsPerFlight') return `Set seats per flight to ${Math.round(value)}`;
+  return null;
+}
+
+function pcWhatIfReply(data, text, lower, current) {
+  if (!PC_WHATIF_INTENT.test(lower)) return null;
+  const rest = text.replace(/^.*?\b(?:what (?:will|would|could) happen if|what happens if|what if|suppose|imagine if|what would (?:the |my )?(?:result|results|plan|nights?|numbers?) (?:be|look like) if)\b/i, '').trim();
+  const step = pcFlightStep(lower);
+  let parsed = null;
+  // "by 5%" is a relative change the planner cannot read without guessing.
+  if (/\bby\s+-?\d+(?:\.\d+)?\s*(?:%|percent|percentage points?|points?)/.test(lower)) return null;
+  const phrase = pcCanonicalCommand((rest || text).replace(/\b(?:is|are|was|were|becomes?|became|goes to|went to|(?:drops?|rises?|falls?|changes?|moves?) to)\b/gi, ' '));
+  try { parsed = parseScenarioPrompt(data, phrase, current); } catch { parsed = null; }
+  const changes = { ...(parsed?.understood ? parsed.changes : {}) };
+  if (step != null) changes.extraFlights = Number(current.extraFlights) + step;
+  const route = changes.originKey && changes.originKey !== current.originKey ? data.routes.find((row) => row.originKey === changes.originKey)?.origin || changes.originKey : null;
+  const month = changes.month && Number(changes.month) !== Number(current.month) ? data.months[changes.month - 1] : null;
+  if (route || month) {
+    return ['This what-if works on the plan you have open.',
+      ...(route ? [`Switch the departure country to ${route} first, then ask again.`] : []),
+      ...(month ? [`Switch the month to ${month} first, then ask again.`] : [])].join('\n');
+  }
+  const keys = PC_WHATIF_FIELDS.map(([key]) => key).filter((key) => changes[key] != null && Number(changes[key]) !== Number(current[key]));
+  if (!keys.length) return null;
+  const next = { ...current };
+  for (const key of keys) next[key] = Number(changes[key]);
+  if (validateScenarioInputs(next)) {
+    if (keys.includes('extraFlights') && (next.extraFlights < -20 || next.extraFlights > 20)) return 'Extra flights must stay between −20 and 20 a week, so I can’t work that out.\nYour plan has not changed.';
+    return 'That value is outside what the planner allows, so I can’t work that out.\nYour plan has not changed.';
+  }
+  const before = planningMetrics(data, current);
+  const after = planningMetrics(data, next);
+  const totalBefore = runScenario(data, current).scenario.guestNights;
+  const totalAfter = runScenario(data, next).scenario.guestNights;
+  const lines = ['Here is how this change would affect your plan, without applying it:'];
+  for (const [key, label, format] of PC_WHATIF_FIELDS) if (keys.includes(key)) lines.push(`- ${label}: ${format(current[key])} → ${format(next[key])}`);
+  lines.push(`- Extra hotel check-ins: ${pcNumber(before.incremental.hotelCheckins)} → ${pcNumber(after.incremental.hotelCheckins)}`,
+    `- Extra guest nights: ${pcNumber(before.incremental.guestNights)} → ${pcNumber(after.incremental.guestNights)}`,
+    `- Total guest nights: ${pcNumber(totalBefore)} → ${pcNumber(totalAfter)}`, '');
+  const difference = Math.round(totalAfter - totalBefore);
+  lines.push(difference > 0 ? `That is about ${pcNumber(difference)} more guest nights than your plan.`
+    : difference < 0 ? `That is about ${pcNumber(-difference)} fewer guest nights than your plan.` : 'Guest nights would stay about the same.');
+  const commands = keys.map((key) => pcWhatIfCommand(key, next[key]));
+  lines.push(keys.length === 1 && commands[0] ? `Your plan has not changed; to apply it, say “${commands[0]}”.`
+    : 'Your plan has not changed; to apply it, give each change as a command, such as “Set extra flights to 5”.');
+  return lines.join('\n');
+}
+
+// ---------------------------------------------------------------------------
+// Where things are: "where is the departure country?", "where do I draft an email?"
+const PC_WHERE_INTENT = /\bwhere(?:'s| is| are| do| does| can| could| should| would| to| i| will)\b|\blocat(?:e|ed|ion)\b|\b(?:how|where) (?:do|can|could|should) i (?:find|get to|open|reach)\b|\bcan(?:'t|not) find\b|\bfind the\b/;
+// Asking how or where to write one, not where an existing message is.
+const PC_DRAFT_INTENT = /\b(?:should|can|could|do|would|to|how (?:do|can|to)|want to|need to|like to)\s+(?:i\s+|we\s+|you\s+)?(?:draft|write|compose|send|prepare|create|start)\b[^.?!]{0,50}\b(?:e-?mails?|messages?|letters?|requests?|drafts?)\b|^(?:please\s+)?(?:draft|write|compose)\s+(?:an?\s+|the\s+|my\s+)?(?:e-?mail|message|letter)\b/;
+const PC_AR_DRAFT_INTENT = /(^|\s)(اكتب|كتابه|اصيغ|صياغه|انشئ|انشاء|ارسل|ارسال|احرر|تحرير)(\s|$)/;
+const PC_CONTROLS = [
+  [/\b(?:departure(?: country)?|country of departure|origin(?: country)?|(?:choose|change|pick|select|switch) (?:a |the )?(?:country|route)|country (?:control|selector|menu|list|dropdown|box))\b/, 'Departure country', '01 Market'],
+  [/\bstarting assumptions\b/, 'Starting assumptions', '01 Market'],
+  [/\b(?:month (?:control|selector|picker|menu|dropdown|box)|(?:choose|change|pick|select|set) (?:a |the )?month)\b|^(?:where (?:is|are) )?(?:the )?months?\??$/, 'Month', '01 Market'],
+  [/\b(?:extra flights|flights each week|weekly flights|number of flights|flight count)\b/, 'Extra flights each week', '02 Flights'],
+  [/\b(?:seats?(?: per| on each)? flight|seats|aircraft size)\b/, 'Seats on each flight', '02 Flights'],
+  [/\b(?:load factor|flight occupancy|how full (?:the )?flights)\b/, 'How full flights are', '02 Flights'],
+  [/\b(?:event|season|disruption|uplift)\b/, 'Extra hotel demand for an event or season', '03 Event or disruption'],
+  [/\b(?:travel purpose|route purpose|purpose)\b/, 'Expected travel purpose', '04 Hotel visitors'],
+  [/\b(?:p2p|passengers ending|trip[- ]ending|ending their trip)\b/, 'Passengers ending their trip in Abu Dhabi', '04 Hotel visitors'],
+  [/\b(?:hotel use|hotel conversion|conversion rate|checking into a hotel|hotel share)\b/, 'Share checking into a hotel', '04 Hotel visitors'],
+  [/\b(?:average stay|nights per (?:hotel )?stay|length of stay|stay length)\b/, 'Average nights per hotel stay', '04 Hotel visitors'],
+];
+const PC_PLACES = [
+  [/\bnew route\b/, ['+ New route is the last choice in Departure country, under Adjust plan.']],
+  [/\badjust plan\b|\b(?:plan )?controls\b|\bsettings\b/, ['Adjust plan is the button at the top left of Plan a route.', 'It opens the plan controls in four sections: 01 Market, 02 Flights, 03 Event or disruption and 04 Hotel visitors.']],
+  [/\badd (?:a )?task\b|\bnew task\b/, ['Add task is on each check in Follow-ups, and in the Next steps box on Focus.']],
+  [/\blog (?:a |the |my )?decision\b|\brecord (?:a |the |my )?decision\b/, ['Log decision is in Follow-ups, further down the page.']],
+  [/\badd (?:a )?note\b/, ['Add note is in Follow-ups, below Your tasks.']],
+  [/\bdecision note\b/, ['The decision note is on Compare, with Save as PDF and a text download.']],
+  [/\bnext steps?(?: box)?\b/, ['Next steps is on Focus, below your result.']],
+  [/\bactions?(?: button| panel)?\b|\bpriority actions\b/, ['Actions is the button at the top right of Plan a route; its number shows the checks that need attention.']],
+  [/\bexport|\bdownload\b/, ['Export is the button under Your current plan on Focus.', 'It saves the plan as Excel, a PDF report or CSV, in English or Arabic.']],
+  [/\blanguage\b|\barabic\b|\benglish\b/, ['The language buttons, EN and عربي, are at the top right of the page.']],
+  [/\bguide me\b/, ['Guide me is the button next to Search at the top right.']],
+  [/\bsearch\b/, ['Search is at the top right of the page.']],
+  [/\bnotifications?\b|\bbell\b/, ['Notifications is the bell at the top right, and it is also in the shortcuts on the right edge.']],
+  [/\btasks?\b/, ['Tasks is in the shortcuts on the right edge.']],
+  [/\bstatistics\b|\bstats\b/, ['Statistics is in the menu at the top of the page and in the shortcuts on the right edge.']],
+  [/\bedit mix\b/, ['Edit mix is on the Visitor mix page.']],
+  [/\bfocus\b/, ['“Focus” is a tab at the top of Plan a route.']],
+  [/\btarget\b/, ['“Target” is a tab at the top of Plan a route.']],
+  [/\bcompare\b/, ['“Compare” is a tab at the top of Plan a route.']],
+  [/\bdetails\b/, ['“Details” is a tab at the top of Plan a route.']],
+  [/\bfollow[- ]?ups?\b/, ['“Follow-ups” is a tab at the top of Plan a route.']],
+  [/\bvisitor mix\b/, ['“Visitor mix” is in the menu at the top of the page.']],
+  [/\b(?:check )?past results\b|\bvalidation\b/, ['“Check past results” is in the menu at the top of the page.']],
+  [/\bterm guide\b|\bglossary\b/, ['“Term guide” is in the menu at the top of the page.']],
+  [/\bplan a route\b/, ['“Plan a route” is in the menu at the top of the page.']],
+];
+
+function pcPlaceReply(lower) {
+  const draft = PC_DRAFT_INTENT.test(lower);
+  if (!draft && !PC_WHERE_INTENT.test(lower)) return null;
+  if (draft) {
+    const lines = ['To draft an email, open Follow-ups, then open Draft email.', 'Choose who it is for under Message for, then choose Prepare draft.'];
+    if (/\b(?:hotels?|rooms?|capacity|accommodation)\b/.test(lower)) lines.push('For hotel rooms or capacity, choose Hotel team.');
+    else if (/\b(?:airlines?|airports?|flights?|seats?|bookings?)\b/.test(lower)) lines.push('For flights or bookings, choose Airline or airport planner.');
+    lines.push('Draft email in the Next steps box on Focus opens the same form.');
+    return lines.join('\n');
+  }
+  const control = PC_CONTROLS.find(([pattern]) => pattern.test(lower));
+  if (control) {
+    const lines = [`You set “${control[1]}” under Adjust plan, in section ${control[2]}.`, 'Adjust plan is the button at the top left of Plan a route.'];
+    if (control[1] === 'Starting assumptions') lines.push('It appears when you choose + New route in Departure country.');
+    return lines.join('\n');
+  }
+  const place = PC_PLACES.find(([pattern]) => pattern.test(lower));
+  return place ? place[1].join('\n') : null;
+}
+
+// ---------------------------------------------------------------------------
+// Typing slips: when a message is not understood, the controller can retry
+// once with close misspellings of known words corrected ("chsnge" → "change").
+const PC_TYPO_WORDS = ['change', 'switch', 'update', 'increase', 'decrease', 'reduce', 'remove', 'explain', 'compare', 'located', 'location',
+  'where', 'message', 'messages', 'email', 'emails', 'draft', 'drafts', 'flight', 'flights', 'previous', 'result', 'results', 'visitor', 'visitors',
+  'hotel', 'hotels', 'night', 'nights', 'target', 'check', 'checks', 'chart', 'charts', 'graph', 'graphs', 'missing', 'departure', 'country', 'month',
+  'occupancy', 'factor', 'average', 'conversion', 'calculate', 'calculated', 'summary', 'export', 'download', 'language', 'arabic', 'english', 'inbox',
+  'request', 'requests', 'season', 'event', 'uplift', 'seats', 'passengers', 'baseline', 'statistics', 'validation', 'glossary', 'decision', 'assumption',
+  'assumptions', 'happen', 'extra', 'weekly', 'guest', 'guests', 'record', 'records', 'details', 'follow', 'steps', 'unread', 'search', 'notifications'];
+
+function pcOneEditApart(a, b) {
+  if (a === b || Math.abs(a.length - b.length) > 1) return false;
+  if (a.length === b.length) {
+    const diff = [...a].map((char, index) => char !== b[index] ? index : -1).filter((index) => index >= 0);
+    return diff.length === 1 || (diff.length === 2 && diff[1] === diff[0] + 1 && a[diff[0]] === b[diff[1]] && a[diff[1]] === b[diff[0]]);
+  }
+  const [short, long] = a.length < b.length ? [a, b] : [b, a];
+  for (let index = 0; index < long.length; index += 1) if (long.slice(0, index) + long.slice(index + 1) === short) return true;
+  return false;
+}
+
+/** English only: corrected text and the corrections made, or null when nothing changed. */
+export function pcFixTypos(data, text) {
+  const raw = String(text || '');
+  if (/[؀-ۿ]/.test(raw)) return null;
+  const known = new Set([...PC_TYPO_WORDS, ...data.routes.map((route) => route.origin.toLowerCase()).filter((name) => !/\s/.test(name)), ...data.months.map((name) => name.toLowerCase())]);
+  const fixes = [];
+  const fixed = raw.replace(/[A-Za-z]{5,}/g, (word) => {
+    const lower = word.toLowerCase();
+    if (known.has(lower)) return word;
+    const matches = [...known].filter((candidate) => candidate[0] === lower[0] && candidate.length >= 4 && pcOneEditApart(lower, candidate));
+    if (matches.length !== 1) return word;
+    fixes.push([word, matches[0]]);
+    return matches[0];
+  });
+  return fixes.length ? { text: fixed, fixes } : null;
+}
+
+function pcExtrasReply(text, lower, extras, data, current, result) {
+  if (!extras) return null;
+  const plain = lower.replace(/[?.!]+$/, '').trim();
+  if (/\b(?:graph|graphs|chart|charts|plot|plots|diagram|diagrams|visuals?)\b/.test(lower) && !pcExplicitCommand(text)) return pcChartsReply(lower, extras.where);
+  if (extras.missing && /\b(?:missing|left to do|still (?:need|to do|have to)|not (?:done|finished|checked)|haven'?t (?:done|checked|finished)|remaining|incomplete|what else (?:is|do i|should|needs?))\b/.test(lower)) return pcMissingReply(extras.missing);
+  if (extras.nextSteps && /\b(?:next steps?|what(?:'s| is) next|what (?:should|do|shall|must) i (?:do|check|verify)(?: next| now| first)?|what to (?:check|do) (?:next|first)|check (?:next|first)|after this|then what|what now|where do i go from here|what comes next|next action)\b/.test(lower)) return pcNextStepsReply(extras.nextSteps);
+  if (extras.where && (/\bthis (?:page|tab|view|screen|section|bit|part)\b|\bhow (?:does|do) (?:this|it|that) work\b|\bwhere am i\b/.test(lower)
+      || (plain === 'what am i looking at' && pcPageKey(extras.where) !== 'focus'))) return pcPageReply(extras.where, data);
+  return null;
+}
+
+export function planningChatReply(data, prompt, current, result, proposalSummary = null, extras = null) {
   const text = pcNormalizePrompt(String(prompt || '').trim());
   const lower = text.toLowerCase();
   if (!text) return pcAnswer('Ask about the current plan, or name a value you want to change.');
@@ -528,10 +968,16 @@ export function planningChatReply(data, prompt, current, result, proposalSummary
       catch (error) { return pcAnswer(`I couldn't work out that target. ${error.message} The plan has not changed.`); }
     }
   }
+  const extra = pcExtrasReply(text, lower, extras, data, current, result);
+  if (extra) return pcAnswer(extra);
+  const whatIf = pcWhatIfReply(data, text, lower, current);
+  if (whatIf) return pcAnswer(whatIf);
+  const place = pcPlaceReply(lower);
+  if (place) return pcAnswer(place);
   const guide = pcGuideReply(data, text, current, result);
   if (guide) return pcAnswer(guide);
   if (/^(?:please\s+)?(?:reset(?:\s+(?:(?:the|my|this)\s+)?(?:plan|scenario))?|start over)[.!]?$/i.test(text)) return assistantReply(data, 'reset', current, result);
-  if (/\b(?:what if|would happen if)\b/.test(lower)) return pcAnswer('I can try that as a scenario. To apply it, give a direct instruction such as “Set flight occupancy to 80%.” Your current plan has not changed.');
+  if (PC_WHATIF_INTENT.test(lower)) return pcAnswer('Tell me the final value to try, such as “What if flight occupancy is 80%?”, and I will work it out without changing your plan.');
   const explicit = pcExplicitCommand(text);
   const directValue = /^(?:now\s+|and\s+)?(?:-?\d|load factor|flight occupancy|hotel (?:use|conversion)|average stay|stay\s+-?\d|event uplift|p2p)/i.test(text);
   const onlyMonth = data.months.some((name) => new RegExp('^(?:(?:and|now|in)\\s+)*' + pcEscapePattern(name) + '[.!]?$', 'i').test(text));

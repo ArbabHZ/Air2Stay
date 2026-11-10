@@ -2299,3 +2299,21 @@ body.target-mode #scenarioResults { display:none !important; }
 .export-language button[data-export-lang]:focus-visible { outline:2px solid #f2d58a; outline-offset:-2px; }
 .export-choices .export-language { padding:4px 4px 8px; margin-bottom:2px; border-bottom:1px solid #34466c; }
 .decision-note-actions .export-language, .glossary-tools .export-language { justify-content:flex-start; }
+
+
+/* Next steps on Focus: numbered checks with evidence, impact and actions. */
+.next-steps-readiness { margin:0 0 10px !important; color:#f2d58a; font-weight:700; font-size:13px; }
+.next-steps-list { margin:0 0 12px; padding:0; list-style:none; counter-reset:next-step; display:grid; gap:10px; }
+.next-step { position:relative; counter-increment:next-step; padding:12px 14px; padding-inline-start:44px; border:1px solid #34466c; border-radius:9px; background:#141b33; }
+.next-step::before { content:counter(next-step); position:absolute; inset-inline-start:12px; top:12px; display:grid; place-items:center; width:22px; height:22px; border-radius:50%; background:#f2d58a; color:#15182b; font-size:12px; font-weight:800; }
+.next-step-done { padding-inline-start:14px; }
+.next-step-done::before { content:none; }
+.next-step-red { border-color:#ef8a7a; }
+.next-step-head { display:flex; flex-wrap:wrap; align-items:baseline; justify-content:space-between; gap:6px 12px; margin-bottom:6px; }
+.next-step-head strong { color:#fff; font-size:14px; }
+.next-step-status { padding:2px 8px; border-radius:100px; background:#2a3254; color:#d7dcec; font-size:11px; font-weight:700; }
+.next-step-red .next-step-status { background:#4d2d39; color:#ffd1c7; }
+.next-step p { margin:4px 0 0 !important; color:#d8dceb; font-size:13px; line-height:1.55; }
+.next-step .next-step-ask { color:#f2d58a; font-weight:600; }
+.next-step-actions { display:flex; flex-wrap:wrap; gap:14px; margin-top:8px; }
+.first-check p { margin:0 0 6px; }

@@ -218,7 +218,7 @@ export function rankingReversals(data, options, settings = {}) {
     interpretation: 'A ranking is conditional on the selected measure and trial sizes. Stability in these trials does not establish a real-world best route.' };
 }
 
-export function decisionNote(data, inputs, options = []) {
+export function decisionNote(data, inputs, options = [], plan = null) {
   const metrics = planningMetrics(data, inputs);
   const stress = stressTest(data, inputs);
   const purpose = ROUTE_PURPOSES.find((item) => item.key === inputs.routePurpose) || ROUTE_PURPOSES[0];
@@ -292,7 +292,116 @@ export function decisionNote(data, inputs, options = []) {
         : 'Its lead holds across the lower-assumption trials tested; this does not establish which route will perform best in practice.');
     }
   }
+  // With a next-step plan, the note names the same first check as the rest of the app.
+  const firstStep = plan?.steps?.[0] || null;
+  const firstLines = firstStep ? nextStepLines(firstStep, metrics.result) : null;
+  if (plan) workplaceDecision.firstCheck = firstStep ? { id: firstStep.id, ...firstLines } : null;
+  const firstCheckLines = !plan ? [workplaceDecision.driverText, workplaceDecision.priorityCheck]
+    : firstLines ? [`First check: ${firstLines.title}.`, ...(firstLines.overdue ? [firstLines.overdue] : []), firstLines.why, ...(firstLines.impact ? [firstLines.impact] : []), firstLines.ask]
+    : ['All checks have recorded evidence for these exact assumptions.'];
   return { title: 'Air2Stay planning decision note', summary, metrics, assumptions, stressSummary, driverSummary, comparisonSummary, nextSteps, limitations, reversals, workplaceDecision,
     comparisonDetails,
-    text: ['Air2Stay planning decision note', summary, '', 'The planning decision', workplaceDecision.question, workplaceDecision.hotelNightsText, workplaceDecision.lowerTrialText, workplaceDecision.driverText, workplaceDecision.priorityCheck, workplaceDecision.caution, ...(comparisonSummary ? ['', comparisonSummary] : []), '', 'Assumptions used', ...assumptions.map((row) => `${row.label}: ${row.value}`), ...(comparisonDetails.length ? ['', 'Compared options (each versus zero extra flights)', ...comparisonDetails] : []), '', stressSummary, driverSummary, '', 'Next checks', ...nextSteps.map((line) => `- ${line}`), '', 'Limits', ...limitations.map((line) => `- ${line}`)].join('\n') };
+    text: ['Air2Stay planning decision note', summary, '', 'The planning decision', workplaceDecision.question, workplaceDecision.hotelNightsText, workplaceDecision.lowerTrialText, ...firstCheckLines, workplaceDecision.caution, ...(comparisonSummary ? ['', comparisonSummary] : []), '', 'Assumptions used', ...assumptions.map((row) => `${row.label}: ${row.value}`), ...(comparisonDetails.length ? ['', 'Compared options (each versus zero extra flights)', ...comparisonDetails] : []), '', stressSummary, driverSummary, '', 'Next checks', ...nextSteps.map((line) => `- ${line}`), '', 'Limits', ...limitations.map((line) => `- ${line}`)].join('\n') };
+}
+
+// ---------------------------------------------------------------------------
+// Next steps: which checks to complete before acting on a plan.
+// Ranks each Follow-ups check by how weakly its assumptions are supported, then
+// by the effect of the same 10% error, measured by re-running the calculation.
+// Every sentence is one line so the app dictionary can translate it.
+export const NEXT_STEP_CHECKS = Object.freeze({
+  demand: Object.freeze({ title: 'Confirm the flight demand', owner: 'Airline or airport planner', draft: 'airline', assumptions: Object.freeze(['loadFactor', 'p2pShare']) }),
+  hotels: Object.freeze({ title: 'Check hotel use and capacity', owner: 'Hotel or tourism team', draft: 'hotel', assumptions: Object.freeze(['conversionRate', 'averageStay']) }),
+  event: Object.freeze({ title: 'Validate the event increase', owner: 'Event or tourism team', draft: 'team', assumptions: Object.freeze(['eventUplift']) }),
+  visitors: Object.freeze({ title: 'Check who is travelling', owner: 'Tourism research team', draft: 'team', assumptions: Object.freeze([]) }),
+});
+const NEXT_STEP_LABELS = Object.freeze({
+  loadFactor: 'How full flights are', p2pShare: 'Passengers ending their trip in Abu Dhabi', conversionRate: 'Share checking into a hotel',
+  averageStay: 'Average nights per hotel stay', eventUplift: 'Extra hotel demand for an event or season',
+});
+const NEXT_STEP_MINIMUM = Object.freeze({ loadFactor: 0.3, p2pShare: 0.05, conversionRate: 0.05, averageStay: 1, eventUplift: 0 });
+// Higher means less direct evidence for this route.
+export const NEXT_STEP_EVIDENCE_WEIGHT = Object.freeze({ borrowed: 5, yours: 4, appWide: 3, fewRecords: 2, estimated: 2, routeRecords: 1 });
+
+function nextStepEvidence(key, inputs, result, starting) {
+  if (key === 'eventUplift') return 'yours';
+  // The optional training-season rate is still one rate for all routes.
+  if (key === 'conversionRate' && inputs.seasonalConversion) return 'appWide';
+  const start = starting ? Number(starting[key]) : NaN;
+  // Compared as displayed, so typing back the shown starting value does not count as a new value.
+  if (Number.isFinite(start) && nsValue(key, inputs[key]) !== nsValue(key, start)) return 'yours';
+  if (key === 'conversionRate') return 'appWide';
+  if (!result.route.knownMarket) return 'borrowed';
+  if (key === 'averageStay') return 'estimated';
+  return Number(result.route.yearsObserved) >= 3 ? 'routeRecords' : 'fewRecords';
+}
+
+function nextStepImpact(data, inputs, key) {
+  // With added flights, measure the nights those flights add; otherwise the plan total.
+  const basis = Number(inputs.extraFlights) > 0 ? 'added' : 'total';
+  const measure = (plan) => basis === 'added' ? planningMetrics(data, plan).incremental.guestNights : runScenario(data, plan).scenario.guestNights;
+  const from = Number(inputs[key]);
+  const before = measure(inputs);
+  const to = Math.max(NEXT_STEP_MINIMUM[key], from * 0.9);
+  if (!(to < from - 1e-12)) return { basis, from, to: from, before, after: before, difference: 0, atMinimum: true };
+  const after = measure({ ...inputs, [key]: to });
+  return { basis, from, to, before, after, difference: after - before, atMinimum: false };
+}
+
+// Larger effect first; effects within half a night count as equal, so rounding never decides the order.
+function nsImpactGap(a, b) {
+  const gap = Math.abs(b?.impact.difference || 0) - Math.abs(a?.impact.difference || 0);
+  return Math.abs(gap) < 0.5 ? 0 : gap;
+}
+
+export function nextStepPlan(data, inputs, result = runScenario(data, inputs), { starting = null, statuses = {} } = {}) {
+  checkedInputs(inputs);
+  const ids = ['demand', 'hotels', ...(Number(inputs.eventUplift) > 0 ? ['event'] : []), 'visitors'];
+  const checks = ids.map((id, position) => {
+    const { title, owner, draft, assumptions: keys } = NEXT_STEP_CHECKS[id];
+    const assumptions = keys.map((key) => {
+      const evidence = nextStepEvidence(key, inputs, result, starting);
+      return { key, label: NEXT_STEP_LABELS[key], value: Number(inputs[key]), evidence, weight: NEXT_STEP_EVIDENCE_WEIGHT[evidence], impact: nextStepImpact(data, inputs, key) };
+    });
+    const lead = assumptions.slice().sort((a, b) => b.weight - a.weight || nsImpactGap(a, b))[0] || null;
+    const status = ['red', 'amber', 'green'].includes(statuses[id]) ? statuses[id] : 'amber';
+    // The visitor mix changes who is expected, not the total, so it comes last.
+    return { id, title, owner, draft, position, status, assumptions, lead, weight: lead ? lead.weight : 0.5 };
+  });
+  const order = checks.slice().sort((a, b) => b.weight - a.weight || nsImpactGap(a.lead, b.lead) || a.position - b.position);
+  const open = order.filter((check) => check.status !== 'green');
+  const steps = [...open.filter((check) => check.status === 'red'), ...open.filter((check) => check.status !== 'red')].slice(0, 3);
+  return {
+    order: order.map((check) => check.id), checks: Object.fromEntries(checks.map((check) => [check.id, check])), steps,
+    readiness: { verified: checks.filter((check) => check.status === 'green').length, total: checks.length },
+  };
+}
+
+const nsNumber = (value) => Math.round(Number(value)).toLocaleString('en-US');
+const nsValue = (key, value) => key === 'averageStay' ? Number(value).toFixed(2) : (Number(value) * 100).toFixed(1) + '%';
+
+/** English sentences for one step: title, why, impact and who to ask. */
+export function nextStepLines(step, result) {
+  const lead = step.lead;
+  let why;
+  if (!lead) why = 'The visitor mix is an estimated split by nationality: it changes who is expected, not the total.';
+  else {
+    const said = `${lead.label}: ${nsValue(lead.key, lead.value)}`;
+    const records = Math.round(Number(result.route.yearsObserved) || 0);
+    why = lead.evidence === 'borrowed' ? `${said}, borrowed from comparison countries because this route has no flight history.`
+      : lead.evidence === 'yours' ? `${said}, a value you entered, so record where it came from.`
+      : lead.evidence === 'appWide' ? `${said}, one app-wide rate, not measured for this route.`
+      : lead.evidence === 'estimated' ? `${said}, estimated from hotel records by nationality.`
+      : lead.evidence === 'fewRecords' ? (records === 1 ? `${said}, from only 1 past flight record for this route and month.` : records === 2 ? `${said}, from only two past flight records for this route and month.` : `${said}, from only ${records} past flight records for this route and month.`)
+      : `${said}, from ${records} past flight records for this route and month.`;
+  }
+  let impact = '';
+  if (lead) {
+    const i = lead.impact;
+    impact = i.atMinimum ? 'It is already at the lowest value the planner allows.'
+      : i.basis === 'added' ? `If it is 10% lower (${nsValue(lead.key, i.to)}), your extra flights add about ${nsNumber(i.after)} nights instead of ${nsNumber(i.before)}.`
+      : `If it is 10% lower (${nsValue(lead.key, i.to)}), the plan gives about ${nsNumber(i.after)} guest nights instead of ${nsNumber(i.before)}.`;
+  }
+  const overdue = step.status === 'red' ? 'This check is overdue.' : '';
+  return { title: step.title, why, impact, ask: `Ask: ${step.owner}.`, overdue };
 }

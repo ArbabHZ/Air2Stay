@@ -185,8 +185,13 @@ function priorityActions(context, proposal = emptyProposal(), now = new Date()) 
   }
   const driverId = context.decision?.workplaceDecision?.driver?.id;
   const preferredId = driverId === 'lowerLoad' ? 'demand' : ['lowerHotelUse', 'shorterStay'].includes(driverId) ? 'hotels' : 'demand';
-  const first = rows.find((row) => row.status === 'red') || rows.find((row) => row.id === preferredId && row.status !== 'green') || rows.find((row) => row.status !== 'green');
-  return { rows, recommended: first ? { ...first, why: first.status === 'red' ? 'Start here because this check is overdue.' : first.id === preferredId && driverId ? `${context.decision.workplaceDecision.driverText} Checking this assumption first could change the decision.` : first.reason } : null };
+  // When the app supplies the shared next-step order, follow it so Focus, Follow-ups
+  // and the assistant agree. Overdue work always comes first.
+  const order = Array.isArray(context.nextStepOrder) ? context.nextStepOrder : null;
+  const ordered = order ? order.map((id) => rows.find((row) => row.id === id && row.status !== 'green')).find(Boolean) : null;
+  const first = rows.find((row) => row.status === 'red') || (order ? ordered : rows.find((row) => row.id === preferredId && row.status !== 'green')) || rows.find((row) => row.status !== 'green');
+  const sharedWhy = order && first && first.status !== 'red' ? context.nextStepReasons?.[first.id] : null;
+  return { rows, recommended: first ? { ...first, why: first.status === 'red' ? 'Start here because this check is overdue.' : sharedWhy ? sharedWhy : first.id === preferredId && driverId ? `${context.decision.workplaceDecision.driverText} Checking this assumption first could change the decision.` : first.reason } : null };
 }
 
 function stakeholderDraft(context, kind, proposal = emptyProposal()) {
