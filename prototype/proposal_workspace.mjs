@@ -346,21 +346,16 @@ function createProposalWorkspace({ mount, rail = null, launcher = null, onOpenWo
     const proposal = store.get(key);
     const priority = priorityActions(ctx, proposal);
     if(selectedCheck && !priority.rows.some(row=>row.id===selectedCheck))selectedCheck=null;
-    const currentPlan = `${ctx.result.route.origin || ctx.inputs.originKey} → Abu Dhabi · ${monthName(ctx.inputs.month)}`;
-    const checks = priority.rows.filter(row => !row.id.startsWith('task:'));
-    const firstCheck = checks.find(row => row.id === priority.recommended?.id);
-    const orderedChecks = firstCheck ? [firstCheck, ...checks.filter(row => row !== firstCheck)] : checks;
-    const checkHtml = orderedChecks.map(row => {
+    const currentPlan = `${ctx.result.route.origin || ctx.inputs.originKey} · ${monthName(ctx.inputs.month)}`;
+    const checkHtml = priority.rows.filter(row => !row.id.startsWith('task:')).map(row => {
       const display = CHECK_DISPLAY[row.id];
       const recommended = row.id === priority.recommended?.id;
       const selected = row.id === selectedCheck;
       return `<article class="pw-check pw-check-${row.status}${recommended ? ' pw-recommendation' : ''}" ${selected ? 'data-pw-selected-check' : ''}>
-        <div class="pw-check-copy">
-          ${recommended ? '<span class="pw-start-here">Start here</span>' : ''}
-          <div class="pw-check-heading"><h4 tabindex="-1">${escape(display.title)}</h4>${checkStatus(row.status)}</div>
-          <p>${escape(display.why)}</p>
-        </div>
-        <button type="button" class="pw-add-task" data-pw-action="add-task" data-check="${escape(row.id)}" aria-label="Add task for ${escape(display.title)}"><span aria-hidden="true">+</span> Add task</button>
+        ${recommended ? '<p class="pw-start-here">Start here</p>' : ''}
+        <div class="pw-check-heading"><h4 tabindex="-1">${escape(display.title)}</h4>${checkStatus(row.status)}</div>
+        <p>${escape(display.why)}</p>
+        <button type="button" data-pw-action="add-task" data-check="${escape(row.id)}" aria-label="Add task for ${escape(display.title)}">Add task</button>
       </article>`;
     }).join('');
     const relatedTasks = priority.rows.find(row => row.id === selectedCheck)?.tasks || [];
@@ -388,21 +383,18 @@ function createProposalWorkspace({ mount, rail = null, launcher = null, onOpenWo
     const tool = (name) => openTools.has(name) ? ' open' : '';
     const historyHtml = proposal.versions.slice().reverse().map((version) => `<li><div class="pw-item-heading"><strong>${escape(version.name)}</strong><span>${escape(displayDate(version.createdAt))}</span></div><p>${version.fingerprint === fingerprint ? 'Matches the current assumptions.' : 'Saved assumptions differ from the current plan.'} Estimated guest nights: ${fmt(version.result?.scenario?.guestNights)}.</p><details><summary>Saved assumptions</summary><dl class="pw-assumptions">${Object.entries(version.inputs).filter(([key, value]) => INPUT_LABELS[key] && value != null && value !== '').map(([key, value]) => `<div><dt>${escape(INPUT_LABELS[key])}</dt><dd>${escape(['loadFactor', 'p2pShare', 'conversionRate', 'eventUplift'].includes(key) ? pct(value) : typeof value === 'boolean' ? value ? 'Yes' : 'No' : value)}</dd></div>`).join('')}</dl><p class="control-note">The snapshot also retains the visitor mix and comparison-country details for loading this version and downloading history.</p></details><button type="button" class="secondary-button" data-pw-action="restore" data-id="${escape(version.id)}">Load this version</button></li>`).join('');
     mount.innerHTML = `<div class="pw-heading">
-      <div><p class="pw-plan-context">${escape(currentPlan)}</p><h1>Follow-ups</h1><p class="pw-intro">Choose a check, add a task, then record what you find.</p></div>
-      ${store.warning ? '' : '<span class="pw-local">Saved in this browser</span>'}
+      <div><h2>Follow-ups</h2><p>${escape(currentPlan)}</p></div>
+      <span class="pw-local">Saved in this browser</span>
     </div>
     ${store.warning ? `<p class="pw-warning" role="alert">${escape(store.warning)}</p>` : ''}
     <p class="pw-message ${messageIsError ? 'pw-warning' : ''}" role="status" aria-live="polite">${escape(message)}</p>
     <div class="pw-followup-grid">
       <section class="pw-priorities" aria-labelledby="pwChecksHeading">
-        <div class="pw-section-heading">
-          <h3 id="pwChecksHeading">What needs checking</h3>
-          <button type="button" class="secondary-button pw-task-jump" data-pw-action="view-tasks" aria-controls="pwTasksHeading">View tasks <span class="pw-task-count">${proposal.tasks.length}</span></button>
-        </div>
+        <h3 id="pwChecksHeading">What needs checking</h3>
         <div class="pw-check-list">${checkHtml}</div>
       </section>
       <section class="pw-your-tasks" aria-labelledby="pwTasksHeading">
-        <h3 id="pwTasksHeading" tabindex="-1">Your tasks</h3>
+        <h3 id="pwTasksHeading">Your tasks</h3>
         <details class="pw-task-editor" data-pw-tool="task"${tool('task')}>
           <summary>New task</summary>
           <form class="pw-form-grid" data-pw-form="task">
@@ -523,10 +515,6 @@ function createProposalWorkspace({ mount, rail = null, launcher = null, onOpenWo
     const ctx = current();
     const proposal = store.get(proposalKey(ctx.inputs));
     const action = button.dataset.pwAction;
-    if (action === 'view-tasks') {
-      reveal('#pwTasksHeading');
-      return;
-    }
     preserveDrafts();
     try {
       if (action === 'backup') { download(JSON.stringify(store.exportData(), null, 2), 'Air2Stay-proposal-history.json', 'application/json'); notice('History file ready. Use the download link or copy the backup text.'); }
@@ -583,18 +571,15 @@ function createProposalWorkspace({ mount, rail = null, launcher = null, onOpenWo
     update(nextContext) {
       preserveDrafts();
       context = nextContext === undefined ? getContext?.() : nextContext;
-      const fingerprint = context ? proposalFingerprint(context) : '';
-      if (downloadReady && fingerprint !== downloadReady.fingerprint) {
+      if (downloadReady && (!context || proposalFingerprint(context) !== downloadReady.fingerprint)) {
         doc.defaultView.URL.revokeObjectURL(downloadReady.url);
         downloadReady = null;
       }
-      if (context && fingerprint !== lastFingerprint) {
-        const key = proposalKey(context.inputs);
-        const hadDraft = key === lastKey && !!generatedDraft;
-        const needsReview = store.get(key).tasks.some(task => task.status === 'verified' && task.verifiedFingerprint !== fingerprint);
+      if (context && proposalFingerprint(context) !== lastFingerprint) {
+        const changedRoute = proposalKey(context.inputs) !== lastKey;
+        const hadDraft = !!generatedDraft;
         generatedDraft = null;
-        notice(needsReview ? 'The plan changed. Review any completed tasks that used earlier assumptions.'
-          : hadDraft ? 'The plan changed. Prepare a new draft with the updated numbers.' : '');
+        notice(changedRoute ? 'Showing notes for this country and month.' : hadDraft ? 'The plan changed. Prepare a new draft with the updated numbers.' : 'The plan changed. Earlier evidence must be checked against these assumptions.');
       }
       render();
     },

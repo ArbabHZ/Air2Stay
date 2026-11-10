@@ -12,7 +12,7 @@
    const p2pShare = whole ? passengers ? result.scenario.p2p / passengers : 0 : 0;
    const conversion = result.scenario.p2p ? result.scenario.hotelCheckins / result.scenario.p2p : 0;
    const signedNights = `${result.delta.guestNights >= 0 ? "+" : "−"}${Math.round(Math.abs(result.delta.guestNights)).toLocaleString()}`;
-   const upliftNote = result.eventUplift ? ` The estimate includes your chosen ${result.eventUplift > 0 ? "+" : "−"}${Math.round(Math.abs(result.eventUplift) * 100)}% event or disruption adjustment. This was not measured from past events.` : "";
+   const upliftNote = result.eventUplift ? ` The estimate includes your chosen +${Math.round(result.eventUplift * 100)}% increase for an event or season. This was not measured from past events.` : "";
    const plainResult = `The plan estimates ${Math.round(result.scenario.hotelCheckins).toLocaleString()} hotel arrivals and ${Math.round(result.scenario.guestNights).toLocaleString()} hotel nights (${signedNights} nights compared with the original plan).${upliftNote}`;
    if (/\b(reset|clear|start over)\b/.test(lower)) {
      return { type: "reset", text: "I’ve reset the plan to India in December. You can change the country, month, and numbers on the left." };
@@ -114,7 +114,7 @@ export function findRoute(data, originKey, month, proxyOriginKey = "", peerProfi
  }
   
  export function validateScenarioInputs(inputs) {
-   const limits = {month:[1,12], extraFlights:[-20,20], seatsPerFlight:[30,600], loadFactor:[0.3,1], p2pShare:[0.05,1], conversionRate:[0.05,0.9], averageStay:[1,10], eventUplift:[-0.5,0.5]};
+   const limits = {month:[1,12], extraFlights:[-20,20], seatsPerFlight:[30,600], loadFactor:[0.3,1], p2pShare:[0.05,1], conversionRate:[0.05,0.9], averageStay:[1,10], eventUplift:[0,0.5]};
    for (const [key, [min,max]] of Object.entries(limits)) {
      if (inputs[key] == null) continue;
      const value = inputs[key];
@@ -151,10 +151,10 @@ export function findRoute(data, originKey, month, proxyOriginKey = "", peerProfi
      Number(inputs.conversionRate ?? baselineConversion),
      Number(inputs.averageStay ?? baseStay),
    );
-   // The optional event/disruption adjustment is an explicit planning assumption.
+   // The optional event/seasonal uplift is an explicit planning assumption.
    // It affects hotel demand only; it does not claim additional flights or
    // passengers, and it is not calibrated from event data.
-   const eventUplift = Number(inputs.eventUplift ?? 0);
+   const eventUplift = Math.min(0.5, Math.max(0, Number(inputs.eventUplift) || 0));
    const scenario = {
      ...modeledScenario,
      hotelCheckins: modeledScenario.hotelCheckins * (1 + eventUplift),
@@ -209,11 +209,11 @@ export function findRoute(data, originKey, month, proxyOriginKey = "", peerProfi
      ["Passengers ending in Abu Dhabi", "p2pShare", 0.05],
      ["Share checking into a hotel", "conversionRate", 0.05],
      ["Average nights per hotel stay", "averageStay", 0.5],
-     ["Event or disruption impact", "eventUplift", 0.1],
+     ["Extra hotel demand for an event or season", "eventUplift", 0.1],
    ];
    return settings.map(([label, key, step]) => {
      const original = Number(inputs[key]);
-     const limits = {extraFlights:[-20,20],seatsPerFlight:[30,600],loadFactor:[0.3,1],p2pShare:[0.05,1],conversionRate:[0.05,0.9],averageStay:[1,10],eventUplift:[-0.5,0.5]};
+     const limits = {extraFlights:[-20,20],seatsPerFlight:[30,600],loadFactor:[0.3,1],p2pShare:[0.05,1],conversionRate:[0.05,0.9],averageStay:[1,10],eventUplift:[0,0.5]};
      const low = runScenario(data, { ...inputs, [key]: Math.max(limits[key][0], original - step) }).scenario.guestNights;
      const high = runScenario(data, { ...inputs, [key]: Math.min(limits[key][1], original + step) }).scenario.guestNights;
      return {
@@ -378,7 +378,7 @@ export function appliedPlanConfirmation(data, applied, changes = {}) {
     p2pShare: () => `${number(applied.p2pShare * 100)}% finishing their trip in Abu Dhabi`,
     conversionRate: () => `${number(applied.conversionRate * 100)}% hotel use`,
     averageStay: () => `${number(applied.averageStay)} nights per hotel stay`,
-    eventUplift: () => `${number(applied.eventUplift * 100)}% event or disruption adjustment`,
+    eventUplift: () => `${number(applied.eventUplift * 100)}% extra event or seasonal demand`,
   };
   const values = Object.keys(labels).filter((key) => changes[key] !== undefined).map((key) => labels[key]());
   return `Applied to ${route.origin} in ${data.months[applied.month - 1]}: ${values.length ? values.join(", ") : "the starting assumptions shown in the controls"}.`;

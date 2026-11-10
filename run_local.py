@@ -63,7 +63,15 @@ def main(argv=None):
     action.add_argument("--check", action="store_true", help="Check required files and installed runtime without starting a server")
     action.add_argument("--package", metavar="ZIP", help="Create a complete demo ZIP, excluding keys, environments and raw competition workbooks")
     parser.add_argument("--port", type=int, default=8765, help="Local server port (default: 8765)")
+    parser.add_argument("--gemini-drafts", action="store_true", help="Enable optional Gemini drafting in the local app")
+    parser.add_argument("--gemini-env-file", type=pathlib.Path, help="Use an existing local .env file with --gemini-drafts")
     args = parser.parse_args(argv)
+    if args.gemini_env_file and not args.gemini_drafts:
+        parser.error("--gemini-env-file requires --gemini-drafts")
+    if args.gemini_drafts and (args.check or args.package):
+        parser.error("--gemini-drafts is only used when starting the local app")
+    if args.gemini_env_file and not args.gemini_env_file.expanduser().is_file():
+        parser.error("The specified Gemini .env file does not exist")
     if not 1 <= args.port <= 65535:
         parser.error("Choose a port between 1 and 65535.")
     try:
@@ -88,6 +96,12 @@ def main(argv=None):
         if args.check:
             print(f"PASS: {len(assets)} required files, scenario data, country locations, and Python runtime are ready.")
             return 0
+        os.environ.pop("AIR2STAY_LOCAL_GEMINI_PORT", None)
+        os.environ.pop("AIR2STAY_LOCAL_GEMINI_ENV_FILE", None)
+        if args.gemini_drafts:
+            os.environ["AIR2STAY_LOCAL_GEMINI_PORT"] = str(args.port)
+            if args.gemini_env_file:
+                os.environ["AIR2STAY_LOCAL_GEMINI_ENV_FILE"] = str(args.gemini_env_file.expanduser().resolve())
         os.chdir(ROOT)
         os.execv(python, [python, "-m", "streamlit", "run", "app.py", "--server.address", "127.0.0.1", "--server.port", str(args.port), "--server.headless", "true"])
     except (OSError, ValueError, zipfile.BadZipFile) as error:
