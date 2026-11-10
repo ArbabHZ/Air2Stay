@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { getBridge, runScenario, parseScenarioPrompt } from '../prototype/engine.mjs';
 import { reverseTargetPlan, planningMetrics, TARGET_FLIGHT_CONTROL_LIMIT } from '../prototype/decision_tools.mjs';
-import { parseTargetQuestion, planningChatReply, arabicPromptToEnglish } from '../prototype/planning_chat.mjs';
+import { planningChatReply, arabicPromptToEnglish } from '../prototype/planning_chat.mjs';
 
 const data = JSON.parse(fs.readFileSync(new URL('../prototype/data/scenario_data.json', import.meta.url)));
 const inputsFor = (route, extra = {}) => {
@@ -68,26 +68,14 @@ assert.equal(bigAsk.withinControlLimit, false);
 for (const bad of [-1, NaN, Infinity, '500']) assert.throws(() => reverseTargetPlan(data, inputsFor(india), bad));
 assert.throws(() => reverseTargetPlan(data, inputsFor(india), 100, { basis: 'rooms' }));
 
-// Question parsing.
-const parse = (text) => parseTargetQuestion(data, text);
-const pick = (q) => q && ({ target: q.target, basis: q.basis, originKey: q.originKey, month: q.month });
-assert.deepEqual(pick(parse('How many flights for 10,000 more nights from India in December?')), { target: 10000, basis: 'extra', originKey: 'INDIA', month: 12 });
-assert.deepEqual(pick(parse('What would it take to reach 250k nights in July?')), { target: 250000, basis: 'total', originKey: null, month: 7 });
-assert.deepEqual(pick(parse('Increase hotel nights to 1.2 million from the UK, how many more flights?')), { target: 1200000, basis: 'total', originKey: 'UNITED KINGDOM', month: null });
-assert.equal(parse('How many flights may we need for 5000 nights?').month, null, '"may" is not May');
-assert.equal(parse('Add 3 flights from France'), null);
-
-// Chat answers target questions without changing the plan.
 const current = inputsFor(india);
 const result = runScenario(data, current);
-const reply = planningChatReply(data, 'How many flights do we need for 10,000 more nights?', current, result);
-assert.equal(reply.type, 'answer');
-assert.match(reply.text, /about 15 extra flights a week/);
-const elsewhere = planningChatReply(data, 'How many flights for 5,000 more nights from France in June?', current, result);
-assert.equal(elsewhere.type, 'answer');
-assert.match(elsewhere.text, /France in June/);
-assert.match(elsewhere.text, /Your plan has not changed/);
-assert.equal(planningChatReply(data, 'Add 5 flights from France in December', current, result).type, 'apply');
+const ask = (text) => planningChatReply(data, text, current, result);
+assert.equal(ask('Add 5 flights from France in December').type, 'apply');
+const removedTarget = ask('How many flights do we need for 10,000 more nights?');
+assert.notEqual(removedTarget.parsed?.understood, true);
+assert.doesNotMatch(removedTarget.text, /extra flights a week/);
+assert.doesNotMatch(ask('Where is Target?').text, /is a tab at the top/);
 
 // Arabic questions map to the English phrasing the local engine understands.
 const ar = (text) => arabicPromptToEnglish(data, text);
@@ -95,9 +83,6 @@ assert.equal(ar('How were hotel nights calculated?'), 'How were hotel nights cal
 assert.equal(ar('مرحباً'), 'Hello');
 assert.equal(ar('شكراً'), 'Thanks');
 assert.equal(ar('كيف حُسبت الليالي الفندقية؟'), 'How were hotel nights calculated?');
-assert.equal(ar('كم رحلة نحتاج لإضافة ٥٠٠٠ ليلة من فرنسا في يونيو؟'), 'How many flights for 5000 more nights from France in June?');
-assert.equal(ar('كم رحلة نحتاج للوصول إلى إجمالي 250000 ليلة؟'), 'How many flights do we need to reach 250000 nights in total?');
-assert.equal(ar('كم رحلة نحتاج لإضافة 10 آلاف ليلة؟'), 'How many flights for 10000 more nights?');
 assert.equal(ar('اضبط الرحلات الإضافية على 5'), 'Set extra flights to 5');
 assert.equal(ar('اضبط نسبة إشغال الرحلات على 80%'), 'Set flight occupancy to 80%');
 assert.equal(ar('اضبط الإقامة الفندقية على 45% ومتوسط الإقامة على 4 ليال'), 'Set hotel use to 45% and average stay to 4 nights');
@@ -106,38 +91,11 @@ assert.equal(ar('ما الذي يجب أن أتحقق منه بعد ذلك؟'), 
 assert.equal(ar('ما مدى دقة هذا؟'), 'How accurate is this?');
 assert.equal(ar('أعد ضبط الخطة'), 'Reset the plan');
 assert.equal(ar('احكِ لي نكتة'), 'احكِ لي نكتة', 'unknown Arabic is left as typed');
-for (const text of ['كم رحلة نحتاج لإضافة ٥٠٠٠ ليلة من فرنسا في يونيو؟', 'اضبط الرحلات الإضافية على 5', 'أضف 4 رحلات من ألمانيا في يوليو']) {
+for (const text of ['اضبط الرحلات الإضافية على 5', 'أضف 4 رحلات من ألمانيا في يوليو']) {
   assert.notEqual(planningChatReply(data, ar(text), current, result).text.slice(0, 20), 'I didn’t catch a cha', text);
 }
-assert.match(planningChatReply(data, ar('كم رحلة نحتاج لإضافة ٥٠٠٠ ليلة من فرنسا في يونيو؟'), current, result).text, /France in June/);
 
-// Percentage targets: "I want to increase the night by 20% from the flight coming from the UK".
-const ask = (text) => planningChatReply(data, text, current, result);
-const ukQuestion = 'I want to increase the night by 20% from the flight coming from the UK';
-const pq = parse(ukQuestion);
-assert.equal(pq.percent, 20); assert.equal(pq.originKey, 'UNITED KINGDOM'); assert.equal(pq.decrease, false); assert.equal(pq.month, null);
-const ukPlan = parseScenarioPrompt(data, 'United Kingdom December', current).inputs;
-const ukUsual = reverseTargetPlan(data, ukPlan, 0).startingNights;
-const ukTarget = Math.round(ukUsual * 0.2);
-const ukFlights = reverseTargetPlan(data, ukPlan, ukTarget).requiredWeeklyFlights;
-const ukReply = ask(ukQuestion);
-assert.equal(ukReply.type, 'answer');
-assert.ok(ukReply.text.includes(`is about ${ukTarget.toLocaleString('en-US')} more nights`), ukReply.text);
-assert.ok(ukReply.text.includes(`you would need about ${ukFlights} extra flights a week`), ukReply.text);
-assert.match(ukReply.text, /Your plan has not changed/);
-assert.equal(parse('Increase hotel nights by 10% for France in June').percent, 10);
-assert.equal(parse('Increase hotel nights by 10% for France in June').month, 6);
-assert.equal(parse('I need 20% more nights').percent, 20);
-assert.equal(parse('double the hotel nights').percent, 100);
-assert.equal(parse('Decrease hotel nights by 20%').decrease, true);
-assert.match(ask('Decrease hotel nights by 20%').text, /Set extra flights to -2/);
-assert.equal(parse('help us reach 10,000 nights').originKey, null, '"us" is not the US');
-assert.equal(parse('How many flights for 5,000 more nights from the US?').originKey, 'UNITED STATES OF AMERICA');
-assert.equal(parse('How many flights for 5000000000 nights?').tooLarge, true);
-assert.match(ask('How many flights for 5000000000 nights?').text, /too large/);
-assert.match(ask('Increase hotel nights by 0%').text, /no extra flights are needed/);
-
-// Plan changes are not mistaken for targets; polite phrasing still works.
+// Explicit plan changes work with polite phrasing.
 assert.equal(ask('Set average stay to 4 nights').type, 'apply');
 assert.equal(ask('Set hotel use to 45% and average stay to 4 nights').type, 'apply');
 const polite = ask('I want to set flight occupancy to 80%');
@@ -172,8 +130,6 @@ for (const odd of ['<img src=x onerror=alert(1)>', '"; DROP TABLE plans; --', '{
   if (r.type === 'apply') assert.equal(r.parsed.understood, false, odd);
 }
 
-assert.equal(parse('what if hotel nights went up 25%?').percent, 25);
-assert.match(ask('what if hotel nights went up 25%?').text, /^A 25% increase/);
 assert.match(ask('how do I use this app?').text, /^Air2Stay estimates/);
 assert.match(ask('can I download a PDF report?').text, /^Export, on Plan a route/);
 assert.match(ask('Explain how full the flights are').text, /^Flights are expected to be/);
@@ -182,15 +138,11 @@ assert.match(ask('Explain how full the flights are').text, /^Flights are expecte
 assert.equal(ar('ما هو المسار الجديد؟'), 'How do I create a new route?');
 assert.equal(ar('ماذا تفعل المتابعات؟'), 'What are Follow-ups?');
 assert.equal(ar('ماذا تفعل؟'), 'What can you do?');
-assert.equal(ar('أريد زيادة الليالي بنسبة 20% من المملكة المتحدة'), 'I want to increase hotel nights by 20% from United Kingdom');
-assert.equal(ar('أريد مضاعفة الليالي'), 'I want to double the hotel nights');
-assert.equal(ar('قلل الليالي بنسبة 10%'), 'Decrease hotel nights by 10%');
 assert.equal(ar('اشرح النتيجة'), 'Explain the result');
 assert.equal(ar('ماذا يفعل توزيع الزوار؟'), 'What does Visitor mix show?');
 assert.equal(ar('ما معنى النطاق المحتمل؟'), 'What does the possible range mean?');
 assert.equal(ar('كيف أستخدم التطبيق؟'), 'How do I navigate the app?');
 assert.equal(ar('أريد ضبط الرحلات الإضافية على 5'), 'Set extra flights to 5');
 assert.equal(ar('من فضلك أضف 4 رحلات من ألمانيا في يوليو'), 'Add 4 flights from Germany in July');
-assert.match(ask(ar('أريد زيادة الليالي بنسبة 20% من المملكة المتحدة')).text, /more nights/);
 
 console.log(`target planning tests passed (${checked} route-month cases)`);

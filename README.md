@@ -54,7 +54,7 @@ Export a spreadsheet CSV or the complete JSON plan from the Export menu. The men
 
 - New countries start from a weighted blend of up to three same-month comparison markets. Country-centroid distance and approximate distance to Abu Dhabi determine the fixed weights. This is a geographic starting heuristic, not evidence of passenger demand, visa access, income, or travel purpose. Details shows every country and weight. A manual single-country option remains available.
 - Travel-purpose labels (mixed, holiday, business, family) have no measured numerical presets. Users can explicitly apply hotel-use and stay assumptions; historical baselines remain unchanged.
-- Compare isolates the additional-flight effect by comparing each option with zero extra flights under the same assumptions. It shows route alternatives, twelve months, nights per 1,000 added seats, illustrative launch sizes, bounded stress trials, and whole-weekly-flight capacity targets. Equal assumptions must produce equal per-seat yields. These comparisons do not establish profitability or independent passenger demand.
+- Compare isolates the additional-flight effect by comparing each option with zero extra flights under the same assumptions. It shows route alternatives, twelve months, nights per 1,000 added seats, illustrative launch sizes, and bounded stress trials. Equal assumptions must produce equal per-seat yields. These comparisons do not establish profitability or independent passenger demand.
 - Decision notes export as text, including both options' inputs and incremental results, uncertainty checks, and next steps. CSV/JSON exports retain the main plan inputs and outputs.
 
 **Evidence and reproduction**

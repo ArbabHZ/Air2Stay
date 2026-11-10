@@ -152,7 +152,6 @@ const allDone = { checks: [{ id: 'demand', title: 'Confirm the flight demand', s
 assert.equal(ask('what am I missing', undefined, { missing: allDone }), 'Nothing is missing: every check has recorded evidence for these exact assumptions, and a decision is logged.');
 assert.ok(ask('Explain the charts', { view: 'scenarioView', mode: 'details' }).startsWith('Here is what the charts on Details show:'));
 assert.ok(ask('explain the graphs in statistics').startsWith('Here is what the charts on Statistics show:'));
-assert.ok(ask('What do these charts show?', { view: 'scenarioView', mode: 'target' }).startsWith('This page has no charts.'));
 assert.ok(ask('How does this page work?', { view: 'bridgeView' }).startsWith('Visitor mix estimates'));
 assert.ok(ask('how does this work', { view: 'scenarioView', mode: 'decisions' }).startsWith('Compare helps you decide'));
 assert.ok(ask('what am I looking at', { view: 'validationView' }).startsWith('Check past results shows'));

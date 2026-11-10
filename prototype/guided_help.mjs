@@ -26,7 +26,7 @@ const ghAnswers = [
   ["What does Matching past records mean?", "", "confidence several low high support", false, "baseline"],
   ["What does the possible range mean?", "", "p10 p50 p90 uncertainty cautious", false, "range"],
   ["What did the accuracy score test?", "", "validation weighted error wape holdout measured", false, "validation"],
-  ["What does Compare help me decide?", "", "launch stress target capacity decision", false, "compare"],
+  ["What does Compare help me decide?", "", "launch stress capacity decision", false, "compare"],
   ["What are the event and travel-purpose controls?", "", "seasonal uplift holidays family business mixed", false, "events"],
   ["What does Visitor mix show?", "", "nationality bridge shares passengers", false, "mix"],
   ["What should I verify before acting?", "", "next steps priority hotel capacity airline planner evidence", false, "followups"],
@@ -77,7 +77,6 @@ const ghGuides = [
     ghStep("Choose an alternative route", "Select the existing route to compare. Read which assumptions are shared. Identical inputs can produce identical added-seat effects; that is expected.", "#alternativeOrigin", "decisions"),
     ghStep("Compare launch sizes", "These options vary the number of weekly flights. Cautious, standard and expanded describe capacity, not the likelihood of demand.", "#launchOptions", "decisions"),
     ghStep("Test a weaker outcome", "Lower flight fullness, hotel use and stay length to see how the estimate changes. These are hypothetical stress trials.", "#stressChart", "decisions"),
-    ghStep("Work backwards from a target", "Enter a hotel-night target to see the capacity implied by your assumptions. It does not prove enough passengers will book.", "#targetGuestNights", "decisions"),
     ghStep("Review and export the note", "Keep the estimated impact, key assumptions and next checks together. Review the note before sharing it with an airline, hotel or colleague.", "#planningDecision", "decisions"),
   ] },
   { id: "actions", title: "Follow up a proposal", description: "Record checks, evidence, discussion and stakeholder drafts.", steps: [
