@@ -1099,23 +1099,50 @@ function visitorOriginMap(rows, colors, flag) {
    const metrics = data.metrics;
    const actualTotal = data.validation.reduce((sum, row) => sum + row.actual, 0);
    const errorTotal = (field) => data.validation.reduce((sum, row) => sum + Math.abs(row.actual - row[field]), 0);
+   const liveError = errorTotal("transparent") / actualTotal;
+   const periodLabel = (period) => `${data.months[Number(period.slice(5, 7)) - 1].slice(0, 3)} ${period.slice(0, 4)}`;
+   const checkedPeriod = `${periodLabel(data.validation[0].month)}–${periodLabel(data.validation[data.validation.length - 1].month)}`;
+   $("#validationSummary").textContent = `Air2Stay was tested on ${data.validation.length} months kept out of conversion calibration (${checkedPeriod}). Its overall weighted error was ${formatPercent(liveError, 2)} of recorded hotel arrivals. The chart below compares estimates with actual arrivals month by month. This checks monthly totals using recorded flight inputs.`;
+   const validationWindows = $("#validationWindows");
+   const firstPeriod = data.validation[0].month;
+   const lastPeriod = data.validation[data.validation.length - 1].month;
+   const primaryPeriod = firstPeriod.slice(0, 4) === lastPeriod.slice(0, 4)
+     ? `${periodLabel(firstPeriod).split(" ")[0]}–${periodLabel(lastPeriod)}` : checkedPeriod;
+   // Extended scores are supplied presentation figures, not additional rows in data.validation.
+   validationWindows.innerHTML = `
+     <div class="validation-windows-grid">
+       <article class="validation-window-card validation-window-primary" aria-labelledby="primaryWindowLabel">
+         <span class="validation-window-metric">${formatPercent(liveError, 2)}</span>
+         <h2 id="primaryWindowLabel">Primary validation window</h2>
+         <p>${primaryPeriod} · ${data.validation.length} months · ${(actualTotal / 1000000).toFixed(2)}M actual arrivals</p>
+         <small>Weighted error · reproduced from the saved monthly records</small>
+       </article>
+       <div class="validation-window-progression"><span>Fuller test →</span></div>
+       <article class="validation-window-card validation-window-secondary" aria-labelledby="extendedWindowLabel">
+         <span class="validation-window-metric">10.42%</span>
+         <h2 id="extendedWindowLabel">Extended validation window</h2>
+         <p>Jan 2025–Feb 2026 · 14 months</p>
+         <small>13.93% on Aug 2025–Feb 2026 alone</small>
+       </article>
+     </div>
+     <p class="validation-window-context">Reported error was higher in the later months. Quarterly retraining was proposed for a production system.</p>
+     <p class="validation-window-source">The extended figures are supplied results. The chart and monthly table cover the primary window only.</p>`;
    $("#validationScope").innerHTML = `
      <p>Weighted error measures the size of the gap relative to recorded arrivals.</p>
      <p>Training: ${metrics.flightTrainingPeriod} (${metrics.trainingMonths} months). Check period: ${metrics.validationPeriod} (${data.validation.length} months). The test used recorded flights from the check period.</p>
      <p><strong>Live default calculation:</strong> seats × flight occupancy × share ending in Abu Dhabi × a single hotel-use rate learned only from ${metrics.flightTrainingPeriod}. The check runs this chain on each held-out country-month’s recorded flights, then sums the estimates across countries. It does not test future flight schedules, occupancy forecasts, edited assumptions, visitor shares, or guest nights. Historical route baselines and visitor profiles are descriptive summaries, not independently held-out forecasts.</p>
-     <p><strong>Seasonal comparison:</strong> recorded passengers ending here × (70% training month-specific hotel-use rate + 30% overall training rate). This is the optional seasonal assumption in Details, not the default.</p>
+     <p><strong>Seasonal comparison:</strong> recorded passengers ending here × (70% training month-specific hotel-use rate + 30% overall training rate). Its weighted error is ${formatPercent(metrics.seasonalChainWmape, 2)}. This is the optional seasonal assumption in Details, not the default.</p>
      <p><strong>Hybrid comparison:</strong> 55% regression estimate + 45% seasonal flight estimate. The route planner does not run this aggregate regression.</p>
      <p><strong>Reproduce the scores:</strong> add the absolute monthly mistakes and divide by recorded hotel arrivals (WMAPE). Live default: ${formatNumber(errorTotal("transparent"))} ÷ ${formatNumber(actualTotal)} × 100. Hybrid comparison: ${formatNumber(errorTotal("predicted"))} ÷ ${formatNumber(actualTotal)} × 100. Scores use full-precision predictions; the table and totals round only for readability.</p>
      <p><strong>Daily hotel guests:</strong> a separate check over ${metrics.stayValidationPeriod}, with ${formatNumber(metrics.stayValidationRows)} held-out daily records. It tested daily hotel guest counts using hotel-arrival information, not route guest-night changes. Its underlying daily rows are not shown in this monthly table.</p>
      <p id="validationRangeEvidence">Range multipliers use the live default chain’s residuals on the same check months. The range has no separate coverage test and is not a guaranteed probability range.</p>`;
    $("#validationKpis").innerHTML = [
-     kpiCard("Live default chain: weighted error", formatPercent(metrics.liveChainWmape, 2), "", "positive"),
-     kpiCard("Seasonal comparison: weighted error", formatPercent(metrics.seasonalChainWmape, 2), "", "neutral"),
-     kpiCard("Hybrid comparison: weighted error", formatPercent(metrics.flightToCheckinsWmape, 2), "", "positive"),
-     kpiCard("Daily hotel guests: total weighted error", formatPercent(metrics.stayModelWmape, 1), "", "neutral"),
+     kpiCard("Live default chain: weighted error", formatPercent(metrics.liveChainWmape, 2), "Tested monthly hotel arrivals across all included markets", "positive"),
+     kpiCard("Hybrid comparison: weighted error", formatPercent(metrics.flightToCheckinsWmape, 2), "Tested the comparison model on the same monthly totals", "positive"),
+     kpiCard("Daily hotel guests: total weighted error", formatPercent(metrics.stayModelWmape, 1), "Separate daily hotel-guest test; not route guest-night accuracy", "neutral"),
    ].join("");
-  
-   const maxRaw = Math.max(...data.validation.flatMap((row) => [row.actual, row.predicted, row.transparent, row.seasonal]));
+
+   const maxRaw = Math.max(...data.validation.flatMap((row) => [row.actual, row.predicted, row.transparent * (1 + liveError)]));
    const max = Math.ceil(maxRaw / 50000) * 50000;
    const width = 760;
    const height = 300;
@@ -1123,25 +1150,51 @@ function visitorOriginMap(rows, colors, flag) {
    const x = (index) => pad.left + index * ((width - pad.left - pad.right) / Math.max(1, data.validation.length - 1));
    const y = (value) => height - pad.bottom - value / max * (height - pad.top - pad.bottom);
    const path = (field) => data.validation.map((row, index) => `${index ? "L" : "M"}${x(index).toFixed(1)},${y(row[field]).toFixed(1)}`).join(" ");
+   const upperBand = data.validation.map((row, index) => `${index ? "L" : "M"}${x(index).toFixed(1)},${y(row.transparent * (1 + liveError)).toFixed(1)}`).join(" ");
+   const lowerBand = data.validation.map((row, index) => `L${x(index).toFixed(1)},${y(row.transparent * (1 - liveError)).toFixed(1)}`).reverse().join(" ");
    const ticks = [0, 0.25, 0.5, 0.75, 1].map((share) => ({ value: max * share, y: y(max * share) }));
    $("#validationChart").innerHTML = `
      <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Recorded hotel arrivals compared with Air2Stay estimates">
        ${ticks.map((tick) => `<line x1="${pad.left}" y1="${tick.y}" x2="${width - pad.right}" y2="${tick.y}" class="grid-line"/><text x="${pad.left - 10}" y="${tick.y + 4}" text-anchor="end">${Math.round(tick.value / 1000)}k</text>`).join("")}
        <line x1="${pad.left}" y1="${height - pad.bottom}" x2="${width - pad.right}" y2="${height - pad.bottom}" class="axis"/>
        <line x1="${pad.left}" y1="${pad.top}" x2="${pad.left}" y2="${height - pad.bottom}" class="axis"/>
+       <path d="${upperBand} ${lowerBand} Z" class="validation-error-band"><title>Visual guide: plus or minus ${formatPercent(liveError, 2)} of each live estimate. This is not a tested prediction interval.</title></path>
        <path d="${path("actual")}" class="actual-line"/>
        <path d="${path("transparent")}" class="transparent-line"/>
        <path d="${path("predicted")}" class="predicted-line"/>
-       <path d="${path("seasonal")}" class="seasonal-line"/>
-       ${data.validation.map((row, index) => `<circle cx="${x(index)}" cy="${y(row.transparent)}" r="5" tabindex="0" fill="#c9a84c"><title>${row.month}: recorded ${formatNumber(row.actual)}, live default estimate ${formatNumber(row.transparent)}, hybrid ${formatNumber(row.predicted)}, seasonal ${formatNumber(row.seasonal)}</title></circle><text x="${x(index)}" y="${height - 22}" text-anchor="middle">${row.month}</text>`).join("")}
-     </svg>`;
-  
+       ${data.validation.map((row, index) => `<circle cx="${x(index)}" cy="${y(row.transparent)}" r="5" tabindex="0" fill="#c9a84c"><title>${row.month}: recorded ${formatNumber(row.actual)}, live default estimate ${formatNumber(row.transparent)}, comparison ${formatNumber(row.predicted)}</title></circle><text x="${x(index)}" y="${height - 22}" text-anchor="middle">${row.month}</text>`).join("")}
+     </svg><p class="validation-band-caption"><span aria-hidden="true"></span>Shaded band: ±${formatPercent(liveError, 2)} around the live default estimate. A visual guide based on overall weighted error, not a guaranteed range.</p>`;
+
+   const errorCell = (row, field) => {
+     const error = Math.abs(row.actual - row[field]) / row.actual;
+     const level = error < .05 ? "low" : error > .1 ? "high" : "medium";
+     const explanation = level === "low" ? "Below 5% error" : level === "high" ? "Above 10% error" : "5–10% error";
+     return `<td class="validation-error-${level}" title="${explanation}">${formatPercent(error, 1)}</td>`;
+   };
+
    $("#validationTable").innerHTML = `<table>
-     <thead><tr><th>Month checked</th><th>Recorded hotel arrivals</th><th>Live default estimate</th><th>Error</th><th>Hybrid comparison</th><th>Error</th><th>Seasonal comparison</th></tr></thead>
-     <tbody>${data.validation.map((row) => `<tr><td>${row.month}</td><td>${formatNumber(row.actual)}</td><td>${formatNumber(row.transparent)}</td><td class="${Math.abs(row.actual-row.transparent)/row.actual > .1 ? "error-large" : "error-small"}">${formatPercent(Math.abs(row.actual-row.transparent)/row.actual,1)}</td><td>${formatNumber(row.predicted)}</td><td class="${Math.abs(row.actual-row.predicted)/row.actual > .1 ? "error-large" : "error-small"}">${formatPercent(Math.abs(row.actual-row.predicted)/row.actual,1)}</td><td>${formatNumber(row.seasonal)}</td></tr>`).join("")}</tbody>
-   </table>`;
+     <thead><tr><th>Month checked</th><th>Recorded hotel arrivals</th><th>Live default estimate</th><th>Live error</th><th>Hybrid comparison</th><th>Hybrid error</th></tr></thead>
+     <tbody>${data.validation.map((row) => `<tr><td>${row.month}</td><td>${formatNumber(row.actual)}</td><td>${formatNumber(row.transparent)}</td>${errorCell(row, "transparent")}<td>${formatNumber(row.predicted)}</td>${errorCell(row, "predicted")}</tr>`).join("")}</tbody>
+   </table>
+   <p class="validation-table-caption">Lower % means a closer estimate. Live default weighted error: ${formatPercent(liveError, 2)}.</p>`;
+
+   const modelComparison = $("#validationModelComparison");
+   modelComparison.innerHTML = `
+     <div class="section-heading"><div><p>Compare the approaches</p><h2 id="modelComparisonTitle">Model comparison</h2></div></div>
+     <p class="model-comparison-periods">Training: 2022–2024. Test scores read left to right: Jan–Jul 2025 → Aug 2025–Feb 2026. Lower weighted error (WMAPE) means a closer estimate.</p>
+     <div class="model-comparison-scroll" tabindex="0" role="region" aria-label="Model comparison scores; scroll horizontally on narrow screens">
+       <table>
+         <thead><tr><th scope="col">Model</th><th scope="col">Train WMAPE</th><th scope="col">Test WMAPE</th><th scope="col">Verdict</th></tr></thead>
+         <tbody>
+           <tr class="model-comparison-live"><th scope="row">Live chain</th><td>9.67%</td><td dir="ltr">${formatPercent(liveError, 2)} <span class="model-score-arrow">→</span> 13.93%</td><td>Underfit: constant rate can't follow seasonality</td></tr>
+           <tr><th scope="row">Seasonal chain</th><td>4.90%</td><td dir="ltr">${formatPercent(metrics.seasonalChainWmape, 2)} <span class="model-score-arrow">→</span> 8.72%</td><td>Fine, but drifts low</td></tr>
+           <tr><th scope="row">Ridge alone</th><td>5.53%</td><td dir="ltr">8.56% <span class="model-score-arrow">→</span> 11.88%</td><td>Mild overfit</td></tr>
+         </tbody>
+       </table>
+     </div>
+     <p class="model-comparison-source">The primary live and seasonal test scores match saved results. Training, Ridge-only and later-window scores are supplied figures; verdicts are supplied interpretations, not verified diagnoses.</p>`;
  }
-  
+
  function renderRecommendation() {
    const [lead] = sensitivity(data, { ...state, bridgeOverride });
    $("#recommendationText").textContent = lead?.span > 0
@@ -3317,7 +3370,40 @@ const I18N = (() => {
     open_event_controls: ["Open event controls →", "فتح أدوات التحكم بالفعاليات ←"],
     open_export: ["Open Export →", "فتح خيارات التصدير ←"],
     read_privacy_guidance: ["Read the privacy and sharing guidance →", "قراءة إرشادات الخصوصية والمشاركة ←"],
-    validation_summary_scope: ["This test compares monthly hotel arrivals across the included markets. Lower weighted error means a closer estimate.", "يقارن هذا الاختبار أعداد نزلاء الفنادق الشهرية عبر الأسواق المشمولة. وكلما انخفض الخطأ المرجّح، كان التقدير أقرب إلى الأعداد المسجلة."],
+    validation_windows: ["Validation windows", "فترات التحقق"],
+    validation_summary_period: ["Air2Stay was tested on {count} months kept out of conversion calibration ({period}). Its overall weighted error was {value} of recorded hotel arrivals. The chart below compares estimates with actual arrivals month by month. This checks monthly totals using recorded flight inputs.", "اختُبرت Air2Stay على {count} أشهر لم تُستخدم لمعايرة معدل التحويل ({period}). وبلغ الخطأ المرجّح الإجمالي {value} من التسجيلات الفندقية الفعلية. يقارن الرسم أدناه التقديرات بالأعداد المسجلة شهريًا باستخدام بيانات الرحلات الفعلية."],
+    validation_primary_window: ["Primary validation window", "فترة التحقق الأساسية"],
+    validation_primary_period: ["{period} · {count} months · {arrivals}M actual arrivals", "{period} · {count} أشهر · {arrivals} مليون تسجيل فندقي فعلي"],
+    validation_primary_source: ["Weighted error · reproduced from the saved monthly records", "الخطأ المرجّح محسوب من السجلات الشهرية المرفقة"],
+    validation_fuller_test: ["Fuller test →", "اختبار أوسع ←"],
+    validation_extended_window: ["Extended validation window", "فترة التحقق الممتدة"],
+    validation_extended_period: ["Jan 2025–Feb 2026 · 14 months", "يناير 2025–فبراير 2026 · 14 شهرًا"],
+    validation_later_score: ["13.93% on Aug 2025–Feb 2026 alone", "13.93% خلال أغسطس 2025–فبراير 2026 فقط"],
+    validation_retraining_note: ["Reported error was higher in the later months. Quarterly retraining was proposed for a production system.", "كان الخطأ المبلّغ عنه أعلى في الأشهر اللاحقة. واقتُرح إعادة التدريب كل ثلاثة أشهر في النظام التشغيلي."],
+    validation_extended_source: ["The extended figures are supplied results. The chart and monthly table cover the primary window only.", "الأرقام الممتدة نتائج مقدّمة. ويغطي الرسم والجدول الشهري فترة التحقق الأساسية فقط."],
+    validation_band_tooltip: ["Visual guide: plus or minus {value} of each live estimate. This is not a tested prediction interval.", "دليل بصري بمقدار زائد أو ناقص {value} من كل تقدير مباشر. لم يُختبر هذا النطاق بوصفه مجال تنبؤ."],
+    validation_band_caption: ["Shaded band: ±{value} around the live default estimate. A visual guide based on overall weighted error, not a guaranteed range.", "النطاق المظلّل ±{value} حول التقدير الافتراضي المباشر. وهو دليل بصري يستند إلى الخطأ المرجّح الإجمالي، ولا يمثّل نطاقًا مضمونًا."],
+    validation_error_low: ["Below 5% error", "الخطأ أقل من 5%"],
+    validation_error_medium: ["5–10% error", "الخطأ بين 5% و10%"],
+    validation_error_high: ["Above 10% error", "الخطأ أعلى من 10%"],
+    validation_live_error: ["Live error", "خطأ التقدير المباشر"],
+    validation_hybrid_error: ["Hybrid error", "خطأ النموذج الهجين"],
+    validation_table_caption: ["Lower % means a closer estimate. Live default weighted error: {value}.", "النسبة الأقل تعني تقديرًا أقرب. الخطأ المرجّح للتقدير الافتراضي المباشر {value}."],
+    validation_compare_approaches: ["Compare the approaches", "مقارنة الأساليب"],
+    validation_model_comparison: ["Model comparison", "مقارنة النماذج"],
+    validation_model_periods: ["Training: 2022–2024. Test scores read left to right: Jan–Jul 2025 → Aug 2025–Feb 2026. Lower weighted error (WMAPE) means a closer estimate.", "التدريب خلال 2022–2024. تُقرأ درجات الاختبار من اليسار إلى اليمين، من يناير–يوليو 2025 إلى أغسطس 2025–فبراير 2026. الخطأ المرجّح الأقل يعني تقديرًا أقرب."],
+    validation_model_scroll: ["Model comparison scores; scroll horizontally on narrow screens", "درجات مقارنة النماذج. مرّر أفقيًا على الشاشات الضيقة"],
+    validation_model: ["Model", "النموذج"],
+    validation_training_error: ["Train WMAPE", "الخطأ المرجّح في التدريب"],
+    validation_test_error: ["Test WMAPE", "الخطأ المرجّح في الاختبار"],
+    validation_verdict: ["Verdict", "التقييم"],
+    validation_live_chain: ["Live chain", "الحساب المباشر"],
+    validation_seasonal_chain: ["Seasonal chain", "الحساب الموسمي"],
+    validation_ridge: ["Ridge alone", "انحدار ريدج وحده"],
+    validation_live_verdict: ["Underfit: constant rate can't follow seasonality", "ملاءمة ضعيفة لأن المعدل الثابت لا يواكب التغيّرات الموسمية"],
+    validation_seasonal_verdict: ["Fine, but drifts low", "أداء مقبول يميل إلى التقليل من الأعداد"],
+    validation_ridge_verdict: ["Mild overfit", "ملاءمة زائدة طفيفة"],
+    validation_model_source: ["The primary live and seasonal test scores match saved results. Training, Ridge-only and later-window scores are supplied figures; verdicts are supplied interpretations, not verified diagnoses.", "تتطابق نتائج الاختبار الأساسي للحسابين المباشر والموسمي مع النتائج المحفوظة. أما درجات التدريب وانحدار ريدج والفترة اللاحقة فهي أرقام مقدّمة، والتقييمات تفسيرات لم تُتحقّق صحتها."],
     sensitivity_trial_note: ["Each trial changes one assumption within its control limits. Trial sizes differ, so the bars show the effect of these specific changes.", "يغيّر كل اختبار افتراضًا واحدًا ضمن حدوده. وتختلف مقادير التغيير، لذا تُظهر الأشرطة أثر هذه التغييرات المحددة."],
     visitor_edit_help: ["Editing one share adjusts the others to keep the total at 100%.", "عند تعديل حصة واحدة، تتغير الحصص الأخرى ليبقى المجموع 100%."],
     seasonal_comparison: ["Seasonal comparison", "المقارنة الموسمية"],

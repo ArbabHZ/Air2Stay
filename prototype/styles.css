@@ -2079,7 +2079,49 @@ html[dir="rtl"] #scenarioName { text-align: end; }
 .evidence-links { display:flex; flex-wrap:wrap; gap:8px 16px; }
 .sensitivity-row small { display:block; margin-block-start:4px; color:var(--muted); }
 .map-source-note { margin:0; padding:10px 12px; color:var(--muted); font-size:.8rem; }
-.validation-chart .seasonal-line { stroke:#85b7eb; stroke-dasharray:4 5; }
+#validationWindows { margin:24px 0; }
+#validationWindows .validation-windows-grid { display:grid; grid-template-columns:minmax(0,1fr) auto minmax(0,1fr); align-items:stretch; gap:18px; }
+#validationWindows .validation-window-card { min-width:0; padding:24px; border:1px solid #39435c; border-radius:14px; background:#141b33; }
+#validationWindows .validation-window-primary { border-color:#c9a84c80; border-top:3px solid #c9a84c; background:linear-gradient(125deg,#25283a,#171e34); }
+#validationWindows .validation-window-metric { display:block; margin-bottom:14px; color:#f2d58a; font-size:clamp(32px,3.6vw,46px); font-weight:750; line-height:1.1; font-variant-numeric:tabular-nums; letter-spacing:-.025em; }
+#validationWindows .validation-window-card h2 { margin:0 0 9px; color:#f5efe3; font-size:15px; line-height:1.5; }
+#validationWindows .validation-window-card p { margin:0; color:#c9c5be; font-size:12px; line-height:1.7; }
+#validationWindows .validation-window-card small { display:block; margin-top:14px; color:#b7bfcd; font-size:11px; line-height:1.6; }
+#validationWindows .validation-window-secondary { background:#12192d; border-color:#333c50; }
+#validationWindows .validation-window-secondary .validation-window-metric { color:#c5ccda; }
+#validationWindows .validation-window-secondary h2 { color:#dce0e8; }
+#validationWindows .validation-window-progression { display:flex; align-items:center; justify-content:center; color:#c4b991; font-size:11px; white-space:nowrap; }
+#validationWindows .validation-window-context { margin:18px 0 0; color:#c5bdaf; font-size:13px; line-height:1.7; }
+#validationWindows .validation-window-source { margin:8px 0 0; color:#aeb7c7; font-size:11px; line-height:1.6; }
+@media (max-width:640px) {
+  #validationView .test-steps { grid-template-columns:minmax(0,1fr); }
+  #validationWindows .validation-windows-grid { grid-template-columns:minmax(0,1fr); gap:12px; }
+  #validationWindows .validation-window-card { padding:20px; }
+  #validationWindows .validation-window-progression { justify-content:flex-start; padding-inline-start:20px; }
+}
+#validationView .validation-chart .validation-error-band { fill:#c9a84c; fill-opacity:.17; stroke:none; }
+#validationView .validation-band-caption { display:flex; align-items:flex-start; gap:9px; margin:10px 0 16px; color:#c5bdaf; font-size:11px; line-height:1.6; }
+#validationView .validation-band-caption > span { flex:none; width:20px; height:10px; margin-top:3px; background:#c9a84c2b; border:1px solid #c9a84c70; border-radius:2px; }
+#validationView #validationTable td.validation-error-low { color:#93e3b9; background:#2e825022; font-weight:700; }
+#validationView #validationTable td.validation-error-medium { color:#f2d575; background:#c9a84c20; font-weight:700; }
+#validationView #validationTable td.validation-error-high { color:#ffa29c; background:#c94b4b24; font-weight:700; }
+#validationView .validation-table-caption { margin:14px 0 0; color:#c6c0b6; font-size:12px; line-height:1.6; }
+#validationView .validation-table-caption strong { color:#f2d575; }
+#validationModelComparison { margin-top:28px; }
+#validationModelComparison .model-comparison-periods { margin:0 0 18px; color:#c5bdaf; font-size:12px; line-height:1.7; }
+#validationModelComparison .model-comparison-scroll { max-width:100%; overflow-x:auto; border:1px solid #39435c; border-radius:10px; }
+#validationModelComparison .model-comparison-scroll:focus-visible { outline:2px solid #c9a84c; outline-offset:4px; }
+#validationModelComparison table { width:100%; min-width:520px; margin:0; border-collapse:collapse; font-size:12px; }
+#validationModelComparison th,#validationModelComparison td { padding:14px 16px; border-bottom:1px solid #39435c; text-align:start; line-height:1.6; }
+#validationModelComparison thead th { background:#1c2545; color:#f5efe3; font-weight:650; white-space:nowrap; }
+#validationModelComparison tbody th { color:#f0e9da; font-weight:650; white-space:nowrap; }
+#validationModelComparison tbody td { color:#d0d4de; }
+#validationModelComparison td:nth-child(2),#validationModelComparison td:nth-child(3) { font-variant-numeric:tabular-nums; white-space:nowrap; }
+#validationModelComparison tbody tr:last-child > * { border-bottom:0; }
+#validationModelComparison .model-comparison-live { background:#c9a84c0c; }
+#validationModelComparison .model-comparison-live th { color:#f2d58a; border-inline-start:3px solid #c9a84c; }
+#validationModelComparison .model-score-arrow { color:#c9a84c; padding:0 4px; }
+#validationModelComparison .model-comparison-source { margin:14px 0 0; color:#aeb7c7; font-size:11px; line-height:1.7; }
 .validation-legend { display:flex; flex-wrap:wrap; gap:6px 14px; }
 .validation-legend span { width:auto; height:auto; margin:0; }
 .validation-key { display:inline-flex; align-items:center; gap:6px; }
@@ -2087,7 +2129,6 @@ html[dir="rtl"] #scenarioName { text-align: end; }
 .validation-key i.actual { background:#f5efe3; }
 .validation-key i.transparent { background:#c9a84c; }
 .validation-key i.predicted { background:#ff7a3d; }
-.validation-key i.seasonal { background:#85b7eb; }
 
 .export-menu > .export-choices {
   width: min(310px, calc(100vw - 36px));

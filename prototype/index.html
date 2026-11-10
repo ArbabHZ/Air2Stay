@@ -229,16 +229,29 @@
      </section>
   
      <section id="validationView" class="view standard-view">
-       <div class="intro-row"><div><p data-i18n="check_against_past_records">Check against past records</p><h1 data-i18n="how_close_were_the">How close were the estimates to real hotel arrivals?</h1></div></div>
-       <p id="validationSummary" class="validation-summary" data-i18n="validation_summary_scope">This test compares monthly hotel arrivals across the included markets. Lower weighted error means a closer estimate.</p>
-       <div id="validationKpis" class="kpi-grid"></div>
+       <div class="intro-row"><div><p data-i18n="check_against_past_records">Check against past records</p><h1 data-i18n="how_close_were_the">How close were the estimates to real hotel arrivals?</h1><span data-i18n="air2stay_used_earlier_records">Air2Stay used earlier records to make estimates for seven later months, then compared them with the actual hotel arrivals for those months.</span></div></div>
+       <div class="test-steps">
+         <article><strong data-i18n="step_1_learn">1 Learn</strong><p data-i18n="use_36_months_of">Use 36 months of older records to learn the usual patterns.</p></article>
+         <article><strong data-i18n="step_2_set_aside">2 Set aside</strong><p data-i18n="keep_the_next_seven">Keep the next seven months out of conversion calibration and model fitting.</p></article>
+         <article><strong data-i18n="step_3_compare">3 Compare</strong><p data-i18n="estimate_hotel_arrivals_for">Estimate hotel arrivals for those seven months and compare with the actual totals.</p></article>
+       </div>
+       <p id="validationSummary" class="validation-summary"></p>
+       <section id="validationWindows" aria-label="Validation windows" data-i18n-aria-label="validation_windows"></section>
+       <div id="validationKpis" class="kpi-grid three"></div>
        <details class="content-block result-explanation"><summary data-i18n="what_these_scores_tested">What these scores tested and how they were calculated</summary><div id="validationScope"></div></details>
        <section class="content-block validation-block">
-         <div class="section-heading"><div><p data-i18n="monthly_hotel_arrivals">Monthly hotel arrivals</p><h2 data-i18n="actual_totals_and_air2stay">Actual totals and Air2Stay estimates</h2></div><div class="legend validation-legend"><span class="validation-key"><i class="actual" aria-hidden="true"></i><span data-i18n="recorded_hotel_arrivals">Recorded hotel arrivals</span></span><span class="validation-key"><i class="transparent" aria-hidden="true"></i><span data-i18n="live_default_calculation">Live default calculation</span></span><span class="validation-key"><i class="predicted" aria-hidden="true"></i><span data-i18n="hybrid_comparison">Hybrid comparison</span></span><span class="validation-key"><i class="seasonal" aria-hidden="true"></i><span data-i18n="seasonal_comparison">Seasonal comparison</span></span></div></div>
+         <div class="section-heading"><div><p data-i18n="monthly_hotel_arrivals">Monthly hotel arrivals</p><h2 data-i18n="actual_totals_and_air2stay">Actual totals and Air2Stay estimates</h2></div><div class="legend validation-legend"><span class="validation-key"><i class="actual" aria-hidden="true"></i><span data-i18n="recorded_hotel_arrivals">Recorded hotel arrivals</span></span><span class="validation-key"><i class="transparent" aria-hidden="true"></i><span data-i18n="live_default_calculation">Live default calculation</span></span><span class="validation-key"><i class="predicted" aria-hidden="true"></i><span data-i18n="hybrid_comparison">Hybrid comparison</span></span></div></div>
          <div id="validationChart" dir="ltr" class="validation-chart"></div>
          <div class="axis-note"><span data-i18n="hotel_arrivals">Hotel arrivals</span><span data-i18n="month_checked">Month checked</span></div>
-         <details class="chart-numbers"><summary data-i18n="show_the_numbers">Show the numbers</summary><div id="validationTable" class="validation-table-wrap"></div></details>
+         <div id="validationTable" class="validation-table-wrap" tabindex="0" role="region" aria-label="Monthly hotel arrivals" data-i18n-aria-label="monthly_hotel_arrivals"></div>
        </section>
+       <div class="two-column explanation-grid">
+         <section><h2 data-i18n="recorded_hotel_arrivals">Recorded hotel arrivals</h2><p data-i18n="these_are_the_hotel">These are the hotel arrivals in the supplied files, added together for each month.</p></section>
+         <section><h2 data-i18n="how_the_simple_estimate">How the simple estimate works</h2><p data-i18n="it_starts_with_passengers">It starts with passengers whose flight ends in Abu Dhabi, then estimates how many check into hotels.</p></section>
+         <section><h2 data-i18n="how_to_read_the">How to read the difference</h2><p data-i18n="it_shows_how_far">It shows how far an estimate was from the recorded total. A smaller difference means a closer estimate. For example, about 7% means roughly seven arrivals of difference for every 100 recorded arrivals.</p></section>
+         <section><h2 data-i18n="daily_hotel_guest_check">Daily hotel guest check</h2><p data-i18n="this_compares_estimated_daily">This compares estimated daily hotel guests with the recorded number. It checks hotel stays, not how many people fly on each route.</p></section>
+       </div>
+       <section id="validationModelComparison" class="content-block" aria-labelledby="modelComparisonTitle"></section>
      </section>
   
      <section id="glossaryView" class="view standard-view">
