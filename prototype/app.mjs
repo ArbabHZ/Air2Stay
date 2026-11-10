@@ -2922,7 +2922,10 @@ function setupPlanActions() {
 function downloadPlan(blob, name) {
   if (lastExportUrl) URL.revokeObjectURL(lastExportUrl);
   lastExportUrl = URL.createObjectURL(blob);
-  const link = document.createElement("a"); link.href = lastExportUrl; link.download = name; link.textContent = "Download " + name;
+  const link = document.createElement("a"); link.href = lastExportUrl; link.download = name; link.className = "export-ready-link";
+  // "Download" is translated; the file name is kept exactly as saved.
+  const fileName = document.createElement("span"); fileName.setAttribute("data-i18n-ignore", ""); fileName.dir = "ltr"; fileName.textContent = name;
+  link.append("Download", " ", fileName);
   const ready = $("#exportReady"); ready.hidden = false;
   ready.replaceChildren(document.createTextNode("Your file is ready. If the download did not begin, choose: "),link);
   link.click();
@@ -5353,6 +5356,8 @@ const I18N = (() => {
     ui_period_validation: ["2025-01 to 2025-07", "2025-01 إلى 2025-07"],
     ui_period_daily: ["2025-05-01 to 2025-07-31", "2025-05-01 إلى 2025-07-31"],
     ui_assignment: ["{from} → {to}", "{from} → {to}"],
+    ui_download_word: ["Download", "تنزيل"],
+    ui_next_action_label: ["Next action · {country} · {month}", "الإجراء التالي · {country} · {month}"],
     ui_tip_p2p: ["Trip-ending share: passengers ending their air journey in Abu Dhabi, rather than connecting to another flight.", "نسبة من تنتهي رحلتهم: الركاب الذين تنتهي رحلتهم الجوية في أبوظبي بدلًا من مواصلة السفر على رحلة أخرى."],
     ui_tip_hotel: ["Hotel use: the assumed share of trip-ending passengers who check into a hotel. It is not directly measured for each proposed route.", "الإقامة الفندقية: النسبة المفترضة من الركاب الذين تنتهي رحلتهم ويسجّلون في فندق، ولا تُقاس مباشرةً لكل مسار مقترح."],
     ui_tip_stay: ["Average nights per hotel guest. Guest nights are different from occupied rooms because people may share a room.", "متوسط الليالي لكل نزيل فندقي. تختلف ليالي النزلاء عن الغرف المشغولة لأن الأشخاص قد يتشاركون الغرفة."],
@@ -5875,7 +5880,7 @@ function englishUiText(element) {
 function setupLanguage() {
   const originalAttributes = new WeakMap();
   const attrs = ["aria-label", "aria-valuetext", "aria-description", "placeholder", "title"];
-  const skip = 'script, style, [download], textarea, [data-i18n-ignore], .pw-item-heading strong';
+  const skip = 'script, style, [download]:not(.gh-resource, .export-ready-link), textarea, [data-i18n-ignore], .pw-item-heading strong';
   const generatedTaskText = new Set(["Confirm the flight demand", "Check hotel use and capacity", "Review the visitor mix", "No notes added."]);
   const root = document.documentElement;
 
