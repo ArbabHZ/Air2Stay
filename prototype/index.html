@@ -315,7 +315,12 @@
        <div id="validationKpis" class="kpi-grid three"></div>
        <details class="content-block result-explanation"><summary data-i18n="what_these_scores_tested">What these scores tested and how they were calculated</summary><div id="validationScope"></div></details>
        <section class="content-block validation-block">
-         <div class="section-heading"><div><p data-i18n="monthly_hotel_arrivals">Monthly hotel arrivals</p><h2 data-i18n="actual_totals_and_air2stay">Actual totals and Air2Stay estimates</h2></div><div class="legend validation-legend"><span class="validation-key"><i class="actual" aria-hidden="true"></i><span data-i18n="recorded_hotel_arrivals">Recorded hotel arrivals</span></span><span class="validation-key"><i class="transparent" aria-hidden="true"></i><span data-i18n="live_default_calculation">Live default calculation</span></span><span class="validation-key"><i class="predicted" aria-hidden="true"></i><span data-i18n="hybrid_comparison">Hybrid comparison</span></span></div></div>
+         <div class="section-heading"><div><p data-i18n="monthly_hotel_arrivals">Monthly hotel arrivals</p><h2 data-i18n="actual_totals_and_air2stay">Actual totals and Air2Stay estimates</h2></div></div>
+         <ul class="validation-legend">
+           <li><svg viewBox="0 0 32 12" aria-hidden="true"><path class="actual-line" d="M2 6H30"/></svg><span data-i18n="recorded_hotel_arrivals">Recorded hotel arrivals</span></li>
+           <li><svg viewBox="0 0 32 12" aria-hidden="true"><path class="transparent-line" d="M2 6H30"/><circle cx="16" cy="6" r="3.5" fill="var(--theme-rose)"/></svg><span data-i18n="live_default_calculation">Live default calculation</span></li>
+           <li><svg viewBox="0 0 32 12" aria-hidden="true"><path class="predicted-line" d="M2 6H30"/></svg><span data-i18n="hybrid_comparison">Hybrid comparison</span></li>
+         </ul>
          <div id="validationChart" dir="ltr" class="validation-chart"></div>
          <div class="axis-note"><span data-i18n="hotel_arrivals">Hotel arrivals</span><span data-i18n="month_checked">Month checked</span></div>
          <div id="validationTable" class="validation-table-wrap" tabindex="0" role="region" aria-label="Monthly hotel arrivals" data-i18n-aria-label="monthly_hotel_arrivals"></div>

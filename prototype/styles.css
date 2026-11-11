@@ -2554,13 +2554,19 @@ html[dir="rtl"] #scenarioName { text-align: end; }
 #validationModelComparison tbody td { color:var(--theme-muted); }
 #validationModelComparison td:nth-child(2),#validationModelComparison td:nth-child(3) { font-variant-numeric:tabular-nums; white-space:nowrap; }
 #validationModelComparison tbody tr:last-child > * { border-bottom:0; }
-.validation-legend { display:flex; flex-wrap:wrap; gap:6px 14px; }
-.validation-legend span { width:auto; height:auto; margin:0; }
-.validation-key { display:inline-flex; align-items:center; gap:6px; }
-.validation-key i { width:18px; height:3px; }
-.validation-key i.actual { background:var(--theme-text); }
-.validation-key i.transparent { background:var(--theme-gold); }
-.validation-key i.predicted { background:var(--theme-rose); }
+.validation-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  margin: 0 0 12px;
+  padding: 0;
+  list-style: none;
+  color: var(--theme-text);
+  font-size: 13px;
+}
+.validation-legend li { display: inline-flex; align-items: center; gap: 8px; min-inline-size: 0; }
+.validation-legend svg { flex: none; inline-size: 32px; block-size: 12px; }
+.validation-legend path { fill: none; stroke-width: 3; stroke-linecap: round; }
 
 .export-menu > .export-choices {
   width: min(310px, calc(100vw - 36px));
@@ -2763,9 +2769,6 @@ body.help-chat-open .help-chat-bubble { display:none; }
   .actual-line { stroke: var(--theme-gold-light); }
   .transparent-line { stroke: var(--theme-rose); }
   .predicted-line { stroke: var(--theme-rose-light); }
-  .validation-key i.actual { background: var(--theme-gold-light); }
-  .validation-key i.transparent { background: var(--theme-rose); }
-  .validation-key i.predicted { background: var(--theme-rose-light); }
   #validationView .validation-chart .validation-error-band { fill: var(--theme-rose); }
   #kpis .result-range-track { fill: var(--theme-raised); }
   #kpis .result-range-band { fill: var(--theme-rose-light); }
